@@ -34,8 +34,8 @@ func domains(kind string, hosts ...string) map[string]any {
 }
 
 var (
-	userKeys      = []string{"packs", "base", "agents", "copy_logins", "kits", "aws", "secrets", "bindings", "ship"}
-	packKeys      = []string{"name", "description", "base", "agents", "kits", "aws", "secrets", "bindings", "repos"}
+	userKeys      = []string{"books", "base", "agents", "copy_logins", "kits", "aws", "secrets", "bindings", "ship"}
+	bookKeys      = []string{"name", "description", "base", "agents", "kits", "aws", "secrets", "bindings", "repos"}
 	repoMatchKeys = []string{"match", "agents", "kits", "aws"}
 	awsKeys       = []string{"profiles", "region"}
 	shipKeys      = []string{"pr_footer"}
@@ -74,7 +74,7 @@ type Composition struct {
 	AWSRegion   string
 	Secrets     map[string]any
 	Bindings    map[string]any
-	Packs       []string
+	Books       []string
 }
 
 func (c *Composition) AllKits() []Kit {
@@ -94,7 +94,7 @@ type repo struct {
 	aws      aws
 }
 
-type Pack struct {
+type Book struct {
 	Name     string
 	Path     string
 	base     any
@@ -108,7 +108,7 @@ type Pack struct {
 
 type Settings struct {
 	Home       string
-	Packs      []Pack
+	Books      []Book
 	base       any
 	agents     []any
 	kits       []any
@@ -192,36 +192,36 @@ func LoadSettings(home string) (*Settings, error) {
 			return nil, errorf("%s: copy_logins: %s cannot be copied (copyable: %s); claude, codex and copilot sign in through the proxy", path, agent, strings.Join(copyableAgents(), ", "))
 		}
 	}
-	packPaths, err := optionalStrings(data, "packs", path)
+	bookPaths, err := optionalStrings(data, "books", path)
 	if err != nil {
 		return nil, err
 	}
 	installed := map[string]string{}
-	for _, packPath := range packPaths {
-		pack, err := LoadPack(ExpandUser(packPath))
+	for _, bookPath := range bookPaths {
+		book, err := LoadBook(ExpandUser(bookPath))
 		if err != nil {
 			return nil, err
 		}
-		if other, taken := installed[pack.Name]; taken {
-			return nil, errorf("%s: packs %s and %s are both named %s", path, other, pack.Path, pack.Name)
+		if other, taken := installed[book.Name]; taken {
+			return nil, errorf("%s: books %s and %s are both named %s", path, other, book.Path, book.Name)
 		}
-		installed[pack.Name] = pack.Path
-		settings.Packs = append(settings.Packs, *pack)
+		installed[book.Name] = book.Path
+		settings.Books = append(settings.Books, *book)
 	}
 	return settings, nil
 }
 
-func LoadPack(path string) (*Pack, error) {
+func LoadBook(path string) (*Book, error) {
 	path = Resolve(path)
-	manifest := filepath.Join(path, "pack.toml")
+	manifest := filepath.Join(path, "book.toml")
 	if info, err := os.Stat(manifest); err != nil || !info.Mode().IsRegular() {
-		return nil, errorf("%s is not a pack: no pack.toml", path)
+		return nil, errorf("%s is not a book: no book.toml", path)
 	}
 	data, err := readTOML(manifest)
 	if err != nil {
 		return nil, err
 	}
-	if err := checkKeys(data, packKeys, manifest); err != nil {
+	if err := checkKeys(data, bookKeys, manifest); err != nil {
 		return nil, err
 	}
 	if err := checkTables(data, manifest); err != nil {
@@ -231,20 +231,20 @@ func LoadPack(path string) (*Pack, error) {
 	if name == "" {
 		return nil, errorf("%s: name is required", manifest)
 	}
-	pack := &Pack{Name: name, Path: path, base: data["base"]}
-	if pack.agents, err = optionalList(data, "agents", manifest); err != nil {
+	book := &Book{Name: name, Path: path, base: data["base"]}
+	if book.agents, err = optionalList(data, "agents", manifest); err != nil {
 		return nil, err
 	}
-	if pack.kits, err = optionalList(data, "kits", manifest); err != nil {
+	if book.kits, err = optionalList(data, "kits", manifest); err != nil {
 		return nil, err
 	}
-	if pack.aws, err = decodeAWS(data["aws"], manifest+" [aws]"); err != nil {
+	if book.aws, err = decodeAWS(data["aws"], manifest+" [aws]"); err != nil {
 		return nil, err
 	}
-	if pack.secrets, err = optionalTable(data, "secrets", manifest); err != nil {
+	if book.secrets, err = optionalTable(data, "secrets", manifest); err != nil {
 		return nil, err
 	}
-	if pack.bindings, err = optionalTable(data, "bindings", manifest); err != nil {
+	if book.bindings, err = optionalTable(data, "bindings", manifest); err != nil {
 		return nil, err
 	}
 	repos, ok := asList(data["repos"])
@@ -282,28 +282,28 @@ func LoadPack(path string) (*Pack, error) {
 				return nil, err
 			}
 		}
-		pack.repos = append(pack.repos, r)
+		book.repos = append(book.repos, r)
 	}
-	return pack, nil
+	return book, nil
 }
 
 // Selection is what one sandbox asks for beyond the user's own settings.
 type Selection struct {
 	RepoNames []string
 	Agents    []string
-	Packs     []string
+	Books     []string
 	Repo      *RepoConfig
 	Gh        string
 }
 
 func Compose(settings *Settings, selection Selection) (*Composition, error) {
-	active, err := activePacks(settings, selection)
+	active, err := activeBooks(settings, selection)
 	if err != nil {
 		return nil, err
 	}
 	var base *Kit
 	var baseOwner, region, regionOwner string
-	var agentKits, packKits, repoKits, userKits []Kit
+	var agentKits, bookKits, repoKits, userKits []Kit
 	var profiles, agentNames []string
 	secrets := map[string]any{}
 	bindings := map[string]any{"github": domains("apiKey", "api.github.com", "github.com")}
@@ -357,10 +357,10 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 	if err := addAgents(settings.agents, settings.Home, "config"); err != nil {
 		return nil, err
 	}
-	for _, pack := range active {
-		owner := "pack " + pack.Name
-		if pack.base != nil {
-			candidate, err := parseKit(pack.base, pack.Path, owner)
+	for _, book := range active {
+		owner := "book " + book.Name
+		if book.base != nil {
+			candidate, err := parseKit(book.base, book.Path, owner)
 			if err != nil {
 				return nil, err
 			}
@@ -369,17 +369,17 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 			}
 			base, baseOwner = &candidate, owner
 		}
-		if err := addAgents(pack.agents, pack.Path, owner); err != nil {
+		if err := addAgents(book.agents, book.Path, owner); err != nil {
 			return nil, err
 		}
-		if err := addKits(&packKits, pack.kits, pack.Path, owner); err != nil {
+		if err := addKits(&bookKits, book.kits, book.Path, owner); err != nil {
 			return nil, err
 		}
-		if err := addAWS(pack.aws, owner); err != nil {
+		if err := addAWS(book.aws, owner); err != nil {
 			return nil, err
 		}
-		for _, service := range sortedKeys(pack.secrets) {
-			spec, err := packSecret(pack.secrets[service], pack.Path, owner)
+		for _, service := range sortedKeys(book.secrets) {
+			spec, err := bookSecret(book.secrets[service], book.Path, owner)
 			if err != nil {
 				return nil, err
 			}
@@ -387,20 +387,20 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 				return nil, err
 			}
 		}
-		for _, service := range sortedKeys(pack.bindings) {
-			if err := mergeOnce(bindings, bindingOwner, service, pack.bindings[service], owner, "binding"); err != nil {
+		for _, service := range sortedKeys(book.bindings) {
+			if err := mergeOnce(bindings, bindingOwner, service, book.bindings[service], owner, "binding"); err != nil {
 				return nil, err
 			}
 		}
-		for _, r := range pack.repos {
+		for _, r := range book.repos {
 			if !matchesAny(selection.RepoNames, r.patterns) {
 				continue
 			}
 			repoOwner := fmt.Sprintf("%s repo %s", owner, r.patterns[0])
-			if err := addAgents(r.agents, pack.Path, repoOwner); err != nil {
+			if err := addAgents(r.agents, book.Path, repoOwner); err != nil {
 				return nil, err
 			}
-			if err := addKits(&packKits, r.kits, pack.Path, repoOwner); err != nil {
+			if err := addKits(&bookKits, r.kits, book.Path, repoOwner); err != nil {
 				return nil, err
 			}
 			if err := addAWS(r.aws, repoOwner); err != nil {
@@ -486,74 +486,74 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 	if base != nil {
 		composition.Base = *base
 	}
-	for _, group := range [][]Kit{agentKits, core, packKits, repoKits, userKits} {
+	for _, group := range [][]Kit{agentKits, core, bookKits, repoKits, userKits} {
 		composition.Kits = append(composition.Kits, group...)
 	}
-	for _, pack := range active {
-		composition.Packs = append(composition.Packs, pack.Name)
+	for _, book := range active {
+		composition.Books = append(composition.Books, book.Name)
 	}
 	return composition, nil
 }
 
-// activePacks returns the installed packs this sandbox asked for, by --pack,
-// by the repository's config or by a [[repos]] match, followed by packs given
+// activeBooks returns the installed books this sandbox asked for, by --book,
+// by the repository's config or by a [[repos]] match, followed by books given
 // as a directory on the command line.
-func activePacks(settings *Settings, selection Selection) ([]Pack, error) {
+func activeBooks(settings *Settings, selection Selection) ([]Book, error) {
 	installed := map[string]bool{}
 	var names []string
-	for _, pack := range settings.Packs {
-		installed[pack.Name] = true
-		names = append(names, pack.Name)
+	for _, book := range settings.Books {
+		installed[book.Name] = true
+		names = append(names, book.Name)
 	}
 	installedList := strings.Join(names, ", ")
 	if installedList == "" {
 		installedList = "none"
 	}
 	wanted := map[string]bool{}
-	var adhoc []Pack
-	for _, ref := range selection.Packs {
+	var adhoc []Book
+	for _, ref := range selection.Books {
 		if looksLikeName(strings.ReplaceAll(ref, ".", "")) && !strings.HasPrefix(ref, ".") {
 			if !installed[ref] {
-				return nil, errorf("--pack %s: no installed pack has that name (installed: %s); pass the pack's directory or add it to packs in config.toml", ref, installedList)
+				return nil, errorf("--book %s: no installed book has that name (installed: %s); pass the book's directory or add it to books in config.toml", ref, installedList)
 			}
 			wanted[ref] = true
 			continue
 		}
-		pack, err := LoadPack(ExpandUser(ref))
+		book, err := LoadBook(ExpandUser(ref))
 		if err != nil {
 			return nil, err
 		}
-		adhoc = append(adhoc, *pack)
+		adhoc = append(adhoc, *book)
 	}
 	if repo := selection.Repo; repo != nil {
-		for _, name := range repo.packs {
+		for _, name := range repo.books {
 			if !installed[name] {
-				return nil, errorf("%s asks for pack %s, which is not installed (installed: %s); add its directory to packs in ~/.scoring-stage/config.toml", repo.Path, name, installedList)
+				return nil, errorf("%s asks for book %s, which is not installed (installed: %s); add its directory to books in ~/.scoring-stage/config.toml", repo.Path, name, installedList)
 			}
 			wanted[name] = true
 		}
 	}
-	var active []Pack
+	var active []Book
 	seen := map[string]string{}
-	for _, pack := range settings.Packs {
+	for _, book := range settings.Books {
 		matched := false
-		for _, r := range pack.repos {
+		for _, r := range book.repos {
 			matched = matched || matchesAny(selection.RepoNames, r.patterns)
 		}
-		if wanted[pack.Name] || matched {
-			active = append(active, pack)
-			seen[pack.Name] = pack.Path
+		if wanted[book.Name] || matched {
+			active = append(active, book)
+			seen[book.Name] = book.Path
 		}
 	}
-	for _, pack := range adhoc {
-		if path, taken := seen[pack.Name]; taken {
-			if path == pack.Path {
+	for _, book := range adhoc {
+		if path, taken := seen[book.Name]; taken {
+			if path == book.Path {
 				continue
 			}
-			return nil, errorf("--pack %s is named %s, like the installed pack at %s", pack.Path, pack.Name, path)
+			return nil, errorf("--book %s is named %s, like the installed book at %s", book.Path, book.Name, path)
 		}
-		active = append(active, pack)
-		seen[pack.Name] = pack.Path
+		active = append(active, book)
+		seen[book.Name] = book.Path
 	}
 	return active, nil
 }
@@ -611,7 +611,7 @@ func parseKit(entry any, baseDir, owner string) (Kit, error) {
 	return kit, nil
 }
 
-func packSecret(spec any, packPath, owner string) (map[string]any, error) {
+func bookSecret(spec any, bookPath, owner string) (map[string]any, error) {
 	table, ok := spec.(map[string]any)
 	if !ok {
 		return nil, errorf(`%s: a secret is a table such as {command = "..."}`, owner)
@@ -621,7 +621,7 @@ func packSecret(spec any, packPath, owner string) (map[string]any, error) {
 		copied[k] = v
 	}
 	if command, ok := copied["command"].(string); ok {
-		copied["command"] = strings.ReplaceAll(command, "{pack}", ShellQuote(packPath))
+		copied["command"] = strings.ReplaceAll(command, "{book}", ShellQuote(bookPath))
 	}
 	return copied, nil
 }

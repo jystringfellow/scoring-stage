@@ -1,6 +1,6 @@
 # Design notes
 
-## Packs are kits plus host wiring
+## Books are kits plus host wiring
 
 Docker Sandboxes kits (spec v3) already declare most of what a sandbox needs: egress (`network-policy@2`), service
 credentials kept on the host (`credential@1`), files and setup hooks (`lifecycle@1`), agent guidance
@@ -23,13 +23,13 @@ policy, secrets and bindings are created and removed together.
 
 A sandbox carries only the agents someone chose: each agent's mixin widens egress and brings credential
 bindings, so an agent nobody runs is attack surface with no use. Agents come from the user's config, the
-repository's config, a pack or `--agent`, and an agent's bindings come with it.
+repository's config, a book or `--agent`, and an agent's bindings come with it.
 
 Configuration follows kapellmeister's split between the user's directory and the repository's. The repository's
 config is input from whoever can commit to it, so it may only ask for things that stay inside the sandbox (agents,
-kits) or that the user has already accepted (installed packs, by name). Secrets run commands on the host, bindings
-and AWS profiles hand out credentials, and a pack location would let a repository supply its own host commands, so
-those stay with the user and the packs they install.
+kits) or that the user has already accepted (installed books, by name). Secrets run commands on the host, bindings
+and AWS profiles hand out credentials, and a book location would let a repository supply its own host commands, so
+those stay with the user and the books they install.
 
 ## Logins the proxy cannot hold
 
@@ -68,7 +68,7 @@ reaches the broker without the header.
   callers.
 - `host-port@1` is not supported; `host-mount@1` is, and is shared by every sandbox composing the same kit.
 - `sbx secret set <service> --sandbox <name>` accepts services that are not built in, which is how `stage-broker`
-  and pack services get values.
+  and book services get values.
 - `sbx env create --force --no-input` creates a sandbox, its secrets and its bindings without prompting.
   `sbx env rm` removes the sandbox and its scoped secrets; `--prune-bindings` would also remove bindings shared by
   other sandboxes, so `stage down` does not pass it.
@@ -76,5 +76,5 @@ reaches the broker without the header.
   both as optional with the same content so either selection composes.
 - Typing a built-in agent name (`claude`) selects Docker's v2 kits, which cannot compose with v3 mixins; `stage`
   always names a v3 workload by reference.
-- `kit.allowedSources` defaults to Docker Hub and dhi.io. Packs published to another registry need it widened, and
+- `kit.allowedSources` defaults to Docker Hub and dhi.io. Books published to another registry need it widened, and
   signed kits must be published images: local and git sources cannot be signed.

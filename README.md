@@ -11,10 +11,11 @@ the boundary:
   sandbox's commit to an `agent/` branch from the host.
 - **Each task gets its own scratch clone**, so the agent never touches your working copy.
 
-Organizations adapt it with **packs**: a directory of [kits](https://github.com/docker/sandbox-kit-spec) plus the
-host-side wiring they need (secrets, credential bindings, AWS profiles, per-repository additions).
+Organizations adapt it with **books**: a directory of [kits](https://github.com/docker/sandbox-kit-spec) plus the
+host-side wiring they need (secrets, credential bindings, AWS profiles, per-repository additions). Like the book a
+session player is handed for a gig, a book holds what the stage needs for one kind of work.
 
-> Status: early. The core flow is tested end to end on sbx 0.51; the command line and pack format may still change.
+> Status: early. The core flow is tested end to end on sbx 0.51; the command line and book format may still change.
 
 ## Requirements
 
@@ -35,7 +36,7 @@ and extracted to `~/.scoring-stage/kits/<content hash>/` the first time `stage u
 ```
 stage setup --agent claude --agent codex  # save the agents you use; check sbx, the policy and credentials
 stage up ~/Code/api fix-login        # sandbox stage-fix-login on a scratch clone of ~/Code/api
-stage up ~/Code/api fix-login --agent agy --pack dotnet  # add an agent or an installed pack for one box
+stage up ~/Code/api fix-login --agent agy --book dotnet  # add an agent or an installed book for one box
 stage up ~/Code/api fix-login --plan # write the env file and show sbx's plan without creating
 stage shell fix-login                # login shell in the repository; run claude, codex or copilot
 stage exec fix-login -- git log -1
@@ -75,7 +76,7 @@ Nothing you did not choose. Every sandbox gets:
 | [`kits/stage`](kits/stage/stage.yaml) | Refuses `POST /**/git-receive-pack` on every host, sets your git identity, tells the agent the rules |
 | [`kits/aws-broker`](kits/aws-broker/aws-broker.yaml) | Only when AWS profiles are configured: `~/.aws/config` with a `credential_process` per profile |
 
-plus the agents chosen by your config, the repository, a pack or `--agent`. Agents are Docker's published mixins,
+plus the agents chosen by your config, the repository, a book or `--agent`. Agents are Docker's published mixins,
 each with its own egress and credentials:
 
 | Name | Kit | Credential binding |
@@ -115,7 +116,7 @@ The kit also has a Gemini API-key mode that would keep a key on the host: a `goo
 Gemini API and the key's project billing rather than your Google account's Antigravity access, and has not been
 tested with stage.
 
-## Configuration and packs
+## Configuration and books
 
 Configuration has two levels, like kapellmeister's: yours in `~/.scoring-stage/config.toml`, and a repository's
 in its `.scoring-stage/config.toml`.
@@ -124,7 +125,7 @@ in its `.scoring-stage/config.toml`.
 
 ```toml
 agents = ["claude", "codex"]                       # the agents you use; names or kit references
-packs = ["~/Code/my-org-packs/backend"]            # installed packs; each applies only when asked for
+books = ["~/Code/my-org-books/backend"]            # installed books; each applies only when asked for
 base = "docker.io/sbx/shell:1.1.0"                 # the workload kit
 kits = ["./kits/personal"]                         # extra kits, relative to ~/.scoring-stage
 
@@ -142,11 +143,11 @@ apiKey = { domains = ["api.openai.com"] }
 pr_footer = "Generated with an AI coding agent."
 ```
 
-A pack is a directory with a `pack.toml`:
+A book is a directory with a `book.toml`:
 
 ```toml
 name = "backend"
-agents = ["claude"]                                       # agents this pack's work needs
+agents = ["claude"]                                       # agents this book's work needs
 kits = ["./kits/toolchain", "docker.io/sbx/mise:1.0.0"]   # local kits start with ./ or ../
 
 [aws]
@@ -154,7 +155,7 @@ profiles = ["dev", "staging"]
 region = "us-west-2"
 
 [secrets.artifacts]
-command = "python3 -I {pack}/host/feed-token.py"          # {pack} is the pack directory
+command = "python3 -I {book}/host/feed-token.py"          # {book} is the book directory
 
 [bindings.artifacts]
 apiKey = { domains = ["pkgs.example.com"] }
@@ -165,26 +166,26 @@ kits = ["./kits/api-rules"]
 aws = { profiles = ["api-dev"] }
 ```
 
-An installed pack applies to a sandbox when the repository's config names it, when `--pack` names it, or when one
+An installed book applies to a sandbox when the repository's config names it, when `--book` names it, or when one
 of its `[[repos]]` entries matches the repository; the `[[repos]]` rules are for repositories you cannot add a
-config to. `--pack ./dir` also uses a pack that is not installed.
+config to. `--book ./dir` also uses a book that is not installed.
 
 A repository's `.scoring-stage/config.toml`, read from the branch the sandbox starts from:
 
 ```toml
 agents = ["claude", "codex"]     # for example, the agents its .kapellmeister ensembles seat
-packs = ["backend"]              # installed packs, by name
+books = ["backend"]              # installed books, by name
 kits = ["./.scoring-stage/kits/rules"]
 ```
 
-A repository is not trusted with anything that acts on the host. It can add agents, kits and installed packs, but
-it cannot set secrets, bindings, AWS profiles or the base, and it names packs rather than pointing at them: a pack
+A repository is not trusted with anything that acts on the host. It can add agents, kits and installed books, but
+it cannot set secrets, bindings, AWS profiles or the base, and it names books rather than pointing at them: a book
 it asks for that you have not installed is an error.
 
-Packs and both configs are decoded strictly: an unknown key is an error. Two packs that set the same base,
-region, secret or binding differently are an error rather than a silent winner. Your config overrides packs.
+Books and both configs are decoded strictly: an unknown key is an error. Two books that set the same base,
+region, secret or binding differently are an error rather than a silent winner. Your config overrides books.
 
-A kit that a pack adds for its own service declares a `credential@1` entry for that service; the pack's `secrets`
+A kit that a book adds for its own service declares a `credential@1` entry for that service; the book's `secrets`
 entry supplies the value for each sandbox, and its `bindings` entry approves it.
 
 ## Development
