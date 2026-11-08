@@ -217,6 +217,17 @@ func TestUserConfigOverridesTheAWSDefaultProfile(t *testing.T) {
 	}
 }
 
+func TestTheAWSProfileFlagIsGrantedAndOverridesEveryOtherDefault(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	path := book(t, dir, "org", "[aws]\nprofiles = [\"dev\"]\ndefault_profile = \"dev\"\n")
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "[aws]\nprofiles = [\"sandbox\"]\ndefault_profile = \"sandbox\"\n")
+	composition := composeWith(t, load(t, home), Selection{Books: []string{path}, AWSProfile: "staging"})
+	if !reflect.DeepEqual(composition.AWSProfiles, []string{"dev", "sandbox", "staging"}) || composition.AWSDefaultProfile != "staging" {
+		t.Errorf("profiles %v, default %q", composition.AWSProfiles, composition.AWSDefaultProfile)
+	}
+}
+
 func TestBookKitsResolveAgainstTheBookAndRepoKitsApplyOnlyToMatchingRepos(t *testing.T) {
 	dir := t.TempDir()
 	path := book(t, dir, "org", `

@@ -37,6 +37,7 @@ and extracted to `~/.scoring-stage/kits/<content hash>/` the first time `stage u
 stage setup --agent claude --agent codex  # save the agents you use; check sbx, the policy and credentials
 stage up ~/Code/api fix-login        # sandbox stage-fix-login on a scratch clone of ~/Code/api
 stage up ~/Code/api fix-login --agent agy --book dotnet  # add an agent or an installed book for one box
+stage up ~/Code/api fix-login --aws-profile staging    # grant an AWS profile to one box and make it the default
 stage up ~/Code/api fix-login --plan # write the env file and show sbx's plan without creating
 stage shell fix-login                # login shell in the repository; run claude, codex or copilot
 stage exec fix-login -- git log -1
@@ -189,7 +190,8 @@ overrides books.
 
 The sandbox's `~/.aws/config` has a `[default]` profile when a default profile is set, or when exactly one profile
 is granted and nothing names one, so the `aws` CLI and SDKs work without `AWS_PROFILE`. The default must be one of
-the granted profiles; set `default_profile` in your `[aws]` table to choose another.
+the granted profiles; set `default_profile` in your `[aws]` table to choose another. `stage up --aws-profile NAME`
+grants a profile from your host AWS config to that one sandbox and makes it the default, over books and your config.
 
 A kit that a book adds for its own service declares a `credential@1` entry for that service; the book's `secrets`
 entry supplies the value for each sandbox, and its `bindings` entry approves it.

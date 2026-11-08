@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -40,16 +41,18 @@ type exitCode int
 func (e exitCode) Error() string { return "exit status " + strconv.Itoa(int(e)) }
 
 type App struct {
-	Stdout, Stderr io.Writer
-	FindGh         func() string
-	BrokerPID      func(home string) int
-	BrokerStart    func(home string) error
-	IsTerminal     func() bool
+	Stdout, Stderr  io.Writer
+	FindGh          func() string
+	BrokerPID       func(home string) int
+	BrokerStart     func(home string) error
+	IsTerminal      func() bool
+	HostAWSProfiles func() ([]string, error)
 }
 
 func New() *App {
 	app := &App{Stdout: os.Stdout, Stderr: os.Stderr, FindGh: config.FindGh, BrokerPID: brokerPID}
 	app.BrokerStart = app.brokerStart
+	app.HostAWSProfiles = hostAWSProfiles
 	app.IsTerminal = func() bool {
 		return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 	}
@@ -180,6 +183,28 @@ func brokerPID(home string) int {
 		return 0
 	}
 	return pid
+}
+
+func (a *App) checkHostAWSProfile(profile string) error {
+	known, err := a.HostAWSProfiles()
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(known, profile) {
+		return errorf("--aws-profile %s is not a profile in your AWS config; `aws configure list-profiles` lists them", profile)
+	}
+	return nil
+}
+
+func hostAWSProfiles() ([]string, error) {
+	if _, err := exec.LookPath("aws"); err != nil {
+		return nil, errorf("the aws cli is not on PATH; --aws-profile needs it")
+	}
+	output, err := exec.Command("aws", "configure", "list-profiles").Output()
+	if err != nil {
+		return nil, errorf("aws configure list-profiles: %v", err)
+	}
+	return strings.Fields(string(output)), nil
 }
 
 func (a *App) brokerStart(home string) error {
@@ -376,11 +401,12 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 }
 
 func (a *App) cmdUp(args []string, home string) (int, error) {
-	fs := a.newFlags("up", "<repo> <slug> [--agent NAME]... [--book NAME|DIR]... [--base B] [--cpus N] [--memory M] [--allow-global-policy] [--plan]")
+	fs := a.newFlags("up", "<repo> <slug> [--agent NAME]... [--book NAME|DIR]... [--aws-profile NAME] [--base B] [--cpus N] [--memory M] [--allow-global-policy] [--plan]")
 	base := fs.String("base", "", "branch to start from (default: the repository's default branch)")
 	var agentFlags, books stringList
 	fs.Var(&agentFlags, "agent", "add an agent: "+strings.Join(config.AgentNames(), ", ")+", or a kit reference (repeatable)")
 	fs.Var(&books, "book", "use an installed book by name, or a book directory such as ./book (repeatable)")
+	awsProfile := fs.String("aws-profile", "", "grant this AWS profile to the sandbox and make it the default")
 	cpus := fs.intFlag("cpus", "CPUs for the sandbox")
 	memory := fs.String("memory", "", "memory for the sandbox, such as 16g")
 	allowGlobal := fs.Bool("allow-global-policy", false, "continue even if the global sbx policy has allow rules")
@@ -445,12 +471,18 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	if *awsProfile != "" {
+		if err := a.checkHostAWSProfile(*awsProfile); err != nil {
+			return 0, err
+		}
+	}
 	composition, err := config.Compose(settings, config.Selection{
-		RepoNames: []string{filepath.Base(repo), github},
-		Agents:    agentFlags,
-		Books:     books,
-		Repo:      repoConfig,
-		Gh:        a.FindGh(),
+		RepoNames:  []string{filepath.Base(repo), github},
+		Agents:     agentFlags,
+		Books:      books,
+		Repo:       repoConfig,
+		Gh:         a.FindGh(),
+		AWSProfile: *awsProfile,
 	})
 	if err != nil {
 		return 0, err

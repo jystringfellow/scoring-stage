@@ -291,11 +291,12 @@ func LoadBook(path string) (*Book, error) {
 
 // Selection is what one sandbox asks for beyond the user's own settings.
 type Selection struct {
-	RepoNames []string
-	Agents    []string
-	Books     []string
-	Repo      *RepoConfig
-	Gh        string
+	RepoNames  []string
+	Agents     []string
+	Books      []string
+	Repo       *RepoConfig
+	Gh         string
+	AWSProfile string
 }
 
 func Compose(settings *Settings, selection Selection) (*Composition, error) {
@@ -448,6 +449,10 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 	}
 	if settings.aws.defaultProfile != "" {
 		defaultProfile = settings.aws.defaultProfile
+	}
+	if selection.AWSProfile != "" {
+		addProfiles([]string{selection.AWSProfile})
+		defaultProfile = selection.AWSProfile
 	}
 	if defaultProfile == "" && len(profiles) == 1 {
 		defaultProfile = profiles[0]

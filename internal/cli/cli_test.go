@@ -20,6 +20,7 @@ type harness struct {
 	remote         testutil.Remote
 	stdout, stderr bytes.Buffer
 	brokerStarts   []string
+	hostProfiles   []string
 }
 
 func setup(t *testing.T) *harness {
@@ -42,6 +43,9 @@ func (h *harness) stage(args ...string) int {
 		BrokerPID:   func(string) int { return 0 },
 		BrokerStart: func(home string) error { h.brokerStarts = append(h.brokerStarts, home); return nil },
 		IsTerminal:  func() bool { return false },
+		HostAWSProfiles: func() ([]string, error) {
+			return h.hostProfiles, nil
+		},
 	}
 	return app.Main(args)
 }
@@ -215,6 +219,28 @@ aws = { profiles = ["dev", "staging"], region = "us-west-2" }
 	}
 	if len(h.brokerStarts) != 1 || h.brokerStarts[0] != h.home {
 		t.Errorf("broker starts = %v", h.brokerStarts)
+	}
+}
+
+func TestUpWithAnAWSProfileFlagGrantsItAsTheDefaultForThisSandbox(t *testing.T) {
+	h := setup(t)
+	h.hostProfiles = []string{"dev", "staging"}
+	h.expect(0, "up", h.remote.Checkout, "fix", "--aws-profile", "staging")
+	if got := testutil.ReadFile(t, filepath.Join(h.home, "broker", "grants", "fix.profiles")); got != "staging\n" {
+		t.Errorf("profiles = %q", got)
+	}
+	if env := testutil.ReadFile(t, filepath.Join(h.task("fix"), "sbxenv.yaml")); !strings.Contains(env, `default_profile: "staging"`) {
+		t.Errorf("env lacks the default profile:\n%s", env)
+	}
+}
+
+func TestUpRejectsAnAWSProfileFlagMissingFromTheHostConfig(t *testing.T) {
+	h := setup(t)
+	h.hostProfiles = []string{"dev"}
+	h.expect(1, "up", h.remote.Checkout, "fix", "--aws-profile", "stagin")
+	h.expectStderr("--aws-profile stagin is not a profile in your AWS config")
+	if h.anyCall("env create") {
+		t.Error("created a sandbox for an unknown profile")
 	}
 }
 
