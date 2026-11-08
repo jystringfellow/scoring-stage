@@ -111,6 +111,9 @@ Docker's Antigravity kit has no proxy-managed Google sign-in, so agy's token is 
   once in `stage shell`, then run `stage login <slug>`. stage keeps the token in
   `~/.scoring-stage/logins/agy/` (mode 600), copies it into each new sandbox that has agy, and saves it again on
   `stage down` so a refreshed token is kept. Every sandbox with agy then holds a live copy of your Google sign-in.
+  stage also carries agy's record that its first-run setup (color scheme and terms) is done,
+  `~/.gemini/antigravity-cli/cache/onboarding.json`, once you have finished that setup in a sandbox. Without it an agy
+  chair under kapellmeister or any other orchestrator waits on that setup screen.
 
 The kit also has a Gemini API-key mode that would keep a key on the host: a `google` secret plus
 `[bindings.google]` with `apiKey = { domains = ["generativelanguage.googleapis.com"] }` in your config. It uses the

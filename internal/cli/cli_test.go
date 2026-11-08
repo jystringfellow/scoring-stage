@@ -66,6 +66,15 @@ func (h *harness) expectStderr(fragment string) {
 
 func (h *harness) task(slug string) string { return filepath.Join(h.home, "tasks", slug) }
 
+func (h *harness) anyCallContaining(fragment string) bool {
+	for _, call := range h.sbx.Calls() {
+		if strings.Contains(call, fragment) {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *harness) anyCall(prefixes ...string) bool {
 	for _, call := range h.sbx.Calls() {
 		for _, prefix := range prefixes {
@@ -434,6 +443,7 @@ func TestCopiedLoginsAreSavedOnTheHostAndCopiedIntoNewSandboxes(t *testing.T) {
 	h := setup(t)
 	testutil.WriteFile(t, filepath.Join(h.home, "config.toml"), "copy_logins = [\"agy\"]\n")
 	saved := filepath.Join(h.home, "logins", "agy", "antigravity-oauth-token")
+	token := h.sbx.BoxFile("antigravity-oauth-token")
 
 	h.expect(0, "up", h.remote.Checkout, "first", "--agent", "agy")
 	if !strings.Contains(h.stdout.String(), "no saved agy login yet") {
@@ -442,7 +452,7 @@ func TestCopiedLoginsAreSavedOnTheHostAndCopiedIntoNewSandboxes(t *testing.T) {
 	h.expect(1, "login", "first")
 	h.expectStderr("stage-first has no agy login yet")
 
-	testutil.WriteFile(t, h.sbx.BoxFile(), "token-1")
+	testutil.WriteFile(t, token, "token-1")
 	h.expect(0, "login", "first")
 	if got := testutil.ReadFile(t, saved); got != "token-1" {
 		t.Fatalf("saved %q", got)
@@ -456,20 +466,49 @@ func TestCopiedLoginsAreSavedOnTheHostAndCopiedIntoNewSandboxes(t *testing.T) {
 		t.Error("the token was printed")
 	}
 
-	os.Remove(h.sbx.BoxFile())
+	os.Remove(token)
 	h.expect(0, "up", h.remote.Checkout, "second", "--agent", "agy")
-	if got := testutil.ReadFile(t, h.sbx.BoxFile()); got != "token-1" {
+	if got := testutil.ReadFile(t, token); got != "token-1" {
 		t.Fatalf("restored %q", got)
 	}
 	if want := "exec -i -u agent stage-second sh -c"; !h.anyCall(want) {
 		t.Errorf("no %q call in %v", want, h.sbx.Calls())
 	}
 
-	testutil.WriteFile(t, h.sbx.BoxFile(), "token-2")
+	testutil.WriteFile(t, token, "token-2")
 	h.sbx.SetSandboxes("stage-second\n")
 	h.expect(0, "down", "second")
 	if got := testutil.ReadFile(t, saved); got != "token-2" {
 		t.Fatalf("down saved %q", got)
+	}
+}
+
+func TestAgysCompletedSetupTravelsWithItsLoginWhenThereIsOne(t *testing.T) {
+	h := setup(t)
+	testutil.WriteFile(t, filepath.Join(h.home, "config.toml"), "copy_logins = [\"agy\"]\n")
+	savedSetup := filepath.Join(h.home, "logins", "agy", "onboarding.json")
+	setupFile := h.sbx.BoxFile("onboarding.json")
+
+	h.expect(0, "up", h.remote.Checkout, "first", "--agent", "agy")
+	testutil.WriteFile(t, h.sbx.BoxFile("antigravity-oauth-token"), "token-1")
+	h.expect(0, "login", "first")
+	if _, err := os.Stat(savedSetup); !os.IsNotExist(err) {
+		t.Fatal("saved a setup file the sandbox did not have")
+	}
+
+	testutil.WriteFile(t, setupFile, `{"onboardingComplete": true}`)
+	h.expect(0, "login", "first")
+	if got := testutil.ReadFile(t, savedSetup); got != `{"onboardingComplete": true}` {
+		t.Fatalf("saved setup %q", got)
+	}
+
+	os.Remove(setupFile)
+	h.expect(0, "up", h.remote.Checkout, "second", "--agent", "agy")
+	if got := testutil.ReadFile(t, setupFile); got != `{"onboardingComplete": true}` {
+		t.Fatalf("restored setup %q", got)
+	}
+	if want := "/home/agent/.gemini/antigravity-cli/cache/onboarding.json"; !h.anyCallContaining(want) {
+		t.Errorf("no call writing %s in %v", want, h.sbx.Calls())
 	}
 }
 

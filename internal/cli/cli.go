@@ -738,18 +738,24 @@ func copiedAgents(settings *config.Settings, task *Task) []string {
 }
 
 func (a *App) restoreLogins(settings *config.Settings, task *Task) {
+agents:
 	for _, agent := range copiedAgents(settings, task) {
-		file, err := os.Open(settings.SavedLogin(agent))
-		if err != nil {
-			a.say("no saved %s login yet: sign in with %s in `stage shell %s`, then run `stage login %s`", agent, agent, task.Slug, task.Slug)
-			continue
-		}
-		err = sbx.Feed(file, "exec", "-i", "-u", "agent", task.Sandbox, "sh", "-c",
-			`umask 077 && mkdir -p "$(dirname "$1")" && cat > "$1"`, "sh", config.LoginFile(agent))
-		file.Close()
-		if err != nil {
-			a.warn("could not copy the saved %s login into %s: %s", agent, task.Sandbox, err)
-			continue
+		for _, loginFile := range config.LoginFiles(agent) {
+			file, err := os.Open(settings.SavedLogin(agent, loginFile))
+			if err != nil {
+				if loginFile.Required {
+					a.say("no saved %s login yet: sign in with %s in `stage shell %s`, then run `stage login %s`", agent, agent, task.Slug, task.Slug)
+					continue agents
+				}
+				continue
+			}
+			err = sbx.Feed(file, "exec", "-i", "-u", "agent", task.Sandbox, "sh", "-c",
+				`umask 077 && mkdir -p "$(dirname "$1")" && cat > "$1"`, "sh", loginFile.Path)
+			file.Close()
+			if err != nil {
+				a.warn("could not copy the saved %s login into %s: %s", agent, task.Sandbox, err)
+				continue agents
+			}
 		}
 		a.say("copied the saved %s login into %s", agent, task.Sandbox)
 	}
@@ -757,14 +763,19 @@ func (a *App) restoreLogins(settings *config.Settings, task *Task) {
 
 func (a *App) saveLogins(settings *config.Settings, task *Task) error {
 	for _, agent := range copiedAgents(settings, task) {
-		content, err := sbx.Output("exec", "-u", "agent", task.Sandbox, "cat", config.LoginFile(agent))
-		if err != nil || strings.TrimSpace(content) == "" {
-			return errorf("%s has no %s login yet; sign in with %s in `stage shell %s` first", task.Sandbox, agent, agent, task.Slug)
+		for _, loginFile := range config.LoginFiles(agent) {
+			content, err := sbx.Output("exec", "-u", "agent", task.Sandbox, "cat", loginFile.Path)
+			if err != nil || strings.TrimSpace(content) == "" {
+				if loginFile.Required {
+					return errorf("%s has no %s login yet; sign in with %s in `stage shell %s` first", task.Sandbox, agent, agent, task.Slug)
+				}
+				continue
+			}
+			if err := writePrivate(settings.SavedLogin(agent, loginFile), content); err != nil {
+				return err
+			}
 		}
-		if err := writePrivate(settings.SavedLogin(agent), content); err != nil {
-			return err
-		}
-		a.say("saved the %s login to %s", agent, settings.SavedLogin(agent))
+		a.say("saved the %s login to %s", agent, filepath.Join(settings.Home, "logins", agent))
 	}
 	return nil
 }
