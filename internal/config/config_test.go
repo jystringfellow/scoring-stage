@@ -17,9 +17,9 @@ func dedent(text string) string {
 	return strings.Join(lines, "\n")
 }
 
-func pack(t *testing.T, dir, name, body string) string {
+func book(t *testing.T, dir, name, body string) string {
 	t.Helper()
-	testutil.WriteFile(t, filepath.Join(dir, name, "pack.toml"), `name = "`+name+"\"\n"+dedent(body))
+	testutil.WriteFile(t, filepath.Join(dir, name, "book.toml"), `name = "`+name+"\"\n"+dedent(body))
 	return filepath.Join(dir, name)
 }
 
@@ -41,9 +41,9 @@ func composeWith(t *testing.T, settings *Settings, selection Selection) *Composi
 	return composition
 }
 
-func withPacks(t *testing.T, home string, packs ...string) (*Settings, Selection) {
+func withBooks(t *testing.T, home string, books ...string) (*Settings, Selection) {
 	t.Helper()
-	return load(t, home), Selection{Packs: packs}
+	return load(t, home), Selection{Books: books}
 }
 
 func sources(kits []Kit) []string {
@@ -146,12 +146,12 @@ func TestAnEmptyReadOnlyTokenFileIsIgnored(t *testing.T) {
 
 func TestAWSProfilesAddTheBrokerKitAndBinding(t *testing.T) {
 	dir := t.TempDir()
-	path := pack(t, dir, "org", `
+	path := book(t, dir, "org", `
 		[aws]
 		profiles = ["dev", "staging"]
 		region = "us-west-2"
 	`)
-	settings, selection := withPacks(t, filepath.Join(dir, "home"), path)
+	settings, selection := withBooks(t, filepath.Join(dir, "home"), path)
 	composition := composeWith(t, settings, selection)
 	brokerKit := composition.Kits[1]
 	want := Kit{Source: filepath.Join(settings.CoreKits(), "aws-broker"), Args: map[string]any{"profiles": "dev staging", "region": "us-west-2"}}
@@ -163,9 +163,9 @@ func TestAWSProfilesAddTheBrokerKitAndBinding(t *testing.T) {
 	}
 }
 
-func TestPackKitsResolveAgainstThePackAndRepoKitsApplyOnlyToMatchingRepos(t *testing.T) {
+func TestBookKitsResolveAgainstTheBookAndRepoKitsApplyOnlyToMatchingRepos(t *testing.T) {
 	dir := t.TempDir()
-	path := pack(t, dir, "org", `
+	path := book(t, dir, "org", `
 		kits = ["./kits/toolchain", "docker.io/sbx/mise:1.0.0"]
 
 		[[repos]]
@@ -173,15 +173,15 @@ func TestPackKitsResolveAgainstThePackAndRepoKitsApplyOnlyToMatchingRepos(t *tes
 		kits = [{ source = "./kits/api-rules", args = { tier = "dev" } }]
 		aws = { profiles = ["api-dev"] }
 	`)
-	settings, selection := withPacks(t, filepath.Join(dir, "home"), path)
+	settings, selection := withBooks(t, filepath.Join(dir, "home"), path)
 	selection.RepoNames = []string{"Acme.Api", "acme/api"}
 	matched := composeWith(t, settings, selection)
 	selection.RepoNames = []string{"web", "acme/web"}
 	unmatched := composeWith(t, settings, selection)
-	packDir := Resolve(path)
-	toolchain := Kit{Source: filepath.Join(packDir, "kits/toolchain")}
+	bookDir := Resolve(path)
+	toolchain := Kit{Source: filepath.Join(bookDir, "kits/toolchain")}
 	mise := Kit{Source: "docker.io/sbx/mise:1.0.0"}
-	expectKits(t, matched.Kits[len(matched.Kits)-3:], []Kit{toolchain, mise, {Source: filepath.Join(packDir, "kits/api-rules"), Args: map[string]any{"tier": "dev"}}})
+	expectKits(t, matched.Kits[len(matched.Kits)-3:], []Kit{toolchain, mise, {Source: filepath.Join(bookDir, "kits/api-rules"), Args: map[string]any{"tier": "dev"}}})
 	if !reflect.DeepEqual(matched.AWSProfiles, []string{"api-dev"}) {
 		t.Errorf("matched profiles = %v", matched.AWSProfiles)
 	}
@@ -193,12 +193,12 @@ func TestPackKitsResolveAgainstThePackAndRepoKitsApplyOnlyToMatchingRepos(t *tes
 
 func TestRepoMatchIsCaseSensitiveGlob(t *testing.T) {
 	dir := t.TempDir()
-	path := pack(t, dir, "org", `
+	path := book(t, dir, "org", `
 		[[repos]]
 		match = "Acme.*"
 		kits = ["./kits/x"]
 	`)
-	settings, selection := withPacks(t, filepath.Join(dir, "home"), path)
+	settings, selection := withBooks(t, filepath.Join(dir, "home"), path)
 	last := func(names ...string) string {
 		selection.RepoNames = names
 		kits := composeWith(t, settings, selection).Kits
@@ -233,16 +233,16 @@ func TestFnmatchStarsCrossSlashes(t *testing.T) {
 	}
 }
 
-func TestPackSecretCommandsCanNameThePackDirectory(t *testing.T) {
+func TestBookSecretCommandsCanNameTheBookDirectory(t *testing.T) {
 	dir := t.TempDir()
-	path := pack(t, dir, "org with space", `
+	path := book(t, dir, "org with space", `
 		[secrets.ado]
-		command = "python3 -I {pack}/host/ado.py"
+		command = "python3 -I {book}/host/ado.py"
 
 		[bindings.ado]
 		apiKey = { domains = ["pkgs.dev.azure.com"] }
 	`)
-	settings, selection := withPacks(t, filepath.Join(dir, "home"), path)
+	settings, selection := withBooks(t, filepath.Join(dir, "home"), path)
 	composition := composeWith(t, settings, selection)
 	want := map[string]any{"command": "python3 -I '" + Resolve(path) + "'/host/ado.py"}
 	if got := composition.Secrets["ado"]; !reflect.DeepEqual(got, want) {
@@ -253,37 +253,37 @@ func TestPackSecretCommandsCanNameThePackDirectory(t *testing.T) {
 	}
 }
 
-func TestTwoPacksDisagreeingIsAnErrorRatherThanASilentWinner(t *testing.T) {
+func TestTwoBooksDisagreeingIsAnErrorRatherThanASilentWinner(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
-	first := pack(t, dir, "one", "base = \"docker.io/org/base:1\"\n[aws]\nregion = \"us-west-2\"\n")
-	second := pack(t, dir, "two", "base = \"docker.io/org/base:2\"\n")
-	third := pack(t, dir, "three", "[aws]\nregion = \"eu-west-1\"\n")
-	_, err := Compose(load(t, home), Selection{Packs: []string{first, second}})
-	expectError(t, err, "pack two sets base docker.io/org/base:2, but pack one set")
-	_, err = Compose(load(t, home), Selection{Packs: []string{first, third}})
+	first := book(t, dir, "one", "base = \"docker.io/org/base:1\"\n[aws]\nregion = \"us-west-2\"\n")
+	second := book(t, dir, "two", "base = \"docker.io/org/base:2\"\n")
+	third := book(t, dir, "three", "[aws]\nregion = \"eu-west-1\"\n")
+	_, err := Compose(load(t, home), Selection{Books: []string{first, second}})
+	expectError(t, err, "book two sets base docker.io/org/base:2, but book one set")
+	_, err = Compose(load(t, home), Selection{Books: []string{first, third}})
 	expectError(t, err, "AWS region eu-west-1")
 }
 
-func TestPacksAgreeingOnASecretIsFineButDifferingIsAnError(t *testing.T) {
+func TestBooksAgreeingOnASecretIsFineButDifferingIsAnError(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
-	first := pack(t, dir, "one", "[secrets.ado]\ncommand = \"a\"\n")
-	same := pack(t, dir, "same", "[secrets.ado]\ncommand = \"a\"\n")
-	other := pack(t, dir, "other", "[secrets.ado]\ncommand = \"b\"\n")
-	if got := composeWith(t, load(t, home), Selection{Packs: []string{first, same}}).Secrets["ado"]; !reflect.DeepEqual(got, map[string]any{"command": "a"}) {
+	first := book(t, dir, "one", "[secrets.ado]\ncommand = \"a\"\n")
+	same := book(t, dir, "same", "[secrets.ado]\ncommand = \"a\"\n")
+	other := book(t, dir, "other", "[secrets.ado]\ncommand = \"b\"\n")
+	if got := composeWith(t, load(t, home), Selection{Books: []string{first, same}}).Secrets["ado"]; !reflect.DeepEqual(got, map[string]any{"command": "a"}) {
 		t.Errorf("secret = %v", got)
 	}
-	_, err := Compose(load(t, home), Selection{Packs: []string{first, other}})
-	expectError(t, err, "pack other sets secret ado differently from pack one")
+	_, err := Compose(load(t, home), Selection{Books: []string{first, other}})
+	expectError(t, err, "book other sets secret ado differently from book one")
 }
 
-func TestUserConfigOverridesPacksAndListsPacks(t *testing.T) {
+func TestUserConfigOverridesBooksAndListsBooks(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
-	path := pack(t, dir, "org", "base = \"docker.io/org/base:1\"\n[aws]\nprofiles = [\"dev\"]\nregion = \"us-west-2\"\n[[repos]]\nmatch = \"api\"\n")
+	path := book(t, dir, "org", "base = \"docker.io/org/base:1\"\n[aws]\nprofiles = [\"dev\"]\nregion = \"us-west-2\"\n[[repos]]\nmatch = \"api\"\n")
 	testutil.WriteFile(t, filepath.Join(home, "config.toml"), dedent(`
-		packs = ["`+path+`"]
+		books = ["`+path+`"]
 		base = "docker.io/me/base:9"
 		agents = ["docker.io/sbx/claude-mixin:2.1.319"]
 		kits = ["./my-kit"]
@@ -299,12 +299,12 @@ func TestUserConfigOverridesPacksAndListsPacks(t *testing.T) {
 		pr_footer = "[Robots on behalf of Someone]"
 	`))
 	settings := load(t, home)
-	if inactive := composeWith(t, settings, Selection{RepoNames: []string{"web"}}); len(inactive.Packs) != 0 {
-		t.Errorf("an installed pack applied without being asked for: %v", inactive.Packs)
+	if inactive := composeWith(t, settings, Selection{RepoNames: []string{"web"}}); len(inactive.Books) != 0 {
+		t.Errorf("an installed book applied without being asked for: %v", inactive.Books)
 	}
 	composition := composeWith(t, settings, Selection{RepoNames: []string{"api"}})
-	if !reflect.DeepEqual(composition.Packs, []string{"org"}) {
-		t.Errorf("packs = %v", composition.Packs)
+	if !reflect.DeepEqual(composition.Books, []string{"org"}) {
+		t.Errorf("books = %v", composition.Books)
 	}
 	if !composition.Base.Equal(Kit{Source: "docker.io/me/base:9"}) {
 		t.Errorf("base = %v", composition.Base)
@@ -326,7 +326,7 @@ func TestUserConfigOverridesPacksAndListsPacks(t *testing.T) {
 	}
 }
 
-func TestPacksAreDecodedStrictly(t *testing.T) {
+func TestBooksAreDecodedStrictly(t *testing.T) {
 	for _, c := range []struct{ body, message string }{
 		{"kitz = [\"x\"]\n", "unknown keys kitz"},
 		{"[aws]\nprofile = [\"x\"]\n", "unknown keys profile"},
@@ -336,34 +336,34 @@ func TestPacksAreDecodedStrictly(t *testing.T) {
 		{"[[repos]]\nmatch = \"x\"\naws = { region = \"r\", zone = \"z\" }\n", "repos[0].aws: unknown keys zone"},
 		{"[aws]\nprofiles = \"dev\"\n", "profiles must be a list of strings"},
 		{"kits = \"./x\"\n", "kits must be a list"},
-		{"name = \n", "pack.toml"},
+		{"name = \n", "book.toml"},
 	} {
 		dir := t.TempDir()
-		path := pack(t, dir, "org", c.body)
+		path := book(t, dir, "org", c.body)
 		settings, err := LoadSettings(filepath.Join(dir, "home"))
 		if err == nil {
-			_, err = Compose(settings, Selection{RepoNames: []string{"x"}, Packs: []string{path}})
+			_, err = Compose(settings, Selection{RepoNames: []string{"x"}, Books: []string{path}})
 		}
 		expectError(t, err, c.message)
 	}
 }
 
-func TestAPackNeedsAManifestAndAName(t *testing.T) {
+func TestABookNeedsAManifestAndAName(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
 	testutil.WriteFile(t, filepath.Join(dir, "empty", ".keep"), "")
-	_, err := Compose(load(t, home), Selection{Packs: []string{filepath.Join(dir, "empty")}})
-	expectError(t, err, "no pack.toml")
-	testutil.WriteFile(t, filepath.Join(dir, "nameless", "pack.toml"), "kits = []\n")
-	_, err = Compose(load(t, home), Selection{Packs: []string{filepath.Join(dir, "nameless")}})
+	_, err := Compose(load(t, home), Selection{Books: []string{filepath.Join(dir, "empty")}})
+	expectError(t, err, "no book.toml")
+	testutil.WriteFile(t, filepath.Join(dir, "nameless", "book.toml"), "kits = []\n")
+	_, err = Compose(load(t, home), Selection{Books: []string{filepath.Join(dir, "nameless")}})
 	expectError(t, err, "name is required")
 }
 
 func TestUserConfigIsDecodedStrictly(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
-	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "pack = []\n")
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "book = []\n")
 	_, err := LoadSettings(home)
-	expectError(t, err, "unknown keys pack")
+	expectError(t, err, "unknown keys book")
 	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "[ship]\nfooter = \"x\"\n")
 	_, err = LoadSettings(home)
 	expectError(t, err, "config.toml [ship]: unknown keys footer")
@@ -396,34 +396,34 @@ func TestStageHomeDefaultsUnderTheUserHomeAndHonoursStageHome(t *testing.T) {
 	}
 }
 
-func installedPack(t *testing.T, dir, name, body string) (home string) {
+func installedBook(t *testing.T, dir, name, body string) (home string) {
 	t.Helper()
-	path := pack(t, dir, name, body)
+	path := book(t, dir, name, body)
 	home = filepath.Join(dir, "home")
-	testutil.WriteFile(t, filepath.Join(home, "config.toml"), `packs = ["`+path+`"]`+"\n")
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), `books = ["`+path+`"]`+"\n")
 	return home
 }
 
-func TestInstalledPacksApplyOnlyWhenNamedOrMatched(t *testing.T) {
+func TestInstalledBooksApplyOnlyWhenNamedOrMatched(t *testing.T) {
 	dir := t.TempDir()
-	home := installedPack(t, dir, "dotnet", "agents = [\"claude\"]\nkits = [\"docker.io/org/dotnet:1\"]\n")
+	home := installedBook(t, dir, "dotnet", "agents = [\"claude\"]\nkits = [\"docker.io/org/dotnet:1\"]\n")
 	settings := load(t, home)
-	if got := composeWith(t, settings, Selection{}); len(got.Packs) != 0 || len(got.Agents) != 0 {
-		t.Fatalf("unrequested pack applied: %v %v", got.Packs, got.Agents)
+	if got := composeWith(t, settings, Selection{}); len(got.Books) != 0 || len(got.Agents) != 0 {
+		t.Fatalf("unrequested book applied: %v %v", got.Books, got.Agents)
 	}
-	named := composeWith(t, settings, Selection{Packs: []string{"dotnet"}})
-	if !reflect.DeepEqual(named.Packs, []string{"dotnet"}) || !reflect.DeepEqual(named.Agents, []string{"claude"}) {
-		t.Fatalf("named pack: %v %v", named.Packs, named.Agents)
+	named := composeWith(t, settings, Selection{Books: []string{"dotnet"}})
+	if !reflect.DeepEqual(named.Books, []string{"dotnet"}) || !reflect.DeepEqual(named.Agents, []string{"claude"}) {
+		t.Fatalf("named book: %v %v", named.Books, named.Agents)
 	}
-	_, err := Compose(settings, Selection{Packs: []string{"java"}})
-	expectError(t, err, "--pack java: no installed pack has that name (installed: dotnet)")
+	_, err := Compose(settings, Selection{Books: []string{"java"}})
+	expectError(t, err, "--book java: no installed book has that name (installed: dotnet)")
 }
 
-func TestARepositoryNamesInstalledPacksAndAddsAgentsAndKits(t *testing.T) {
+func TestARepositoryNamesInstalledBooksAndAddsAgentsAndKits(t *testing.T) {
 	dir := t.TempDir()
-	home := installedPack(t, dir, "dotnet", "kits = [\"docker.io/org/dotnet:1\"]\n")
+	home := installedBook(t, dir, "dotnet", "kits = [\"docker.io/org/dotnet:1\"]\n")
 	repoDir := filepath.Join(dir, "repo")
-	testutil.WriteFile(t, filepath.Join(repoDir, RepoConfigPath), "agents = [\"codex\"]\npacks = [\"dotnet\"]\nkits = [\"./tools/kit\"]\n")
+	testutil.WriteFile(t, filepath.Join(repoDir, RepoConfigPath), "agents = [\"codex\"]\nbooks = [\"dotnet\"]\nkits = [\"./tools/kit\"]\n")
 	repo, err := LoadRepoConfig(repoDir)
 	if err != nil {
 		t.Fatal(err)
@@ -436,16 +436,16 @@ func TestARepositoryNamesInstalledPacksAndAddsAgentsAndKits(t *testing.T) {
 	}
 }
 
-func TestARepositoryCannotUseAPackThatIsNotInstalled(t *testing.T) {
+func TestARepositoryCannotUseABookThatIsNotInstalled(t *testing.T) {
 	dir := t.TempDir()
 	repoDir := filepath.Join(dir, "repo")
-	testutil.WriteFile(t, filepath.Join(repoDir, RepoConfigPath), "packs = [\"dotnet\"]\n")
+	testutil.WriteFile(t, filepath.Join(repoDir, RepoConfigPath), "books = [\"dotnet\"]\n")
 	repo, err := LoadRepoConfig(repoDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = Compose(load(t, filepath.Join(dir, "home")), Selection{Repo: repo})
-	expectError(t, err, "asks for pack dotnet, which is not installed (installed: none)")
+	expectError(t, err, "asks for book dotnet, which is not installed (installed: none)")
 }
 
 func TestARepositoryCannotActOnTheHost(t *testing.T) {
@@ -453,7 +453,7 @@ func TestARepositoryCannotActOnTheHost(t *testing.T) {
 		"[secrets.x]\ncommand = \"curl evil\"\n":         "a repository cannot set secrets",
 		"[bindings.x]\napiKey = { domains = [\"x\"] }\n": "a repository cannot set bindings",
 		"[aws]\nprofiles = [\"prod\"]\n":                 "a repository cannot set aws",
-		"packs = [\"../evil\"]\n":                        "packs are named, not located",
+		"books = [\"../evil\"]\n":                        "books are named, not located",
 		"agentz = []\n":                                  "unknown keys agentz",
 	} {
 		repoDir := t.TempDir()
@@ -483,11 +483,11 @@ func TestSaveAgentsPrependsToTheUserConfig(t *testing.T) {
 	expectError(t, SaveAgents(t.TempDir(), []string{"cursor"}), "unknown agent cursor")
 }
 
-func TestTwoInstalledPacksCannotShareAName(t *testing.T) {
+func TestTwoInstalledBooksCannotShareAName(t *testing.T) {
 	dir := t.TempDir()
-	first, second := pack(t, filepath.Join(dir, "a"), "org", ""), pack(t, filepath.Join(dir, "b"), "org", "")
+	first, second := book(t, filepath.Join(dir, "a"), "org", ""), book(t, filepath.Join(dir, "b"), "org", "")
 	home := filepath.Join(dir, "home")
-	testutil.WriteFile(t, filepath.Join(home, "config.toml"), `packs = ["`+first+`", "`+second+`"]`+"\n")
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), `books = ["`+first+`", "`+second+`"]`+"\n")
 	_, err := LoadSettings(home)
 	expectError(t, err, "are both named org")
 }

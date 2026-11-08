@@ -195,14 +195,14 @@ func TestPlanShowsTheSbxPlanWithoutCreatingOrCheckingPolicy(t *testing.T) {
 
 func TestUpWithAWSProfilesGrantsThisSandboxATokenAndStartsTheBroker(t *testing.T) {
 	h := setup(t)
-	pack := filepath.Join(t.TempDir(), "pack")
-	testutil.WriteFile(t, filepath.Join(pack, "pack.toml"), `
+	book := filepath.Join(t.TempDir(), "book")
+	testutil.WriteFile(t, filepath.Join(book, "book.toml"), `
 name = "org"
 [[repos]]
 match = "acme/api"
 aws = { profiles = ["dev", "staging"], region = "us-west-2" }
 `)
-	h.expect(0, "up", h.remote.Checkout, "fix", "--pack", pack)
+	h.expect(0, "up", h.remote.Checkout, "fix", "--book", book)
 	grants := filepath.Join(h.home, "broker", "grants")
 	if got := testutil.ReadFile(t, filepath.Join(grants, "fix.profiles")); got != "dev\nstaging\n" {
 		t.Errorf("profiles = %q", got)

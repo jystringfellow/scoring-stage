@@ -70,7 +70,7 @@ const usage = `usage: stage <command> [options]
 Run coding agents in Docker Sandboxes with host-held credentials.
 
 commands:
-  setup [--yes] [--agent NAME]...   check sbx, the global policy, credentials and packs; save your agents
+  setup [--yes] [--agent NAME]...   check sbx, the global policy, credentials and books; save your agents
   broker start|stop|status|serve    manage the host AWS credential broker
   up <repo> <slug> [options]        create a sandbox for a repository
   shell <slug>                      open a login shell in the repository
@@ -334,16 +334,16 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 	if agentList := settings.AgentEntries(); len(agentList) > 0 {
 		a.say("agents: %s", strings.Join(agentList, ", "))
 	} else {
-		a.warn("no agents in config.toml; boxes get only a shell unless --agent, a pack or the repository adds some (stage setup --agent %s ...)", config.AgentNames()[0])
+		a.warn("no agents in config.toml; boxes get only a shell unless --agent, a book or the repository adds some (stage setup --agent %s ...)", config.AgentNames()[0])
 	}
-	var packNames []string
-	for _, pack := range settings.Packs {
-		packNames = append(packNames, pack.Name)
+	var bookNames []string
+	for _, book := range settings.Books {
+		bookNames = append(bookNames, book.Name)
 	}
-	if len(packNames) == 0 {
-		packNames = []string{"none"}
+	if len(bookNames) == 0 {
+		bookNames = []string{"none"}
 	}
-	a.say("installed packs: %s", strings.Join(packNames, ", "))
+	a.say("installed books: %s", strings.Join(bookNames, ", "))
 	gh := a.FindGh()
 	if gh != "" && exec.Command(gh, "auth", "token").Run() == nil {
 		a.say("gh auth: ok (source of the per-box copilot secret)")
@@ -363,7 +363,7 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 		return 0, err
 	}
 	if len(composition.AWSProfiles) > 0 {
-		a.say("aws profiles (before packs): %s", strings.Join(composition.AWSProfiles, " "))
+		a.say("aws profiles (before books): %s", strings.Join(composition.AWSProfiles, " "))
 		if _, err := exec.LookPath("aws"); err != nil {
 			a.warn("the aws cli is missing; the broker needs it")
 		}
@@ -373,11 +373,11 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 }
 
 func (a *App) cmdUp(args []string, home string) (int, error) {
-	fs := a.newFlags("up", "<repo> <slug> [--agent NAME]... [--pack NAME|DIR]... [--base B] [--cpus N] [--memory M] [--allow-global-policy] [--plan]")
+	fs := a.newFlags("up", "<repo> <slug> [--agent NAME]... [--book NAME|DIR]... [--base B] [--cpus N] [--memory M] [--allow-global-policy] [--plan]")
 	base := fs.String("base", "", "branch to start from (default: the repository's default branch)")
-	var agentFlags, packs stringList
+	var agentFlags, books stringList
 	fs.Var(&agentFlags, "agent", "add an agent: "+strings.Join(config.AgentNames(), ", ")+", or a kit reference (repeatable)")
-	fs.Var(&packs, "pack", "use an installed pack by name, or a pack directory such as ./pack (repeatable)")
+	fs.Var(&books, "book", "use an installed book by name, or a book directory such as ./book (repeatable)")
 	cpus := fs.intFlag("cpus", "CPUs for the sandbox")
 	memory := fs.String("memory", "", "memory for the sandbox, such as 16g")
 	allowGlobal := fs.Bool("allow-global-policy", false, "continue even if the global sbx policy has allow rules")
@@ -445,7 +445,7 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	composition, err := config.Compose(settings, config.Selection{
 		RepoNames: []string{filepath.Base(repo), github},
 		Agents:    agentFlags,
-		Packs:     packs,
+		Books:     books,
 		Repo:      repoConfig,
 		Gh:        a.FindGh(),
 	})
