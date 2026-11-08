@@ -37,6 +37,7 @@ and extracted to `~/.scoring-stage/kits/<content hash>/` the first time `stage u
 stage setup --agent claude --agent codex  # save the agents you use; check sbx, the policy and credentials
 stage up ~/Code/api fix-login        # sandbox stage-fix-login on a scratch clone of ~/Code/api
 stage up ~/Code/api fix-login --agent agy --book dotnet  # add an agent or an installed book for one box
+stage up ~/Code/api fix-login --aws-profile staging    # grant an AWS profile to one box and make it the default
 stage up ~/Code/api fix-login --plan # write the env file and show sbx's plan without creating
 stage shell fix-login                # login shell in the repository; run claude, codex or copilot
 stage exec fix-login -- git log -1
@@ -74,7 +75,7 @@ Nothing you did not choose. Every sandbox gets:
 | --- | --- |
 | `docker.io/sbx/shell` | Debian base with git, gh, curl, jq, Python and Docker |
 | [`kits/stage`](kits/stage/stage.yaml) | Refuses `POST /**/git-receive-pack` on ports 443 and 80 of every host, sets your git identity, tells the agent the rules |
-| [`kits/aws-broker`](kits/aws-broker/aws-broker.yaml) | Only when AWS profiles are configured: `~/.aws/config` with a `credential_process` per profile |
+| [`kits/aws-broker`](kits/aws-broker/aws-broker.yaml) | Only when AWS profiles are configured: `~/.aws/config` with a `credential_process` per profile, plus `[default]` when a default profile applies |
 
 plus the agents chosen by your config, the repository, a book or `--agent`. Agents are Docker's published mixins,
 each with its own egress and credentials:
@@ -153,6 +154,7 @@ kits = ["./kits/toolchain", "docker.io/sbx/mise:1.0.0"]   # local kits start wit
 [aws]
 profiles = ["dev", "staging"]
 region = "us-west-2"
+default_profile = "dev"                                   # also written as [default]; must be granted
 
 [secrets.artifacts]
 command = "python3 -I {book}/host/feed-token.py"          # {book} is the book directory
@@ -183,7 +185,13 @@ it cannot set secrets, bindings, AWS profiles or the base, and it names books ra
 it asks for that you have not installed is an error.
 
 Books and both configs are decoded strictly: an unknown key is an error. Two books that set the same base,
-region, secret or binding differently are an error rather than a silent winner. Your config overrides books.
+region, AWS default profile, secret or binding differently are an error rather than a silent winner. Your config
+overrides books.
+
+The sandbox's `~/.aws/config` has a `[default]` profile when a default profile is set, or when exactly one profile
+is granted and nothing names one, so the `aws` CLI and SDKs work without `AWS_PROFILE`. The default must be one of
+the granted profiles; set `default_profile` in your `[aws]` table to choose another. `stage up --aws-profile NAME`
+grants a profile from your host AWS config to that one sandbox and makes it the default, over books and your config.
 
 A kit that a book adds for its own service declares a `credential@1` entry for that service; the book's `secrets`
 entry supplies the value for each sandbox, and its `bindings` entry approves it.
