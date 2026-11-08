@@ -75,6 +75,13 @@ func GitHubRemote(t *testing.T) Remote {
 
 const fakeSbx = `#!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_SBX_LOG"
+if [ "$1" = exec ]; then
+  case " $* " in
+    *" -i "*) cat > "$FAKE_SBX_STATE/box-file" ;;
+    *" cat "*) [ -s "$FAKE_SBX_STATE/box-file" ] || { echo "cat: No such file or directory" >&2; exit 1; }; cat "$FAKE_SBX_STATE/box-file" ;;
+  esac
+  exit 0
+fi
 case "$1 $2" in
   "version "*) echo "sbx version ${FAKE_SBX_VERSION:-v0.51.0} deadbeef" ;;
   "policy ls") cat "$FAKE_SBX_POLICY" ;;
@@ -107,6 +114,7 @@ func NewFakeSbx(t *testing.T) *FakeSbx {
 	t.Setenv("FAKE_SBX_LOG", filepath.Join(state, "calls.log"))
 	t.Setenv("FAKE_SBX_POLICY", filepath.Join(state, "policy.json"))
 	t.Setenv("FAKE_SBX_SANDBOXES", filepath.Join(state, "sandboxes"))
+	t.Setenv("FAKE_SBX_STATE", state)
 	return &FakeSbx{t: t, State: state}
 }
 
@@ -132,4 +140,9 @@ func (f *FakeSbx) SetPolicy(json string) {
 
 func (f *FakeSbx) SetSandboxes(lines string) {
 	WriteFile(f.t, filepath.Join(f.State, "sandboxes"), lines)
+}
+
+// BoxFile is the one file the fake sandbox holds: exec -i writes it and exec cat reads it.
+func (f *FakeSbx) BoxFile() string {
+	return filepath.Join(f.State, "box-file")
 }

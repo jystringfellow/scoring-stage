@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"regexp"
@@ -32,17 +33,23 @@ type Error struct{ msg string }
 func (e *Error) Error() string { return e.msg }
 
 func Run(args ...string) error {
-	_, err := run(false, args)
+	_, err := run(false, os.Stdin, args)
 	return err
 }
 
 func Output(args ...string) (string, error) {
-	return run(true, args)
+	return run(true, os.Stdin, args)
 }
 
-func run(capture bool, args []string) (string, error) {
+// Feed runs sbx with stdin from input and its output captured.
+func Feed(input io.Reader, args ...string) error {
+	_, err := run(true, input, args)
+	return err
+}
+
+func run(capture bool, stdin io.Reader, args []string) (string, error) {
 	command := exec.Command("sbx", args...)
-	command.Stdin = os.Stdin
+	command.Stdin = stdin
 	var stdout, stderr bytes.Buffer
 	if capture {
 		command.Stdout, command.Stderr = &stdout, &stderr

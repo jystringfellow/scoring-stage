@@ -23,22 +23,27 @@ func pack(t *testing.T, dir, name, body string) string {
 	return filepath.Join(dir, name)
 }
 
-func load(t *testing.T, home string, packs ...string) *Settings {
+func load(t *testing.T, home string) *Settings {
 	t.Helper()
-	settings, err := LoadSettings(home, packs)
+	settings, err := LoadSettings(home)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return settings
 }
 
-func compose(t *testing.T, settings *Settings, names ...string) *Composition {
+func composeWith(t *testing.T, settings *Settings, selection Selection) *Composition {
 	t.Helper()
-	composition, err := Compose(settings, names, "")
+	composition, err := Compose(settings, selection)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return composition
+}
+
+func withPacks(t *testing.T, home string, packs ...string) (*Settings, Selection) {
+	t.Helper()
+	return load(t, home), Selection{Packs: packs}
 }
 
 func sources(kits []Kit) []string {
@@ -68,28 +73,58 @@ func expectError(t *testing.T, err error, fragment string) {
 	}
 }
 
-func TestDefaultsComposeTheShellBaseAgentsAndTheCoreKit(t *testing.T) {
+func TestWithoutChoicesABoxGetsTheShellBaseTheCoreKitAndOnlyTheGitHubBinding(t *testing.T) {
 	settings := load(t, filepath.Join(t.TempDir(), "home"))
-	composition := compose(t, settings, "api")
+	composition := composeWith(t, settings, Selection{RepoNames: []string{"api"}})
 	if !composition.Base.Equal(Kit{Source: DefaultBase}) {
 		t.Errorf("base = %v", composition.Base)
 	}
-	want := append(append([]string{}, DefaultAgents...), filepath.Join(settings.CoreKits(), "stage"))
-	if got := sources(composition.Kits); !reflect.DeepEqual(got, want) {
-		t.Errorf("kits = %v, want %v", got, want)
+	if got := sources(composition.Kits); !reflect.DeepEqual(got, []string{filepath.Join(settings.CoreKits(), "stage")}) {
+		t.Errorf("kits = %v", got)
 	}
-	if len(composition.AWSProfiles) != 0 || len(composition.Secrets) != 0 {
-		t.Errorf("profiles %v secrets %v", composition.AWSProfiles, composition.Secrets)
+	if len(composition.Agents) != 0 || len(composition.AWSProfiles) != 0 || len(composition.Secrets) != 0 {
+		t.Errorf("agents %v profiles %v secrets %v", composition.Agents, composition.AWSProfiles, composition.Secrets)
 	}
-	if got := sortedKeys(composition.Bindings); !reflect.DeepEqual(got, []string{"anthropic", "copilot", "github", "openai"}) {
+	if got := sortedKeys(composition.Bindings); !reflect.DeepEqual(got, []string{"github"}) {
 		t.Errorf("bindings = %v", got)
 	}
+}
+
+func TestEachChosenAgentBringsItsMixinAndOnlyItsBindings(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "agents = [\"claude\", \"agy\"]\n")
+	composition := composeWith(t, load(t, home), Selection{Agents: []string{"codex", "claude"}, Gh: "/usr/bin/gh"})
+	want := []string{"docker.io/sbx/claude-mixin:2.1.319", "docker.io/sbx/antigravity-mixin:1.0.0", "docker.io/sbx/codex-mixin:0.167.0"}
+	if got := sources(composition.Kits)[:3]; !reflect.DeepEqual(got, want) {
+		t.Errorf("kits = %v", got)
+	}
+	if !reflect.DeepEqual(composition.Agents, []string{"claude", "agy", "codex"}) {
+		t.Errorf("agents = %v", composition.Agents)
+	}
+	if got := sortedKeys(composition.Bindings); !reflect.DeepEqual(got, []string{"anthropic", "github", "openai"}) {
+		t.Errorf("bindings = %v", got)
+	}
+	if _, set := composition.Secrets["copilot"]; set {
+		t.Error("copilot secret without the copilot agent")
+	}
+}
+
+func TestAPinnedMixinReferenceKeepsTheAgentsBindings(t *testing.T) {
+	composition := composeWith(t, load(t, filepath.Join(t.TempDir(), "home")), Selection{Agents: []string{"docker.io/sbx/copilot-mixin:9.9.9"}, Gh: "/usr/bin/gh"})
+	if !reflect.DeepEqual(composition.Agents, []string{"copilot"}) || composition.Bindings["copilot"] == nil || composition.Secrets["copilot"] == nil {
+		t.Fatalf("agents %v bindings %v secrets %v", composition.Agents, composition.Bindings, composition.Secrets)
+	}
+}
+
+func TestUnknownAgentNamesAreErrors(t *testing.T) {
+	_, err := Compose(load(t, filepath.Join(t.TempDir(), "home")), Selection{Agents: []string{"gemeni"}})
+	expectError(t, err, "unknown agent gemeni (known: agy, claude, codex, copilot")
 }
 
 func TestCopilotSecretComesFromGhAndGitHubFromTheReadOnlyToken(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
 	token := testutil.WriteFile(t, filepath.Join(home, "secrets", "github-readonly-token"), "ghp_readonly")
-	composition, err := Compose(load(t, home), nil, "/opt/homebrew/bin/gh")
+	composition, err := Compose(load(t, home), Selection{Agents: []string{"copilot"}, Gh: "/opt/homebrew/bin/gh"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +139,7 @@ func TestCopilotSecretComesFromGhAndGitHubFromTheReadOnlyToken(t *testing.T) {
 func TestAnEmptyReadOnlyTokenFileIsIgnored(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
 	testutil.WriteFile(t, filepath.Join(home, "secrets", "github-readonly-token"), "")
-	if _, set := compose(t, load(t, home)).Secrets["github"]; set {
+	if _, set := composeWith(t, load(t, home), Selection{}).Secrets["github"]; set {
 		t.Fatal("github secret set from an empty token file")
 	}
 }
@@ -116,9 +151,9 @@ func TestAWSProfilesAddTheBrokerKitAndBinding(t *testing.T) {
 		profiles = ["dev", "staging"]
 		region = "us-west-2"
 	`)
-	settings := load(t, filepath.Join(dir, "home"), path)
-	composition := compose(t, settings)
-	brokerKit := composition.Kits[len(DefaultAgents)+1]
+	settings, selection := withPacks(t, filepath.Join(dir, "home"), path)
+	composition := composeWith(t, settings, selection)
+	brokerKit := composition.Kits[1]
 	want := Kit{Source: filepath.Join(settings.CoreKits(), "aws-broker"), Args: map[string]any{"profiles": "dev staging", "region": "us-west-2"}}
 	if !brokerKit.Equal(want) {
 		t.Errorf("broker kit = %v", brokerKit)
@@ -138,9 +173,11 @@ func TestPackKitsResolveAgainstThePackAndRepoKitsApplyOnlyToMatchingRepos(t *tes
 		kits = [{ source = "./kits/api-rules", args = { tier = "dev" } }]
 		aws = { profiles = ["api-dev"] }
 	`)
-	settings := load(t, filepath.Join(dir, "home"), path)
-	matched := compose(t, settings, "Acme.Api", "acme/api")
-	unmatched := compose(t, settings, "web", "acme/web")
+	settings, selection := withPacks(t, filepath.Join(dir, "home"), path)
+	selection.RepoNames = []string{"Acme.Api", "acme/api"}
+	matched := composeWith(t, settings, selection)
+	selection.RepoNames = []string{"web", "acme/web"}
+	unmatched := composeWith(t, settings, selection)
 	packDir := Resolve(path)
 	toolchain := Kit{Source: filepath.Join(packDir, "kits/toolchain")}
 	mise := Kit{Source: "docker.io/sbx/mise:1.0.0"}
@@ -161,9 +198,10 @@ func TestRepoMatchIsCaseSensitiveGlob(t *testing.T) {
 		match = "Acme.*"
 		kits = ["./kits/x"]
 	`)
-	settings := load(t, filepath.Join(dir, "home"), path)
+	settings, selection := withPacks(t, filepath.Join(dir, "home"), path)
 	last := func(names ...string) string {
-		kits := compose(t, settings, names...).Kits
+		selection.RepoNames = names
+		kits := composeWith(t, settings, selection).Kits
 		return kits[len(kits)-1].Source
 	}
 	if !strings.HasSuffix(last("Acme.Clients"), "kits/x") {
@@ -204,7 +242,8 @@ func TestPackSecretCommandsCanNameThePackDirectory(t *testing.T) {
 		[bindings.ado]
 		apiKey = { domains = ["pkgs.dev.azure.com"] }
 	`)
-	composition := compose(t, load(t, filepath.Join(dir, "home"), path))
+	settings, selection := withPacks(t, filepath.Join(dir, "home"), path)
+	composition := composeWith(t, settings, selection)
 	want := map[string]any{"command": "python3 -I '" + Resolve(path) + "'/host/ado.py"}
 	if got := composition.Secrets["ado"]; !reflect.DeepEqual(got, want) {
 		t.Errorf("secret = %v, want %v", got, want)
@@ -220,9 +259,9 @@ func TestTwoPacksDisagreeingIsAnErrorRatherThanASilentWinner(t *testing.T) {
 	first := pack(t, dir, "one", "base = \"docker.io/org/base:1\"\n[aws]\nregion = \"us-west-2\"\n")
 	second := pack(t, dir, "two", "base = \"docker.io/org/base:2\"\n")
 	third := pack(t, dir, "three", "[aws]\nregion = \"eu-west-1\"\n")
-	_, err := Compose(load(t, home, first, second), nil, "")
+	_, err := Compose(load(t, home), Selection{Packs: []string{first, second}})
 	expectError(t, err, "pack two sets base docker.io/org/base:2, but pack one set")
-	_, err = Compose(load(t, home, first, third), nil, "")
+	_, err = Compose(load(t, home), Selection{Packs: []string{first, third}})
 	expectError(t, err, "AWS region eu-west-1")
 }
 
@@ -232,17 +271,17 @@ func TestPacksAgreeingOnASecretIsFineButDifferingIsAnError(t *testing.T) {
 	first := pack(t, dir, "one", "[secrets.ado]\ncommand = \"a\"\n")
 	same := pack(t, dir, "same", "[secrets.ado]\ncommand = \"a\"\n")
 	other := pack(t, dir, "other", "[secrets.ado]\ncommand = \"b\"\n")
-	if got := compose(t, load(t, home, first, same)).Secrets["ado"]; !reflect.DeepEqual(got, map[string]any{"command": "a"}) {
+	if got := composeWith(t, load(t, home), Selection{Packs: []string{first, same}}).Secrets["ado"]; !reflect.DeepEqual(got, map[string]any{"command": "a"}) {
 		t.Errorf("secret = %v", got)
 	}
-	_, err := Compose(load(t, home, first, other), nil, "")
+	_, err := Compose(load(t, home), Selection{Packs: []string{first, other}})
 	expectError(t, err, "pack other sets secret ado differently from pack one")
 }
 
 func TestUserConfigOverridesPacksAndListsPacks(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
-	path := pack(t, dir, "org", "base = \"docker.io/org/base:1\"\n[aws]\nprofiles = [\"dev\"]\nregion = \"us-west-2\"\n")
+	path := pack(t, dir, "org", "base = \"docker.io/org/base:1\"\n[aws]\nprofiles = [\"dev\"]\nregion = \"us-west-2\"\n[[repos]]\nmatch = \"api\"\n")
 	testutil.WriteFile(t, filepath.Join(home, "config.toml"), dedent(`
 		packs = ["`+path+`"]
 		base = "docker.io/me/base:9"
@@ -260,7 +299,10 @@ func TestUserConfigOverridesPacksAndListsPacks(t *testing.T) {
 		pr_footer = "[Robots on behalf of Someone]"
 	`))
 	settings := load(t, home)
-	composition := compose(t, settings)
+	if inactive := composeWith(t, settings, Selection{RepoNames: []string{"web"}}); len(inactive.Packs) != 0 {
+		t.Errorf("an installed pack applied without being asked for: %v", inactive.Packs)
+	}
+	composition := composeWith(t, settings, Selection{RepoNames: []string{"api"}})
 	if !reflect.DeepEqual(composition.Packs, []string{"org"}) {
 		t.Errorf("packs = %v", composition.Packs)
 	}
@@ -284,15 +326,6 @@ func TestUserConfigOverridesPacksAndListsPacks(t *testing.T) {
 	}
 }
 
-func TestAnEmptyAgentsListMeansNoAgentKits(t *testing.T) {
-	home := filepath.Join(t.TempDir(), "home")
-	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "agents = []\n")
-	settings := load(t, home)
-	if got := sources(compose(t, settings).Kits); !reflect.DeepEqual(got, []string{filepath.Join(settings.CoreKits(), "stage")}) {
-		t.Fatalf("kits = %v", got)
-	}
-}
-
 func TestPacksAreDecodedStrictly(t *testing.T) {
 	for _, c := range []struct{ body, message string }{
 		{"kitz = [\"x\"]\n", "unknown keys kitz"},
@@ -307,9 +340,9 @@ func TestPacksAreDecodedStrictly(t *testing.T) {
 	} {
 		dir := t.TempDir()
 		path := pack(t, dir, "org", c.body)
-		settings, err := LoadSettings(filepath.Join(dir, "home"), []string{path})
+		settings, err := LoadSettings(filepath.Join(dir, "home"))
 		if err == nil {
-			_, err = Compose(settings, []string{"x"}, "")
+			_, err = Compose(settings, Selection{RepoNames: []string{"x"}, Packs: []string{path}})
 		}
 		expectError(t, err, c.message)
 	}
@@ -319,20 +352,20 @@ func TestAPackNeedsAManifestAndAName(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
 	testutil.WriteFile(t, filepath.Join(dir, "empty", ".keep"), "")
-	_, err := LoadSettings(home, []string{filepath.Join(dir, "empty")})
+	_, err := Compose(load(t, home), Selection{Packs: []string{filepath.Join(dir, "empty")}})
 	expectError(t, err, "no pack.toml")
 	testutil.WriteFile(t, filepath.Join(dir, "nameless", "pack.toml"), "kits = []\n")
-	_, err = LoadSettings(home, []string{filepath.Join(dir, "nameless")})
+	_, err = Compose(load(t, home), Selection{Packs: []string{filepath.Join(dir, "nameless")}})
 	expectError(t, err, "name is required")
 }
 
 func TestUserConfigIsDecodedStrictly(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
 	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "pack = []\n")
-	_, err := LoadSettings(home, nil)
+	_, err := LoadSettings(home)
 	expectError(t, err, "unknown keys pack")
 	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "[ship]\nfooter = \"x\"\n")
-	_, err = LoadSettings(home, nil)
+	_, err = LoadSettings(home)
 	expectError(t, err, "config.toml [ship]: unknown keys footer")
 }
 
@@ -361,4 +394,120 @@ func TestStageHomeDefaultsUnderTheUserHomeAndHonoursStageHome(t *testing.T) {
 	if got := StageHome(); got != filepath.Join(Resolve(user), "elsewhere") {
 		t.Errorf("override = %s", got)
 	}
+}
+
+func installedPack(t *testing.T, dir, name, body string) (home string) {
+	t.Helper()
+	path := pack(t, dir, name, body)
+	home = filepath.Join(dir, "home")
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), `packs = ["`+path+`"]`+"\n")
+	return home
+}
+
+func TestInstalledPacksApplyOnlyWhenNamedOrMatched(t *testing.T) {
+	dir := t.TempDir()
+	home := installedPack(t, dir, "dotnet", "agents = [\"claude\"]\nkits = [\"docker.io/org/dotnet:1\"]\n")
+	settings := load(t, home)
+	if got := composeWith(t, settings, Selection{}); len(got.Packs) != 0 || len(got.Agents) != 0 {
+		t.Fatalf("unrequested pack applied: %v %v", got.Packs, got.Agents)
+	}
+	named := composeWith(t, settings, Selection{Packs: []string{"dotnet"}})
+	if !reflect.DeepEqual(named.Packs, []string{"dotnet"}) || !reflect.DeepEqual(named.Agents, []string{"claude"}) {
+		t.Fatalf("named pack: %v %v", named.Packs, named.Agents)
+	}
+	_, err := Compose(settings, Selection{Packs: []string{"java"}})
+	expectError(t, err, "--pack java: no installed pack has that name (installed: dotnet)")
+}
+
+func TestARepositoryNamesInstalledPacksAndAddsAgentsAndKits(t *testing.T) {
+	dir := t.TempDir()
+	home := installedPack(t, dir, "dotnet", "kits = [\"docker.io/org/dotnet:1\"]\n")
+	repoDir := filepath.Join(dir, "repo")
+	testutil.WriteFile(t, filepath.Join(repoDir, RepoConfigPath), "agents = [\"codex\"]\npacks = [\"dotnet\"]\nkits = [\"./tools/kit\"]\n")
+	repo, err := LoadRepoConfig(repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := load(t, home)
+	composition := composeWith(t, settings, Selection{Repo: repo})
+	want := []string{"docker.io/sbx/codex-mixin:0.167.0", filepath.Join(settings.CoreKits(), "stage"), "docker.io/org/dotnet:1", Resolve(filepath.Join(repoDir, "tools/kit"))}
+	if got := sources(composition.Kits); !reflect.DeepEqual(got, want) {
+		t.Fatalf("kits = %v\nwant %v", got, want)
+	}
+}
+
+func TestARepositoryCannotUseAPackThatIsNotInstalled(t *testing.T) {
+	dir := t.TempDir()
+	repoDir := filepath.Join(dir, "repo")
+	testutil.WriteFile(t, filepath.Join(repoDir, RepoConfigPath), "packs = [\"dotnet\"]\n")
+	repo, err := LoadRepoConfig(repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Compose(load(t, filepath.Join(dir, "home")), Selection{Repo: repo})
+	expectError(t, err, "asks for pack dotnet, which is not installed (installed: none)")
+}
+
+func TestARepositoryCannotActOnTheHost(t *testing.T) {
+	for body, message := range map[string]string{
+		"[secrets.x]\ncommand = \"curl evil\"\n":         "a repository cannot set secrets",
+		"[bindings.x]\napiKey = { domains = [\"x\"] }\n": "a repository cannot set bindings",
+		"[aws]\nprofiles = [\"prod\"]\n":                 "a repository cannot set aws",
+		"packs = [\"../evil\"]\n":                        "packs are named, not located",
+		"agentz = []\n":                                  "unknown keys agentz",
+	} {
+		repoDir := t.TempDir()
+		testutil.WriteFile(t, filepath.Join(repoDir, RepoConfigPath), body)
+		_, err := LoadRepoConfig(repoDir)
+		expectError(t, err, message)
+	}
+}
+
+func TestARepositoryWithoutConfigAsksForNothing(t *testing.T) {
+	if repo, err := LoadRepoConfig(t.TempDir()); repo != nil || err != nil {
+		t.Fatalf("got %v, %v", repo, err)
+	}
+}
+
+func TestSaveAgentsPrependsToTheUserConfig(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "[ship]\npr_footer = \"x\"\n")
+	if err := SaveAgents(home, []string{"claude", "agy"}); err != nil {
+		t.Fatal(err)
+	}
+	settings := load(t, home)
+	if got := settings.AgentEntries(); !reflect.DeepEqual(got, []string{"claude", "agy"}) || settings.PRFooter() != "x" {
+		t.Fatalf("agents %v footer %q", got, settings.PRFooter())
+	}
+	expectError(t, SaveAgents(home, []string{"codex"}), "already sets agents")
+	expectError(t, SaveAgents(t.TempDir(), []string{"cursor"}), "unknown agent cursor")
+}
+
+func TestTwoInstalledPacksCannotShareAName(t *testing.T) {
+	dir := t.TempDir()
+	first, second := pack(t, filepath.Join(dir, "a"), "org", ""), pack(t, filepath.Join(dir, "b"), "org", "")
+	home := filepath.Join(dir, "home")
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), `packs = ["`+first+`", "`+second+`"]`+"\n")
+	_, err := LoadSettings(home)
+	expectError(t, err, "are both named org")
+}
+
+func TestOnlyAgentsWithAnInSandboxLoginCanBeCopied(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "copy_logins = [\"agy\"]\n")
+	settings := load(t, home)
+	if !settings.CopiesLogin("agy") || settings.CopiesLogin("claude") {
+		t.Fatal("copy_logins not honoured")
+	}
+	if got := settings.SavedLogin("agy"); got != filepath.Join(home, "logins", "agy", "antigravity-oauth-token") {
+		t.Errorf("saved login path %s", got)
+	}
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "copy_logins = [\"claude\"]\n")
+	_, err := LoadSettings(home)
+	expectError(t, err, "copy_logins: claude cannot be copied (copyable: agy)")
+
+	repoDir := t.TempDir()
+	testutil.WriteFile(t, filepath.Join(repoDir, RepoConfigPath), "copy_logins = [\"agy\"]\n")
+	_, err = LoadRepoConfig(repoDir)
+	expectError(t, err, "a repository cannot set copy_logins")
 }

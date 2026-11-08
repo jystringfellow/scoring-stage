@@ -1,6 +1,6 @@
 # scoring-stage
 
-`stage` runs coding agents (Claude Code, Codex, Copilot CLI, and anything else packaged as a kit) in
+`stage` runs coding agents (Claude Code, Codex, Copilot CLI, Antigravity, and anything else packaged as a kit) in
 [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) microVMs with every permission prompt off. The sandbox is
 the boundary:
 
@@ -33,13 +33,15 @@ and extracted to `~/.scoring-stage/kits/<content hash>/` the first time `stage u
 ## Use
 
 ```
-stage setup                          # check sbx, the global policy, credentials and packs
+stage setup --agent claude --agent codex  # save the agents you use; check sbx, the policy and credentials
 stage up ~/Code/api fix-login        # sandbox stage-fix-login on a scratch clone of ~/Code/api
+stage up ~/Code/api fix-login --agent agy --pack dotnet  # add an agent or an installed pack for one box
 stage up ~/Code/api fix-login --plan # write the env file and show sbx's plan without creating
 stage shell fix-login                # login shell in the repository; run claude, codex or copilot
 stage exec fix-login -- git log -1
 stage ship fix-login [--pr]          # push the sandbox's HEAD to agent/fix-login/<sha> from the host
 stage list
+stage login fix-login                # save the sandbox's agy login for future sandboxes (copy_logins)
 stage down fix-login                 # remove the sandbox, its scoped secrets and the scratch clone
 stage broker start|stop|status       # the AWS broker (up starts it when a sandbox needs it)
 stage broker serve                   # run the broker in the foreground
@@ -61,31 +63,69 @@ clone, so ship anything you want to keep first.
    token (Contents, Metadata and Pull requests: read) and save it as
    `~/.scoring-stage/secrets/github-readonly-token` (mode 600). Pushes are refused at the proxy either way, but only
    a read-only token stops API writes such as comments or merges.
-3. **Agent logins.** Copilot uses a per-sandbox secret from `gh auth token`. Codex can log in on the host with
-   `sbx secret set openai --oauth`. Claude Code logs in from inside the sandbox; the proxy keeps the real token on
-   the host.
+3. **Agent logins.** See [Agent logins](#agent-logins).
 
-## What every sandbox gets
+## What a sandbox gets
+
+Nothing you did not choose. Every sandbox gets:
 
 | Kit | Purpose |
 | --- | --- |
 | `docker.io/sbx/shell` | Debian base with git, gh, curl, jq, Python and Docker |
-| `docker.io/sbx/claude-mixin`, `codex-mixin`, `copilot-mixin` | The agents, with their own egress and credentials |
 | [`kits/stage`](kits/stage/stage.yaml) | Refuses `POST /**/git-receive-pack` on every host, sets your git identity, tells the agent the rules |
 | [`kits/aws-broker`](kits/aws-broker/aws-broker.yaml) | Only when AWS profiles are configured: `~/.aws/config` with a `credential_process` per profile |
 
-Credential bindings for `github`, `copilot`, `anthropic` (OAuth), `openai` (OAuth) and, with AWS, `stage-broker`
-are written to sbx's `~/.config/sbx/credentials.yaml`. A binding approves a service's credential on named domains,
-capped by what the kits declare. Bindings are shared by every sandbox, so `stage down` leaves them in place.
+plus the agents chosen by your config, the repository, a pack or `--agent`. Agents are Docker's published mixins,
+each with its own egress and credentials:
+
+| Name | Kit | Credential binding |
+| --- | --- | --- |
+| `claude` | `docker.io/sbx/claude-mixin` | `anthropic` (OAuth) |
+| `codex` | `docker.io/sbx/codex-mixin` | `openai` (OAuth) |
+| `copilot` | `docker.io/sbx/copilot-mixin` | `copilot`, from `gh auth token` |
+| `agy` | `docker.io/sbx/antigravity-mixin` | none; see [Agent logins](#agent-logins) |
+
+A kit reference works wherever a name does, for another agent or another version of one of these.
+
+The `github` binding, an agent's bindings and, with AWS, `stage-broker` are written to sbx's
+`~/.config/sbx/credentials.yaml`. A binding approves a service's credential on named domains, capped by what the
+kits declare. Bindings are shared by every sandbox, so `stage down` leaves them in place.
+
+## Agent logins
+
+| Agent | Sign-in | Where the token lives |
+| --- | --- | --- |
+| `copilot` | Nothing to do: a per-sandbox secret runs `gh auth token` | Host |
+| `codex` | `sbx secret set openai --oauth` on the host | Host; the proxy holds it |
+| `claude` | Run `claude` in the sandbox and choose a login method | Host; the proxy holds it |
+| `agy` | Run `agy` in the sandbox and complete Google's sign-in | **Inside the sandbox** |
+
+Docker's Antigravity kit has no proxy-managed Google sign-in, so agy's token is a file in the sandbox
+(`~/.gemini/antigravity-cli/antigravity-oauth-token`) that the agent can read. Choose one of:
+
+- **Sign in per sandbox** (the default). The token exists only in that sandbox and goes away with `stage down`;
+  each new sandbox needs a new sign-in.
+- **Copy one sign-in into every sandbox.** Add `copy_logins = ["agy"]` to `~/.scoring-stage/config.toml`, sign in
+  once in `stage shell`, then run `stage login <slug>`. stage keeps the token in
+  `~/.scoring-stage/logins/agy/` (mode 600), copies it into each new sandbox that has agy, and saves it again on
+  `stage down` so a refreshed token is kept. Every sandbox with agy then holds a live copy of your Google sign-in.
+
+The kit also has a Gemini API-key mode that would keep a key on the host: a `google` secret plus
+`[bindings.google]` with `apiKey = { domains = ["generativelanguage.googleapis.com"] }` in your config. It uses the
+Gemini API and the key's project billing rather than your Google account's Antigravity access, and has not been
+tested with stage.
 
 ## Configuration and packs
+
+Configuration has two levels, like kapellmeister's: yours in `~/.scoring-stage/config.toml`, and a repository's
+in its `.scoring-stage/config.toml`.
 
 `~/.scoring-stage/config.toml` (all keys optional):
 
 ```toml
-packs = ["~/Code/my-org-packs/backend"]
+agents = ["claude", "codex"]                       # the agents you use; names or kit references
+packs = ["~/Code/my-org-packs/backend"]            # installed packs; each applies only when asked for
 base = "docker.io/sbx/shell:1.1.0"                 # the workload kit
-agents = ["docker.io/sbx/claude-mixin:2.1.319"]    # replaces the default agent list
 kits = ["./kits/personal"]                         # extra kits, relative to ~/.scoring-stage
 
 [aws]
@@ -106,6 +146,7 @@ A pack is a directory with a `pack.toml`:
 
 ```toml
 name = "backend"
+agents = ["claude"]                                       # agents this pack's work needs
 kits = ["./kits/toolchain", "docker.io/sbx/mise:1.0.0"]   # local kits start with ./ or ../
 
 [aws]
@@ -124,8 +165,24 @@ kits = ["./kits/api-rules"]
 aws = { profiles = ["api-dev"] }
 ```
 
-Packs and the user config are decoded strictly: an unknown key is an error. Two packs that set the same base,
-region, secret or binding differently are an error rather than a silent winner. The user config overrides packs.
+An installed pack applies to a sandbox when the repository's config names it, when `--pack` names it, or when one
+of its `[[repos]]` entries matches the repository; the `[[repos]]` rules are for repositories you cannot add a
+config to. `--pack ./dir` also uses a pack that is not installed.
+
+A repository's `.scoring-stage/config.toml`, read from the branch the sandbox starts from:
+
+```toml
+agents = ["claude", "codex"]     # for example, the agents its .kapellmeister ensembles seat
+packs = ["backend"]              # installed packs, by name
+kits = ["./.scoring-stage/kits/rules"]
+```
+
+A repository is not trusted with anything that acts on the host. It can add agents, kits and installed packs, but
+it cannot set secrets, bindings, AWS profiles or the base, and it names packs rather than pointing at them: a pack
+it asks for that you have not installed is an error.
+
+Packs and both configs are decoded strictly: an unknown key is an error. Two packs that set the same base,
+region, secret or binding differently are an error rather than a silent winner. Your config overrides packs.
 
 A kit that a pack adds for its own service declares a `credential@1` entry for that service; the pack's `secrets`
 entry supplies the value for each sandbox, and its `bindings` entry approves it.
