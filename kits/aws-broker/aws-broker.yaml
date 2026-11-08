@@ -1,0 +1,62 @@
+# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+displayName: AWS credentials from the scoring-stage broker
+description: >-
+  AWS profiles whose credential_process asks the scoring-stage broker on the
+  host for short-lived credentials. The sandbox never holds the broker token:
+  the proxy adds it to requests for the broker, and the broker serves only the
+  profiles the host granted this sandbox.
+
+args:
+  profiles:
+    required: true
+    pattern: '^[A-Za-z0-9_.-]+( [A-Za-z0-9_.-]+)*$'
+    description: Space-separated AWS profile names to write to ~/.aws/config
+    env: STAGE_AWS_PROFILES
+  region:
+    default: us-east-1
+    pattern: '^[a-z0-9-]+$'
+    description: Region written for every profile
+    env: STAGE_AWS_REGION
+
+capabilities:
+  - type: com.docker.sandbox/network-policy@2
+    config:
+      runtime:
+        allow:
+          - localhost
+          - localhost:9911
+
+  - type: com.docker.sandbox/credential@1
+    description: Per-sandbox broker token, added to broker requests by the proxy
+    config:
+      service: stage-broker
+      phase: runtime
+      apiKey:
+        inject:
+          - {domain: localhost, header: Authorization, format: "Bearer %s"}
+
+  - type: com.docker.sandbox/lifecycle@1
+    config:
+      files:
+        - path: /home/agent/.local/bin/stage-aws-credentials
+          mode: "0755"
+          description: credential_process helper that asks the host broker
+          content: |
+            #!/bin/sh
+            set -eu
+            exec curl -sS --fail-with-body --max-time 30 "http://host.docker.internal:9911/credential-process/$1"
+      install:
+        - command: |
+            set -eu
+            mkdir -p "$HOME/.aws"
+            config="$HOME/.aws/config"
+            : > "$config"
+            for profile in $STAGE_AWS_PROFILES; do
+              printf '[profile %s]\nregion = %s\ncredential_process = /home/agent/.local/bin/stage-aws-credentials %s\n\n' \
+                "$profile" "$STAGE_AWS_REGION" "$profile" >> "$config"
+            done
+          user: agent
+          env: [STAGE_AWS_PROFILES, STAGE_AWS_REGION]
+          description: Write ~/.aws/config with a broker-backed profile per granted profile

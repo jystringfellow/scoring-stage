@@ -1,0 +1,656 @@
+package cli
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"golang.org/x/term"
+
+	"github.com/jystringfellow/scoring-stage/internal/broker"
+	"github.com/jystringfellow/scoring-stage/internal/config"
+	"github.com/jystringfellow/scoring-stage/internal/envfile"
+	"github.com/jystringfellow/scoring-stage/internal/kits"
+	"github.com/jystringfellow/scoring-stage/internal/sbx"
+	"github.com/jystringfellow/scoring-stage/internal/source"
+)
+
+const sandboxPrefix = "stage-"
+
+var slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,40}$`)
+
+type Error struct{ msg string }
+
+func (e *Error) Error() string { return e.msg }
+
+func errorf(format string, args ...any) error { return &Error{fmt.Sprintf(format, args...)} }
+
+type exitCode int
+
+func (e exitCode) Error() string { return "exit status " + strconv.Itoa(int(e)) }
+
+type App struct {
+	Stdout, Stderr io.Writer
+	FindGh         func() string
+	BrokerPID      func(home string) int
+	BrokerStart    func(home string) error
+	IsTerminal     func() bool
+}
+
+func New() *App {
+	app := &App{Stdout: os.Stdout, Stderr: os.Stderr, FindGh: config.FindGh, BrokerPID: brokerPID}
+	app.BrokerStart = app.brokerStart
+	app.IsTerminal = func() bool {
+		return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+	}
+	return app
+}
+
+type Task struct {
+	Slug       string `json:"slug"`
+	Sandbox    string `json:"sandbox"`
+	RepoDir    string `json:"repo_dir"`
+	GitHubRepo string `json:"github_repo"`
+	SourceRepo string `json:"source_repo"`
+}
+
+const usage = `usage: stage <command> [options]
+
+Run coding agents in Docker Sandboxes with host-held credentials.
+
+commands:
+  setup [--yes]                     check sbx, the global policy, credentials and packs
+  broker start|stop|status|serve    manage the host AWS credential broker
+  up <repo> <slug> [options]        create a sandbox for a repository
+  shell <slug>                      open a login shell in the repository
+  exec <slug> -- <command> [args]   run a command in the repository
+  ship <slug> [--ref R] [--branch B] [--pr]
+                                    push the sandbox's commit to agent/<slug>/<sha> from the host
+  list                              list scoring-stage sandboxes
+  down <slug>                       remove the sandbox, its secrets and the scratch clone
+`
+
+func (a *App) Main(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprint(a.Stderr, usage)
+		fmt.Fprintln(a.Stderr, "stage: error: the following arguments are required: command")
+		return 2
+	}
+	commands := map[string]func([]string, string) (int, error){
+		"setup": a.cmdSetup, "broker": a.cmdBroker, "up": a.cmdUp, "shell": a.cmdShell,
+		"exec": a.cmdExec, "ship": a.cmdShip, "list": a.cmdList, "down": a.cmdDown,
+	}
+	name := args[0]
+	if name == "-h" || name == "--help" || name == "help" {
+		fmt.Fprint(a.Stdout, usage)
+		return 0
+	}
+	command, ok := commands[name]
+	if !ok {
+		fmt.Fprint(a.Stderr, usage)
+		fmt.Fprintf(a.Stderr, "stage: error: invalid command %q\n", name)
+		return 2
+	}
+	code, err := command(args[1:], config.StageHome())
+	var usageErr *usageError
+	var exit exitCode
+	switch {
+	case err == nil:
+		return code
+	case isHelp(err):
+		return 0
+	case errors.As(err, &usageErr):
+		fmt.Fprintf(a.Stderr, "stage %s: error: %s\n", name, usageErr.msg)
+		return 2
+	case errors.As(err, &exit):
+		return int(exit)
+	default:
+		fmt.Fprintf(a.Stderr, "stage: %s\n", err)
+		return 1
+	}
+}
+
+func (a *App) say(format string, args ...any) {
+	fmt.Fprintf(a.Stdout, "stage: "+format+"\n", args...)
+}
+
+func (a *App) warn(format string, args ...any) {
+	fmt.Fprintf(a.Stderr, "stage: WARNING: "+format+"\n", args...)
+}
+
+func sandboxOf(slug string) string { return sandboxPrefix + slug }
+
+func checkSlug(slug string) (string, error) {
+	if !slugPattern.MatchString(slug) {
+		return "", errorf("slug must be lowercase letters, digits and dashes (at most 41): %s", slug)
+	}
+	return slug, nil
+}
+
+func taskDir(home, slug string) string { return filepath.Join(home, "tasks", slug) }
+
+func grantsDir(home string) string { return filepath.Join(home, "broker", "grants") }
+
+func loadTask(home, slug string) (*Task, error) {
+	if _, err := checkSlug(slug); err != nil {
+		return nil, err
+	}
+	content, err := os.ReadFile(filepath.Join(taskDir(home, slug), "task.json"))
+	if err != nil {
+		return nil, errorf("no task %s; run stage up first", slug)
+	}
+	var task Task
+	if err := json.Unmarshal(content, &task); err != nil {
+		return nil, errorf("task %s is unreadable: %v", slug, err)
+	}
+	return &task, nil
+}
+
+func brokerAnswers() bool {
+	connection, err := net.DialTimeout("tcp", broker.Address, time.Second)
+	if err != nil {
+		return false
+	}
+	connection.Close()
+	return true
+}
+
+func brokerPID(home string) int {
+	content, err := os.ReadFile(filepath.Join(home, "broker", "broker.pid"))
+	if err != nil {
+		return 0
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(content)))
+	if err != nil || pid <= 0 {
+		return 0
+	}
+	if syscall.Kill(pid, 0) != nil {
+		return 0
+	}
+	return pid
+}
+
+func (a *App) brokerStart(home string) error {
+	if pid := a.BrokerPID(home); pid != 0 {
+		a.say("broker already running (pid %d)", pid)
+		return nil
+	}
+	if brokerAnswers() {
+		return errorf("%s is in use by another process", broker.Address)
+	}
+	if _, err := exec.LookPath("aws"); err != nil {
+		return errorf("the aws cli is not on PATH; the broker needs it")
+	}
+	state := filepath.Join(home, "broker")
+	if err := os.MkdirAll(grantsDir(home), 0o700); err != nil {
+		return err
+	}
+	if err := os.Chmod(state, 0o700); err != nil {
+		return err
+	}
+	logPath := filepath.Join(state, "broker.log")
+	log, err := os.OpenFile(logPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	defer log.Close()
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	process := exec.Command(self, "broker", "serve")
+	process.Env = append(os.Environ(), "STAGE_HOME="+home)
+	process.Stdout, process.Stderr = log, log
+	process.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := process.Start(); err != nil {
+		return err
+	}
+	pid := process.Process.Pid
+	process.Process.Release()
+	if err := os.WriteFile(filepath.Join(state, "broker.pid"), []byte(strconv.Itoa(pid)), 0o600); err != nil {
+		return err
+	}
+	for range 20 {
+		if brokerAnswers() {
+			a.say("broker started (pid %d, log %s)", pid, logPath)
+			return nil
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return errorf("broker did not start; see %s", logPath)
+}
+
+func (a *App) cmdBroker(args []string, home string) (int, error) {
+	fs := a.newFlags("broker", "start|stop|status|serve")
+	positional, err := fs.parse(args, "action")
+	if err != nil {
+		return 0, err
+	}
+	switch positional[0] {
+	case "start":
+		return 0, a.BrokerStart(home)
+	case "stop":
+		if pid := a.BrokerPID(home); pid != 0 {
+			if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+				return 0, err
+			}
+			a.say("broker stopped (pid %d)", pid)
+		} else {
+			a.say("broker not running")
+		}
+		if err := os.Remove(filepath.Join(home, "broker", "broker.pid")); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return 0, err
+		}
+		return 0, nil
+	case "status":
+		return a.brokerStatus(home), nil
+	case "serve":
+		return 0, broker.Serve(grantsDir(home), a.Stdout)
+	}
+	return 0, &usageError{fmt.Sprintf("argument action: invalid choice: %q (choose from start, stop, status, serve)", positional[0])}
+}
+
+func (a *App) brokerStatus(home string) int {
+	if pid := a.BrokerPID(home); pid != 0 {
+		a.say("broker running (pid %d) on %s", pid, broker.Address)
+		return 0
+	}
+	if brokerAnswers() {
+		a.say("broker not running, but %s is in use by another process", broker.Address)
+		return 1
+	}
+	a.say("broker not running")
+	return 1
+}
+
+func (a *App) cmdSetup(args []string, home string) (int, error) {
+	fs := a.newFlags("setup", "[--yes]")
+	yes := fs.Bool("yes", false, "reset the global sbx policy to deny-all")
+	if _, err := fs.parse(args); err != nil {
+		return 0, err
+	}
+	found, err := sbx.RequireVersion()
+	if err != nil {
+		return 0, err
+	}
+	a.say("sbx %s (ok)", found)
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		return 0, err
+	}
+	if err := os.Chmod(home, 0o700); err != nil {
+		return 0, err
+	}
+	a.say("state dir: %s", home)
+	allows, err := sbx.GlobalAllows()
+	if err != nil {
+		return 0, err
+	}
+	switch {
+	case len(allows) == 0:
+		a.say("global sbx policy: deny-all (ok)")
+	case *yes:
+		a.say("resetting the global sbx policy to deny-all (this stops running sandboxes)")
+		if err := sbx.Run("policy", "reset", "--force"); err != nil {
+			return 0, err
+		}
+		if err := sbx.Run("policy", "init", "deny-all"); err != nil {
+			return 0, err
+		}
+		if remaining, err := sbx.GlobalAllows(); err != nil {
+			return 0, err
+		} else if len(remaining) > 0 {
+			return 0, errorf("the global policy still has allow rules after the reset")
+		}
+	default:
+		a.warn("the global sbx policy allows traffic for every sandbox (%d rules: %s)", len(allows), strings.Join(allows, ", "))
+		fmt.Fprint(a.Stderr, "  scoring-stage boxes get their egress from kits; global allow rules widen every box.\n"+
+			"  `stage setup --yes` runs `sbx policy reset --force` (deletes ALL local policies and stops\n"+
+			"  running sandboxes) and then `sbx policy init deny-all`.\n")
+	}
+	settings, err := config.LoadSettings(home, nil)
+	if err != nil {
+		return 0, err
+	}
+	var packNames []string
+	for _, pack := range settings.Packs {
+		packNames = append(packNames, pack.Name)
+	}
+	if len(packNames) == 0 {
+		packNames = []string{"none"}
+	}
+	a.say("packs: %s", strings.Join(packNames, ", "))
+	gh := a.FindGh()
+	if gh != "" && exec.Command(gh, "auth", "token").Run() == nil {
+		a.say("gh auth: ok (source of the per-box copilot secret)")
+	} else {
+		a.warn("gh is missing or not logged in; Copilot will be unauthenticated")
+	}
+	if info, err := os.Stat(settings.ReadonlyToken()); err == nil && info.Mode().IsRegular() {
+		if err := os.Chmod(settings.ReadonlyToken(), 0o600); err != nil {
+			return 0, err
+		}
+		a.say("github read-only token: %s", settings.ReadonlyToken())
+	} else {
+		a.say("github read-only token: none at %s (boxes use the global sbx github secret, if any)", settings.ReadonlyToken())
+	}
+	composition, err := config.Compose(settings, nil, gh)
+	if err != nil {
+		return 0, err
+	}
+	if len(composition.AWSProfiles) > 0 {
+		a.say("aws profiles (before repo matches): %s", strings.Join(composition.AWSProfiles, " "))
+		if _, err := exec.LookPath("aws"); err != nil {
+			a.warn("the aws cli is missing; the broker needs it")
+		}
+		a.brokerStatus(home)
+	}
+	return 0, nil
+}
+
+func (a *App) cmdUp(args []string, home string) (int, error) {
+	fs := a.newFlags("up", "<repo> <slug> [--base B] [--pack DIR]... [--cpus N] [--memory M] [--allow-global-policy] [--plan]")
+	base := fs.String("base", "", "branch to start from (default: the repository's default branch)")
+	var packs stringList
+	fs.Var(&packs, "pack", "add a pack directory (repeatable)")
+	cpus := fs.intFlag("cpus", "CPUs for the sandbox")
+	memory := fs.String("memory", "", "memory for the sandbox, such as 16g")
+	allowGlobal := fs.Bool("allow-global-policy", false, "continue even if the global sbx policy has allow rules")
+	plan := fs.Bool("plan", false, "write the env file and show sbx's plan without creating")
+	positional, err := fs.parse(args, "repo", "slug")
+	if err != nil {
+		return 0, err
+	}
+	if _, err := sbx.RequireVersion(); err != nil {
+		return 0, err
+	}
+	slug, err := checkSlug(positional[1])
+	if err != nil {
+		return 0, err
+	}
+	sandbox := sandboxOf(slug)
+	repo := config.Resolve(config.ExpandUser(positional[0]))
+	origin, err := source.Git(repo, "remote", "get-url", "origin")
+	if err != nil {
+		return 0, err
+	}
+	github, err := source.GitHubRepo(origin)
+	if err != nil {
+		return 0, err
+	}
+	settings, err := config.LoadSettings(home, packs)
+	if err != nil {
+		return 0, err
+	}
+	composition, err := config.Compose(settings, []string{filepath.Base(repo), github}, a.FindGh())
+	if err != nil {
+		return 0, err
+	}
+
+	if !*plan {
+		allows, err := sbx.GlobalAllows()
+		if err != nil {
+			return 0, err
+		}
+		if len(allows) > 0 && !*allowGlobal {
+			return 0, errorf("the global sbx policy is not deny-all; run stage setup (or pass --allow-global-policy)")
+		}
+		if len(allows) > 0 {
+			a.warn("continuing with global allow rules (--allow-global-policy)")
+		}
+		existing, err := sbx.Sandboxes()
+		if err != nil {
+			return 0, err
+		}
+		if existing[sandbox] {
+			return 0, errorf("sandbox %s already exists", sandbox)
+		}
+	}
+
+	directory := taskDir(home, slug)
+	scratch := filepath.Join(directory, envfile.SourceDir)
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		return 0, err
+	}
+	branch, head, err := source.Prepare(repo, scratch, github, *base)
+	if err != nil {
+		return 0, err
+	}
+	a.say("source: %s %s at %s", github, branch, head[:min(8, len(head))])
+
+	if len(composition.AWSProfiles) > 0 {
+		tokenFile, err := broker.Grants{Path: grantsDir(home)}.Issue(slug, composition.AWSProfiles)
+		if err != nil {
+			return 0, err
+		}
+		composition.Secrets[config.BrokerService] = map[string]any{"command": "/bin/cat " + config.ShellQuote(tokenFile)}
+	}
+	if _, err := kits.Extract(home); err != nil {
+		return 0, err
+	}
+
+	env := envfile.Build(composition, sandbox, directory, envfile.Options{CPUs: *cpus, Memory: *memory})
+	envPath, err := envfile.Write(env, directory)
+	if err != nil {
+		return 0, err
+	}
+	task := Task{Slug: slug, Sandbox: sandbox, RepoDir: config.Resolve(scratch), GitHubRepo: github, SourceRepo: repo}
+	if err := writeTask(task, directory); err != nil {
+		return 0, err
+	}
+
+	if *plan {
+		if err := sbx.Run("env", "plan", directory); err != nil {
+			return 0, err
+		}
+		a.say("plan only; env file %s", envPath)
+		return 0, nil
+	}
+	if len(composition.AWSProfiles) > 0 && a.BrokerPID(home) == 0 {
+		if err := a.BrokerStart(home); err != nil {
+			return 0, err
+		}
+	}
+	if err := sbx.Run("env", "create", "--force", "--no-input", directory); err != nil {
+		return 0, errorf("%s; run `stage down %s` to clean up", err, slug)
+	}
+	a.say("%s is up: %s at %s", sandbox, github, task.RepoDir)
+	var handles []string
+	for _, kit := range composition.AllKits() {
+		handles = append(handles, envfile.Handle(kit))
+	}
+	a.say("kits: %s", strings.Join(handles, ", "))
+	return 0, nil
+}
+
+func writeTask(task Task, directory string) error {
+	content, err := json.MarshalIndent(task, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(directory, "task.json"), append(content, '\n'), 0o644)
+}
+
+func runInteractive(name string, args ...string) (int, error) {
+	command := exec.Command(name, args...)
+	command.Stdin, command.Stdout, command.Stderr = os.Stdin, os.Stdout, os.Stderr
+	err := command.Run()
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		if code := exitErr.ExitCode(); code > 0 {
+			return code, nil
+		}
+		return 1, nil
+	}
+	if errors.Is(err, exec.ErrNotFound) {
+		return 0, errorf("%s is not installed or not on PATH", name)
+	}
+	return 0, err
+}
+
+func (a *App) cmdShell(args []string, home string) (int, error) {
+	fs := a.newFlags("shell", "<slug>")
+	positional, err := fs.parse(args, "slug")
+	if err != nil {
+		return 0, err
+	}
+	task, err := loadTask(home, positional[0])
+	if err != nil {
+		return 0, err
+	}
+	return runInteractive("sbx", "exec", "-it", "-u", "agent", "-w", task.RepoDir, task.Sandbox, "bash", "-l")
+}
+
+func (a *App) cmdExec(args []string, home string) (int, error) {
+	if len(args) == 0 {
+		return 0, &usageError{"the following arguments are required: slug"}
+	}
+	task, err := loadTask(home, args[0])
+	if err != nil {
+		return 0, err
+	}
+	command := args[1:]
+	if len(command) > 0 && command[0] == "--" {
+		command = command[1:]
+	}
+	if len(command) == 0 {
+		return 0, errorf("usage: stage exec <slug> -- <command> [args...]")
+	}
+	argv := []string{"exec"}
+	if a.IsTerminal() {
+		argv = append(argv, "-it")
+	}
+	argv = append(argv, "-u", "agent", "-w", task.RepoDir, task.Sandbox)
+	return runInteractive("sbx", append(argv, command...)...)
+}
+
+func PRBody(slug, sha, footer string) string {
+	body := "This draft pull request was produced by an AI coding agent running in a scoring-stage sandbox " +
+		fmt.Sprintf("(task `%s`) and pushed from the host by `stage ship`. The changes were generated by an LLM ", slug) +
+		fmt.Sprintf("and have not yet been reviewed by a human.\n\nCommit: %s\n", sha)
+	if footer != "" {
+		body += "\n" + footer + "\n"
+	}
+	return body
+}
+
+func (a *App) cmdShip(args []string, home string) (int, error) {
+	fs := a.newFlags("ship", "<slug> [--ref R] [--branch B] [--pr]")
+	ref := fs.String("ref", "HEAD", "sandbox ref to ship")
+	branchFlag := fs.String("branch", "", "branch to push (default: agent/<slug>/<sha>)")
+	pr := fs.Bool("pr", false, "open a draft pull request")
+	positional, err := fs.parse(args, "slug")
+	if err != nil {
+		return 0, err
+	}
+	slug := positional[0]
+	task, err := loadTask(home, slug)
+	if err != nil {
+		return 0, err
+	}
+	repo := task.RepoDir
+	remote := "sandbox-" + task.Sandbox
+	if _, err := source.Git(repo, "remote", "get-url", remote); err != nil {
+		return 0, errorf("no %s remote in %s; is %s running?", remote, repo, task.Sandbox)
+	}
+	if _, err := source.Git(repo, "fetch", "--quiet", remote, *ref); err != nil {
+		return 0, err
+	}
+	sha, err := source.Git(repo, "rev-parse", "FETCH_HEAD")
+	if err != nil {
+		return 0, err
+	}
+	branch := *branchFlag
+	if branch == "" {
+		branch = fmt.Sprintf("agent/%s/%s", slug, sha[:min(8, len(sha))])
+	}
+	if !strings.HasPrefix(branch, "agent/") || branch == "agent/" {
+		return 0, errorf("refusing to push %s: branch must start with agent/", branch)
+	}
+	if _, err := source.Git(repo, "check-ref-format", "refs/heads/"+branch); err != nil {
+		return 0, err
+	}
+	if err := source.GitInteractive(repo, "push", "origin", sha+":refs/heads/"+branch); err != nil {
+		return 0, err
+	}
+	a.say("pushed %s to %s %s", sha[:min(8, len(sha))], task.GitHubRepo, branch)
+	if !*pr {
+		return 0, nil
+	}
+	title, err := source.Git(repo, "log", "-1", "--format=%s", sha)
+	if err != nil {
+		return 0, err
+	}
+	settings, err := config.LoadSettings(home, nil)
+	if err != nil {
+		return 0, err
+	}
+	code, err := runInteractive("gh", "pr", "create", "--draft", "--repo", task.GitHubRepo, "--head", branch,
+		"--title", title, "--body", PRBody(slug, sha, settings.PRFooter()))
+	if err == nil && code != 0 {
+		return 0, exitCode(code)
+	}
+	return 0, err
+}
+
+func (a *App) cmdList(args []string, home string) (int, error) {
+	fs := a.newFlags("list", "")
+	if _, err := fs.parse(args); err != nil {
+		return 0, err
+	}
+	output, err := sbx.Output("ls")
+	if err != nil {
+		return 0, err
+	}
+	for index, line := range strings.Split(strings.TrimSuffix(output, "\n"), "\n") {
+		if index == 0 || strings.HasPrefix(line, sandboxPrefix) {
+			fmt.Fprintln(a.Stdout, line)
+		}
+	}
+	return 0, nil
+}
+
+func (a *App) cmdDown(args []string, home string) (int, error) {
+	fs := a.newFlags("down", "<slug>")
+	positional, err := fs.parse(args, "slug")
+	if err != nil {
+		return 0, err
+	}
+	slug, err := checkSlug(positional[0])
+	if err != nil {
+		return 0, err
+	}
+	directory := taskDir(home, slug)
+	sandbox := sandboxOf(slug)
+	existing, err := sbx.Sandboxes()
+	if err != nil {
+		return 0, err
+	}
+	_, envErr := os.Stat(filepath.Join(directory, "sbxenv.yaml"))
+	switch {
+	case envErr == nil && existing[sandbox]:
+		err = sbx.Run("env", "rm", "--force", "--no-input", directory)
+	case existing[sandbox]:
+		err = sbx.Run("rm", "--force", sandbox)
+	}
+	if err != nil {
+		return 0, err
+	}
+	if err := (broker.Grants{Path: grantsDir(home)}).Revoke(slug); err != nil {
+		return 0, err
+	}
+	if err := os.RemoveAll(directory); err != nil {
+		return 0, err
+	}
+	a.say("%s removed", sandbox)
+	return 0, nil
+}

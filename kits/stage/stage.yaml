@@ -1,0 +1,43 @@
+# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+displayName: scoring-stage
+description: >-
+  What every scoring-stage sandbox gets: git pushes refused at the proxy so
+  work leaves only through `stage ship` on the host, the user's git author
+  identity, and guidance telling the agent how the sandbox behaves.
+
+capabilities:
+  - type: com.docker.sandbox/network-policy@2
+    config:
+      runtime:
+        deny:
+          - hosts: ["**"]
+            methods: [POST]
+            paths: ["/**/git-receive-pack"]
+
+  - type: com.docker.sandbox/git-identity@1
+    optional: true
+    description: Attribute commits made in the sandbox to the user's git identity
+
+  - type: com.docker.sandbox/agent-context@1
+    optional: true
+    config: &guidance
+      content: |
+        ## scoring-stage sandbox
+
+        You are running in a scoring-stage sandbox with permission prompts off.
+        The sandbox is the boundary, so work freely inside it, and keep within these rules:
+
+        - Commit your work locally. `git push` is refused by the sandbox proxy; the user
+          ships your commits from the host with `stage ship`.
+        - Network egress is deny-all apart from the hosts the sandbox's kits allow. A
+          request refused by the sandbox comes back as HTTP 403 from the proxy. Do not
+          work around a refusal; report the host and why you need it.
+        - Credentials are held on the host. Environment variables such as `GH_TOKEN` hold
+          placeholders that the proxy replaces on the way out, so never print, copy or
+          embed them.
+
+  - type: com.docker.sandbox/agent-context@2
+    optional: true
+    config: *guidance
