@@ -66,6 +66,10 @@ reaches the broker without the header.
 - Bounded entries cannot match query strings. Refusing `POST /**/git-receive-pack` is what stops a push; the
   `info/refs?service=git-receive-pack` discovery request is left to the origin, which answers 403 for anonymous
   callers.
+- A bounded entry makes its hosts require HTTP inspection, and sbx fails closed on connections it cannot inspect
+  ("HTTP policy requires L7 enforcement, which is unavailable for transparent connections"). The push deny is
+  therefore limited to `**:443` and `**:80`; on `**` it refused every non-HTTP connection, such as SQL Server on
+  1433. Port suffixes on bounded deny hosts are honored.
 - `host-port@1` is not supported; `host-mount@1` is, and is shared by every sandbox composing the same kit.
 - `sbx secret set <service> --sandbox <name>` accepts services that are not built in, which is how `stage-broker`
   and book services get values.
