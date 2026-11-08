@@ -37,7 +37,7 @@ var (
 	userKeys      = []string{"books", "base", "agents", "copy_logins", "kits", "aws", "secrets", "bindings", "ship"}
 	bookKeys      = []string{"name", "description", "base", "agents", "kits", "aws", "secrets", "bindings", "repos"}
 	repoMatchKeys = []string{"match", "agents", "kits", "aws"}
-	awsKeys       = []string{"profiles", "region"}
+	awsKeys       = []string{"profiles", "region", "default_profile"}
 	shipKeys      = []string{"pr_footer"}
 )
 
@@ -67,14 +67,15 @@ func (k Kit) Equal(other Kit) bool {
 }
 
 type Composition struct {
-	Base        Kit
-	Agents      []string
-	Kits        []Kit
-	AWSProfiles []string
-	AWSRegion   string
-	Secrets     map[string]any
-	Bindings    map[string]any
-	Books       []string
+	Base              Kit
+	Agents            []string
+	Kits              []Kit
+	AWSProfiles       []string
+	AWSRegion         string
+	AWSDefaultProfile string
+	Secrets           map[string]any
+	Bindings          map[string]any
+	Books             []string
 }
 
 func (c *Composition) AllKits() []Kit {
@@ -82,9 +83,10 @@ func (c *Composition) AllKits() []Kit {
 }
 
 type aws struct {
-	profiles  []string
-	region    string
-	hasRegion bool
+	profiles       []string
+	region         string
+	hasRegion      bool
+	defaultProfile string
 }
 
 type repo struct {
@@ -302,7 +304,7 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 		return nil, err
 	}
 	var base *Kit
-	var baseOwner, region, regionOwner string
+	var baseOwner, region, regionOwner, defaultProfile, defaultProfileOwner string
 	var agentKits, bookKits, repoKits, userKits []Kit
 	var profiles, agentNames []string
 	secrets := map[string]any{}
@@ -324,6 +326,12 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 				return errorf("%s sets AWS region %s, but %s set %s", owner, a.region, regionOwner, region)
 			}
 			region, regionOwner = a.region, owner
+		}
+		if a.defaultProfile != "" {
+			if defaultProfileOwner != "" && a.defaultProfile != defaultProfile {
+				return errorf("%s sets AWS default profile %s, but %s set %s", owner, a.defaultProfile, defaultProfileOwner, defaultProfile)
+			}
+			defaultProfile, defaultProfileOwner = a.defaultProfile, owner
 		}
 		return nil
 	}
@@ -438,13 +446,23 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 	if region == "" {
 		region = DefaultAWSRegion
 	}
+	if settings.aws.defaultProfile != "" {
+		defaultProfile = settings.aws.defaultProfile
+	}
+	if defaultProfile == "" && len(profiles) == 1 {
+		defaultProfile = profiles[0]
+	}
+	if defaultProfile != "" && !contains(profiles, defaultProfile) {
+		return nil, errorf("AWS default profile %s is not a granted profile (%s)", defaultProfile, strings.Join(profiles, " "))
+	}
 
 	core := []Kit{{Source: filepath.Join(settings.CoreKits(), "stage")}}
 	if len(profiles) > 0 {
-		core = append(core, Kit{
-			Source: filepath.Join(settings.CoreKits(), "aws-broker"),
-			Args:   map[string]any{"profiles": strings.Join(profiles, " "), "region": region},
-		})
+		brokerArgs := map[string]any{"profiles": strings.Join(profiles, " "), "region": region}
+		if defaultProfile != "" {
+			brokerArgs["default_profile"] = defaultProfile
+		}
+		core = append(core, Kit{Source: filepath.Join(settings.CoreKits(), "aws-broker"), Args: brokerArgs})
 		bindings[BrokerService] = brokerBinding()
 	}
 	if err := addKits(&userKits, settings.kits, settings.Home, "config"); err != nil {
@@ -476,12 +494,13 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 	}
 
 	composition := &Composition{
-		Base:        Kit{Source: DefaultBase},
-		Agents:      agentNames,
-		AWSProfiles: profiles,
-		AWSRegion:   region,
-		Secrets:     secrets,
-		Bindings:    bindings,
+		Base:              Kit{Source: DefaultBase},
+		Agents:            agentNames,
+		AWSProfiles:       profiles,
+		AWSRegion:         region,
+		AWSDefaultProfile: defaultProfile,
+		Secrets:           secrets,
+		Bindings:          bindings,
 	}
 	if base != nil {
 		composition.Base = *base
@@ -717,6 +736,13 @@ func decodeAWS(value any, where string) (aws, error) {
 			return result, errorf("%s: region must be a string", where)
 		}
 		result.region, result.hasRegion = region, true
+	}
+	if value, present := table["default_profile"]; present {
+		profile, ok := value.(string)
+		if !ok {
+			return result, errorf("%s: default_profile must be a string", where)
+		}
+		result.defaultProfile = profile
 	}
 	return result, nil
 }

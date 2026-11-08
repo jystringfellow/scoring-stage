@@ -364,6 +364,9 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 	}
 	if len(composition.AWSProfiles) > 0 {
 		a.say("aws profiles (before books): %s", strings.Join(composition.AWSProfiles, " "))
+		if composition.AWSDefaultProfile != "" {
+			a.say("aws default profile (before books): %s", composition.AWSDefaultProfile)
+		}
 		if _, err := exec.LookPath("aws"); err != nil {
 			a.warn("the aws cli is missing; the broker needs it")
 		}

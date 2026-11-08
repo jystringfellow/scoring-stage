@@ -163,6 +163,60 @@ func TestAWSProfilesAddTheBrokerKitAndBinding(t *testing.T) {
 	}
 }
 
+func TestTheOnlyGrantedAWSProfileBecomesTheDefault(t *testing.T) {
+	dir := t.TempDir()
+	path := book(t, dir, "org", "[aws]\nprofiles = [\"dev\"]\n")
+	settings, selection := withBooks(t, filepath.Join(dir, "home"), path)
+	composition := composeWith(t, settings, selection)
+	if composition.AWSDefaultProfile != "dev" {
+		t.Errorf("default profile = %q", composition.AWSDefaultProfile)
+	}
+	want := Kit{Source: filepath.Join(settings.CoreKits(), "aws-broker"), Args: map[string]any{"profiles": "dev", "region": DefaultAWSRegion, "default_profile": "dev"}}
+	if !composition.Kits[1].Equal(want) {
+		t.Errorf("broker kit = %v", composition.Kits[1])
+	}
+}
+
+func TestSeveralGrantedAWSProfilesHaveNoDefaultUnlessOneIsNamed(t *testing.T) {
+	dir := t.TempDir()
+	unnamed := book(t, dir, "unnamed", "[aws]\nprofiles = [\"dev\", \"staging\"]\n")
+	named := book(t, dir, "named", "[aws]\nprofiles = [\"dev\", \"staging\"]\ndefault_profile = \"staging\"\n")
+	home := filepath.Join(dir, "home")
+	unnamedComposition := composeWith(t, load(t, home), Selection{Books: []string{unnamed}})
+	if _, set := unnamedComposition.Kits[1].Args["default_profile"]; set || unnamedComposition.AWSDefaultProfile != "" {
+		t.Errorf("unnamed default = %q, kit args %v", unnamedComposition.AWSDefaultProfile, unnamedComposition.Kits[1].Args)
+	}
+	composition := composeWith(t, load(t, home), Selection{Books: []string{named}})
+	if composition.AWSDefaultProfile != "staging" || composition.Kits[1].Args["default_profile"] != "staging" {
+		t.Errorf("named default = %q, kit args %v", composition.AWSDefaultProfile, composition.Kits[1].Args)
+	}
+}
+
+func TestAWSDefaultProfileMustBeGranted(t *testing.T) {
+	dir := t.TempDir()
+	path := book(t, dir, "org", "[aws]\nprofiles = [\"dev\"]\ndefault_profile = \"prod\"\n")
+	_, err := Compose(load(t, filepath.Join(dir, "home")), Selection{Books: []string{path}})
+	expectError(t, err, "AWS default profile prod is not a granted profile")
+}
+
+func TestBooksDisagreeingOnTheAWSDefaultProfileIsAnError(t *testing.T) {
+	dir := t.TempDir()
+	first := book(t, dir, "one", "[aws]\nprofiles = [\"dev\", \"staging\"]\ndefault_profile = \"dev\"\n")
+	second := book(t, dir, "two", "[[repos]]\nmatch = \"api\"\naws = { default_profile = \"staging\" }\n")
+	_, err := Compose(load(t, filepath.Join(dir, "home")), Selection{Books: []string{first, second}, RepoNames: []string{"api"}})
+	expectError(t, err, "book two repo api sets AWS default profile staging, but book one set dev")
+}
+
+func TestUserConfigOverridesTheAWSDefaultProfile(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	path := book(t, dir, "org", "[aws]\nprofiles = [\"dev\"]\n")
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "[aws]\nprofiles = [\"sandbox\"]\ndefault_profile = \"sandbox\"\n")
+	if got := composeWith(t, load(t, home), Selection{Books: []string{path}}).AWSDefaultProfile; got != "sandbox" {
+		t.Errorf("default profile = %q", got)
+	}
+}
+
 func TestBookKitsResolveAgainstTheBookAndRepoKitsApplyOnlyToMatchingRepos(t *testing.T) {
 	dir := t.TempDir()
 	path := book(t, dir, "org", `
@@ -335,6 +389,7 @@ func TestBooksAreDecodedStrictly(t *testing.T) {
 		{"kits = [{ source = \"./x\", argz = {} }]\n", "a kit is a reference string"},
 		{"[[repos]]\nmatch = \"x\"\naws = { region = \"r\", zone = \"z\" }\n", "repos[0].aws: unknown keys zone"},
 		{"[aws]\nprofiles = \"dev\"\n", "profiles must be a list of strings"},
+		{"[aws]\ndefault_profile = [\"dev\"]\n", "default_profile must be a string"},
 		{"kits = \"./x\"\n", "kits must be a list"},
 		{"name = \n", "book.toml"},
 	} {
