@@ -19,6 +19,18 @@ the host, compute a secret, or choose which sandbox gets which grant. Those are 
 `stage up` expresses all of it as one sbx environment file and lets `sbx env create` apply it, so a sandbox's
 policy, secrets and bindings are created and removed together.
 
+## Nothing by default
+
+A sandbox carries only the agents someone chose: each agent's mixin widens egress and brings credential
+bindings, so an agent nobody runs is attack surface with no use. Agents come from the user's config, the
+repository's config, a pack or `--agent`, and an agent's bindings come with it.
+
+Configuration follows kapellmeister's split between the user's directory and the repository's. The repository's
+config is input from whoever can commit to it, so it may only ask for things that stay inside the sandbox (agents,
+kits) or that the user has already accepted (installed packs, by name). Secrets run commands on the host, bindings
+and AWS profiles hand out credentials, and a pack location would let a repository supply its own host commands, so
+those stay with the user and the packs they install.
+
 ## One binary
 
 `stage` is written in Go so it installs as one binary, like `sbx`. sbx accepts local kits only as directories, so

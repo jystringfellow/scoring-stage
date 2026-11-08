@@ -352,3 +352,54 @@ func TestTheRecordedRepoDirIsThePathSbxIsGivenEvenThroughASymlinkedHome(t *testi
 		t.Fatalf("repo_dir %s, but sbx was given %s", task.RepoDir, created)
 	}
 }
+
+func TestUpWithoutAgentsWarnsThatTheBoxHasOnlyAShell(t *testing.T) {
+	h := setup(t)
+	h.expect(0, "up", h.remote.Checkout, "fix")
+	h.expectStderr("no agents chosen")
+	if env := testutil.ReadFile(t, filepath.Join(h.task("fix"), "sbxenv.yaml")); strings.Contains(env, "-mixin") {
+		t.Fatalf("agent kits without a choice:\n%s", env)
+	}
+}
+
+func TestAgentsComeFromTheFlagAndTheRepositorysCommittedConfig(t *testing.T) {
+	h := setup(t)
+	testutil.WriteFile(t, filepath.Join(h.remote.Checkout, ".scoring-stage", "config.toml"), "agents = [\"codex\"]\n")
+	testutil.RunGit(t, h.remote.Checkout, "add", ".")
+	testutil.RunGit(t, h.remote.Checkout, "commit", "-q", "-m", "Add scoring-stage config")
+	testutil.RunGit(t, h.remote.Checkout, "push", "-q", "https://github.com/acme/api.git", "HEAD:main")
+	testutil.WriteFile(t, filepath.Join(h.remote.Checkout, ".scoring-stage", "config.toml"), "agents = [\"copilot\"]\n")
+	h.expect(0, "up", h.remote.Checkout, "fix", "--agent", "agy")
+	env := testutil.ReadFile(t, filepath.Join(h.task("fix"), "sbxenv.yaml"))
+	for _, want := range []string{"codex-mixin", "antigravity-mixin", "openai:"} {
+		if !strings.Contains(env, want) {
+			t.Errorf("env lacks %s", want)
+		}
+	}
+	if strings.Contains(env, "copilot") {
+		t.Error("used the uncommitted repo config")
+	}
+	if !strings.Contains(h.stdout.String(), "kits: shell, codex-mixin, antigravity-mixin, stage") {
+		t.Errorf("stdout %q", h.stdout.String())
+	}
+}
+
+func TestUpRejectsAnUnknownAgent(t *testing.T) {
+	h := setup(t)
+	h.expect(1, "up", h.remote.Checkout, "fix", "--agent", "gemeni")
+	h.expectStderr("unknown agent gemeni")
+}
+
+func TestSetupSavesAgents(t *testing.T) {
+	h := setup(t)
+	h.expect(0, "setup", "--agent", "claude", "--agent", "codex")
+	if got := testutil.ReadFile(t, filepath.Join(h.home, "config.toml")); got != "agents = [\"claude\", \"codex\"]\n" {
+		t.Fatalf("config.toml = %q", got)
+	}
+	if !strings.Contains(h.stdout.String(), "stage: agents: claude, codex") {
+		t.Errorf("stdout %q", h.stdout.String())
+	}
+	h.expect(0, "setup")
+	h.expect(1, "setup", "--agent", "agy")
+	h.expectStderr("already sets agents")
+}

@@ -69,7 +69,7 @@ const usage = `usage: stage <command> [options]
 Run coding agents in Docker Sandboxes with host-held credentials.
 
 commands:
-  setup [--yes]                     check sbx, the global policy, credentials and packs
+  setup [--yes] [--agent NAME]...   check sbx, the global policy, credentials and packs; save your agents
   broker start|stop|status|serve    manage the host AWS credential broker
   up <repo> <slug> [options]        create a sandbox for a repository
   shell <slug>                      open a login shell in the repository
@@ -274,8 +274,10 @@ func (a *App) brokerStatus(home string) int {
 }
 
 func (a *App) cmdSetup(args []string, home string) (int, error) {
-	fs := a.newFlags("setup", "[--yes]")
+	fs := a.newFlags("setup", "[--yes] [--agent NAME]...")
 	yes := fs.Bool("yes", false, "reset the global sbx policy to deny-all")
+	var agentFlags stringList
+	fs.Var(&agentFlags, "agent", "save an agent to config.toml: "+strings.Join(config.AgentNames(), ", ")+" (repeatable)")
 	if _, err := fs.parse(args); err != nil {
 		return 0, err
 	}
@@ -317,9 +319,20 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 			"  `stage setup --yes` runs `sbx policy reset --force` (deletes ALL local policies and stops\n"+
 			"  running sandboxes) and then `sbx policy init deny-all`.\n")
 	}
-	settings, err := config.LoadSettings(home, nil)
+	if len(agentFlags) > 0 {
+		if err := config.SaveAgents(home, agentFlags); err != nil {
+			return 0, err
+		}
+		a.say("saved agents %s to %s", strings.Join(agentFlags, ", "), filepath.Join(home, "config.toml"))
+	}
+	settings, err := config.LoadSettings(home)
 	if err != nil {
 		return 0, err
+	}
+	if agentList := settings.AgentEntries(); len(agentList) > 0 {
+		a.say("agents: %s", strings.Join(agentList, ", "))
+	} else {
+		a.warn("no agents in config.toml; boxes get only a shell unless --agent, a pack or the repository adds some (stage setup --agent %s ...)", config.AgentNames()[0])
 	}
 	var packNames []string
 	for _, pack := range settings.Packs {
@@ -328,7 +341,7 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 	if len(packNames) == 0 {
 		packNames = []string{"none"}
 	}
-	a.say("packs: %s", strings.Join(packNames, ", "))
+	a.say("installed packs: %s", strings.Join(packNames, ", "))
 	gh := a.FindGh()
 	if gh != "" && exec.Command(gh, "auth", "token").Run() == nil {
 		a.say("gh auth: ok (source of the per-box copilot secret)")
@@ -343,12 +356,12 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 	} else {
 		a.say("github read-only token: none at %s (boxes use the global sbx github secret, if any)", settings.ReadonlyToken())
 	}
-	composition, err := config.Compose(settings, nil, gh)
+	composition, err := config.Compose(settings, config.Selection{Gh: gh})
 	if err != nil {
 		return 0, err
 	}
 	if len(composition.AWSProfiles) > 0 {
-		a.say("aws profiles (before repo matches): %s", strings.Join(composition.AWSProfiles, " "))
+		a.say("aws profiles (before packs): %s", strings.Join(composition.AWSProfiles, " "))
 		if _, err := exec.LookPath("aws"); err != nil {
 			a.warn("the aws cli is missing; the broker needs it")
 		}
@@ -358,10 +371,11 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 }
 
 func (a *App) cmdUp(args []string, home string) (int, error) {
-	fs := a.newFlags("up", "<repo> <slug> [--base B] [--pack DIR]... [--cpus N] [--memory M] [--allow-global-policy] [--plan]")
+	fs := a.newFlags("up", "<repo> <slug> [--agent NAME]... [--pack NAME|DIR]... [--base B] [--cpus N] [--memory M] [--allow-global-policy] [--plan]")
 	base := fs.String("base", "", "branch to start from (default: the repository's default branch)")
-	var packs stringList
-	fs.Var(&packs, "pack", "add a pack directory (repeatable)")
+	var agentFlags, packs stringList
+	fs.Var(&agentFlags, "agent", "add an agent: "+strings.Join(config.AgentNames(), ", ")+", or a kit reference (repeatable)")
+	fs.Var(&packs, "pack", "use an installed pack by name, or a pack directory such as ./pack (repeatable)")
 	cpus := fs.intFlag("cpus", "CPUs for the sandbox")
 	memory := fs.String("memory", "", "memory for the sandbox, such as 16g")
 	allowGlobal := fs.Bool("allow-global-policy", false, "continue even if the global sbx policy has allow rules")
@@ -387,11 +401,7 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	settings, err := config.LoadSettings(home, packs)
-	if err != nil {
-		return 0, err
-	}
-	composition, err := config.Compose(settings, []string{filepath.Base(repo), github}, a.FindGh())
+	settings, err := config.LoadSettings(home)
 	if err != nil {
 		return 0, err
 	}
@@ -426,6 +436,23 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 		return 0, err
 	}
 	a.say("source: %s %s at %s", github, branch, head[:min(8, len(head))])
+	repoConfig, err := config.LoadRepoConfig(scratch)
+	if err != nil {
+		return 0, err
+	}
+	composition, err := config.Compose(settings, config.Selection{
+		RepoNames: []string{filepath.Base(repo), github},
+		Agents:    agentFlags,
+		Packs:     packs,
+		Repo:      repoConfig,
+		Gh:        a.FindGh(),
+	})
+	if err != nil {
+		return 0, err
+	}
+	if len(composition.Agents) == 0 {
+		a.warn("no agents chosen, so the sandbox has only a shell; use --agent, agents in config.toml or %s", config.RepoConfigPath)
+	}
 
 	if len(composition.AWSProfiles) > 0 {
 		tokenFile, err := broker.Grants{Path: grantsDir(home)}.Issue(slug, composition.AWSProfiles)
@@ -590,7 +617,7 @@ func (a *App) cmdShip(args []string, home string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	settings, err := config.LoadSettings(home, nil)
+	settings, err := config.LoadSettings(home)
 	if err != nil {
 		return 0, err
 	}

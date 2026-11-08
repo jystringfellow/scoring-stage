@@ -21,29 +21,6 @@ const (
 	BrokerService    = "stage-broker"
 )
 
-var DefaultAgents = []string{
-	"docker.io/sbx/claude-mixin:2.1.319",
-	"docker.io/sbx/codex-mixin:0.167.0",
-	"docker.io/sbx/copilot-mixin:1.0.86",
-}
-
-var CopilotHosts = []string{
-	"api.githubcopilot.com",
-	"api.individual.githubcopilot.com",
-	"api.business.githubcopilot.com",
-	"api.enterprise.githubcopilot.com",
-	"copilot.github.com",
-}
-
-func defaultBindings() map[string]any {
-	return map[string]any{
-		"github":    domains("apiKey", "api.github.com", "github.com"),
-		"copilot":   domains("apiKey", CopilotHosts...),
-		"anthropic": domains("oauth", "platform.claude.com", "api.anthropic.com"),
-		"openai":    domains("oauth", "auth.openai.com", "chatgpt.com"),
-	}
-}
-
 func brokerBinding() map[string]any {
 	return domains("apiKey", "localhost")
 }
@@ -57,11 +34,11 @@ func domains(kind string, hosts ...string) map[string]any {
 }
 
 var (
-	userKeys = []string{"packs", "base", "agents", "kits", "aws", "secrets", "bindings", "ship"}
-	packKeys = []string{"name", "description", "base", "kits", "aws", "secrets", "bindings", "repos"}
-	repoKeys = []string{"match", "kits", "aws"}
-	awsKeys  = []string{"profiles", "region"}
-	shipKeys = []string{"pr_footer"}
+	userKeys      = []string{"packs", "base", "agents", "kits", "aws", "secrets", "bindings", "ship"}
+	packKeys      = []string{"name", "description", "base", "agents", "kits", "aws", "secrets", "bindings", "repos"}
+	repoMatchKeys = []string{"match", "agents", "kits", "aws"}
+	awsKeys       = []string{"profiles", "region"}
+	shipKeys      = []string{"pr_footer"}
 )
 
 type Error struct{ msg string }
@@ -91,6 +68,7 @@ func (k Kit) Equal(other Kit) bool {
 
 type Composition struct {
 	Base        Kit
+	Agents      []string
 	Kits        []Kit
 	AWSProfiles []string
 	AWSRegion   string
@@ -111,6 +89,7 @@ type aws struct {
 
 type repo struct {
 	patterns []string
+	agents   []any
 	kits     []any
 	aws      aws
 }
@@ -119,6 +98,7 @@ type Pack struct {
 	Name     string
 	Path     string
 	base     any
+	agents   []any
 	kits     []any
 	aws      aws
 	secrets  map[string]any
@@ -131,7 +111,6 @@ type Settings struct {
 	Packs    []Pack
 	base     any
 	agents   []any
-	hasAgent bool
 	kits     []any
 	aws      aws
 	secrets  map[string]any
@@ -157,7 +136,7 @@ func StageHome() string {
 	return Resolve(ExpandUser(home))
 }
 
-func LoadSettings(home string, extraPacks []string) (*Settings, error) {
+func LoadSettings(home string) (*Settings, error) {
 	path := filepath.Join(home, "config.toml")
 	data := map[string]any{}
 	if _, err := os.Stat(path); err == nil {
@@ -173,8 +152,8 @@ func LoadSettings(home string, extraPacks []string) (*Settings, error) {
 	}
 	settings := &Settings{Home: home, base: data["base"]}
 	var err error
-	if settings.agents, settings.hasAgent = asList(data["agents"]); data["agents"] != nil && !settings.hasAgent {
-		return nil, errorf("%s: agents must be a list", path)
+	if settings.agents, err = optionalList(data, "agents", path); err != nil {
+		return nil, err
 	}
 	if settings.kits, err = optionalList(data, "kits", path); err != nil {
 		return nil, err
@@ -201,11 +180,16 @@ func LoadSettings(home string, extraPacks []string) (*Settings, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, packPath := range append(packPaths, extraPacks...) {
+	installed := map[string]string{}
+	for _, packPath := range packPaths {
 		pack, err := LoadPack(ExpandUser(packPath))
 		if err != nil {
 			return nil, err
 		}
+		if other, taken := installed[pack.Name]; taken {
+			return nil, errorf("%s: packs %s and %s are both named %s", path, other, pack.Path, pack.Name)
+		}
+		installed[pack.Name] = pack.Path
 		settings.Packs = append(settings.Packs, *pack)
 	}
 	return settings, nil
@@ -232,6 +216,9 @@ func LoadPack(path string) (*Pack, error) {
 		return nil, errorf("%s: name is required", manifest)
 	}
 	pack := &Pack{Name: name, Path: path, base: data["base"]}
+	if pack.agents, err = optionalList(data, "agents", manifest); err != nil {
+		return nil, err
+	}
 	if pack.kits, err = optionalList(data, "kits", manifest); err != nil {
 		return nil, err
 	}
@@ -254,7 +241,7 @@ func LoadPack(path string) (*Pack, error) {
 		if !ok {
 			return nil, errorf("%s: must be a table", where)
 		}
-		if err := checkKeys(table, repoKeys, where); err != nil {
+		if err := checkKeys(table, repoMatchKeys, where); err != nil {
 			return nil, err
 		}
 		var r repo
@@ -267,6 +254,9 @@ func LoadPack(path string) (*Pack, error) {
 				return nil, errorf("%s: match must be a pattern or a list of patterns", where)
 			}
 			r.patterns = patterns
+		}
+		if r.agents, err = optionalList(table, "agents", where); err != nil {
+			return nil, err
 		}
 		if r.kits, err = optionalList(table, "kits", where); err != nil {
 			return nil, err
@@ -281,13 +271,26 @@ func LoadPack(path string) (*Pack, error) {
 	return pack, nil
 }
 
-func Compose(settings *Settings, repoNames []string, gh string) (*Composition, error) {
+// Selection is what one sandbox asks for beyond the user's own settings.
+type Selection struct {
+	RepoNames []string
+	Agents    []string
+	Packs     []string
+	Repo      *RepoConfig
+	Gh        string
+}
+
+func Compose(settings *Settings, selection Selection) (*Composition, error) {
+	active, err := activePacks(settings, selection)
+	if err != nil {
+		return nil, err
+	}
 	var base *Kit
 	var baseOwner, region, regionOwner string
-	var kitList []Kit
-	var profiles []string
+	var agentKits, packKits, repoKits, userKits []Kit
+	var profiles, agentNames []string
 	secrets := map[string]any{}
-	bindings := defaultBindings()
+	bindings := map[string]any{"github": domains("apiKey", "api.github.com", "github.com")}
 	secretOwner := map[string]string{}
 	bindingOwner := map[string]string{}
 
@@ -308,18 +311,37 @@ func Compose(settings *Settings, repoNames []string, gh string) (*Composition, e
 		}
 		return nil
 	}
-	addKits := func(entries []any, dir, owner string) error {
+	addKits := func(target *[]Kit, entries []any, dir, owner string) error {
 		for _, entry := range entries {
 			kit, err := parseKit(entry, dir, owner)
 			if err != nil {
 				return err
 			}
-			kitList = append(kitList, kit)
+			*target = append(*target, kit)
+		}
+		return nil
+	}
+	addAgents := func(entries []any, dir, owner string) error {
+		for _, entry := range entries {
+			kit, err := parseAgent(entry, dir, owner)
+			if err != nil {
+				return err
+			}
+			if containsKit(agentKits, kit) {
+				continue
+			}
+			agentKits = append(agentKits, kit)
+			if name, known := agentFor(kit.Source); known && !contains(agentNames, name) {
+				agentNames = append(agentNames, name)
+			}
 		}
 		return nil
 	}
 
-	for _, pack := range settings.Packs {
+	if err := addAgents(settings.agents, settings.Home, "config"); err != nil {
+		return nil, err
+	}
+	for _, pack := range active {
 		owner := "pack " + pack.Name
 		if pack.base != nil {
 			candidate, err := parseKit(pack.base, pack.Path, owner)
@@ -331,7 +353,10 @@ func Compose(settings *Settings, repoNames []string, gh string) (*Composition, e
 			}
 			base, baseOwner = &candidate, owner
 		}
-		if err := addKits(pack.kits, pack.Path, owner); err != nil {
+		if err := addAgents(pack.agents, pack.Path, owner); err != nil {
+			return nil, err
+		}
+		if err := addKits(&packKits, pack.kits, pack.Path, owner); err != nil {
 			return nil, err
 		}
 		if err := addAWS(pack.aws, owner); err != nil {
@@ -352,17 +377,35 @@ func Compose(settings *Settings, repoNames []string, gh string) (*Composition, e
 			}
 		}
 		for _, r := range pack.repos {
-			if !matchesAny(repoNames, r.patterns) {
+			if !matchesAny(selection.RepoNames, r.patterns) {
 				continue
 			}
 			repoOwner := fmt.Sprintf("%s repo %s", owner, r.patterns[0])
-			if err := addKits(r.kits, pack.Path, repoOwner); err != nil {
+			if err := addAgents(r.agents, pack.Path, repoOwner); err != nil {
+				return nil, err
+			}
+			if err := addKits(&packKits, r.kits, pack.Path, repoOwner); err != nil {
 				return nil, err
 			}
 			if err := addAWS(r.aws, repoOwner); err != nil {
 				return nil, err
 			}
 		}
+	}
+	if repo := selection.Repo; repo != nil {
+		if err := addAgents(repo.agents, repo.dir, repo.Path); err != nil {
+			return nil, err
+		}
+		if err := addKits(&repoKits, repo.kits, repo.dir, repo.Path); err != nil {
+			return nil, err
+		}
+	}
+	cliAgents := make([]any, len(selection.Agents))
+	for i, agent := range selection.Agents {
+		cliAgents[i] = agent
+	}
+	if err := addAgents(cliAgents, ".", "--agent"); err != nil {
+		return nil, err
 	}
 
 	if settings.base != nil {
@@ -371,20 +414,6 @@ func Compose(settings *Settings, repoNames []string, gh string) (*Composition, e
 			return nil, err
 		}
 		base = &candidate
-	}
-	agentEntries := settings.agents
-	if !settings.hasAgent {
-		for _, agent := range DefaultAgents {
-			agentEntries = append(agentEntries, agent)
-		}
-	}
-	var agents []Kit
-	for _, entry := range agentEntries {
-		kit, err := parseKit(entry, settings.Home, "config")
-		if err != nil {
-			return nil, err
-		}
-		agents = append(agents, kit)
 	}
 	addProfiles(settings.aws.profiles)
 	if settings.aws.hasRegion {
@@ -402,18 +431,20 @@ func Compose(settings *Settings, repoNames []string, gh string) (*Composition, e
 		})
 		bindings[BrokerService] = brokerBinding()
 	}
-	var userKits []Kit
-	for _, entry := range settings.kits {
-		kit, err := parseKit(entry, settings.Home, "config")
-		if err != nil {
-			return nil, err
-		}
-		userKits = append(userKits, kit)
+	if err := addKits(&userKits, settings.kits, settings.Home, "config"); err != nil {
+		return nil, err
 	}
 
-	if gh != "" {
+	for _, name := range agentNames {
+		for service, binding := range agents[name].bindings {
+			if _, set := bindings[service]; !set {
+				bindings[service] = binding
+			}
+		}
+	}
+	if selection.Gh != "" && contains(agentNames, "copilot") {
 		if _, set := secrets["copilot"]; !set {
-			secrets["copilot"] = map[string]any{"command": ShellQuote(gh) + " auth token"}
+			secrets["copilot"] = map[string]any{"command": ShellQuote(selection.Gh) + " auth token"}
 		}
 	}
 	if info, err := os.Stat(settings.ReadonlyToken()); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
@@ -430,6 +461,7 @@ func Compose(settings *Settings, repoNames []string, gh string) (*Composition, e
 
 	composition := &Composition{
 		Base:        Kit{Source: DefaultBase},
+		Agents:      agentNames,
 		AWSProfiles: profiles,
 		AWSRegion:   region,
 		Secrets:     secrets,
@@ -438,11 +470,96 @@ func Compose(settings *Settings, repoNames []string, gh string) (*Composition, e
 	if base != nil {
 		composition.Base = *base
 	}
-	composition.Kits = append(append(append(agents, core...), kitList...), userKits...)
-	for _, pack := range settings.Packs {
+	for _, group := range [][]Kit{agentKits, core, packKits, repoKits, userKits} {
+		composition.Kits = append(composition.Kits, group...)
+	}
+	for _, pack := range active {
 		composition.Packs = append(composition.Packs, pack.Name)
 	}
 	return composition, nil
+}
+
+// activePacks returns the installed packs this sandbox asked for, by --pack,
+// by the repository's config or by a [[repos]] match, followed by packs given
+// as a directory on the command line.
+func activePacks(settings *Settings, selection Selection) ([]Pack, error) {
+	installed := map[string]bool{}
+	var names []string
+	for _, pack := range settings.Packs {
+		installed[pack.Name] = true
+		names = append(names, pack.Name)
+	}
+	installedList := strings.Join(names, ", ")
+	if installedList == "" {
+		installedList = "none"
+	}
+	wanted := map[string]bool{}
+	var adhoc []Pack
+	for _, ref := range selection.Packs {
+		if looksLikeName(strings.ReplaceAll(ref, ".", "")) && !strings.HasPrefix(ref, ".") {
+			if !installed[ref] {
+				return nil, errorf("--pack %s: no installed pack has that name (installed: %s); pass the pack's directory or add it to packs in config.toml", ref, installedList)
+			}
+			wanted[ref] = true
+			continue
+		}
+		pack, err := LoadPack(ExpandUser(ref))
+		if err != nil {
+			return nil, err
+		}
+		adhoc = append(adhoc, *pack)
+	}
+	if repo := selection.Repo; repo != nil {
+		for _, name := range repo.packs {
+			if !installed[name] {
+				return nil, errorf("%s asks for pack %s, which is not installed (installed: %s); add its directory to packs in ~/.scoring-stage/config.toml", repo.Path, name, installedList)
+			}
+			wanted[name] = true
+		}
+	}
+	var active []Pack
+	seen := map[string]string{}
+	for _, pack := range settings.Packs {
+		matched := false
+		for _, r := range pack.repos {
+			matched = matched || matchesAny(selection.RepoNames, r.patterns)
+		}
+		if wanted[pack.Name] || matched {
+			active = append(active, pack)
+			seen[pack.Name] = pack.Path
+		}
+	}
+	for _, pack := range adhoc {
+		if path, taken := seen[pack.Name]; taken {
+			if path == pack.Path {
+				continue
+			}
+			return nil, errorf("--pack %s is named %s, like the installed pack at %s", pack.Path, pack.Name, path)
+		}
+		active = append(active, pack)
+		seen[pack.Name] = pack.Path
+	}
+	return active, nil
+}
+
+func parseAgent(entry any, dir, owner string) (Kit, error) {
+	if name, ok := entry.(string); ok && looksLikeName(name) {
+		spec, known := agents[name]
+		if !known {
+			return Kit{}, errorf("%s: unknown agent %s (known: %s, or a kit reference)", owner, name, strings.Join(AgentNames(), ", "))
+		}
+		return Kit{Source: spec.kit}, nil
+	}
+	return parseKit(entry, dir, owner)
+}
+
+func containsKit(kits []Kit, kit Kit) bool {
+	for _, existing := range kits {
+		if existing.Equal(kit) {
+			return true
+		}
+	}
+	return false
 }
 
 func parseKit(entry any, baseDir, owner string) (Kit, error) {
@@ -675,4 +792,45 @@ func FindGh() string {
 		return ""
 	}
 	return path
+}
+
+func (s *Settings) AgentEntries() []string {
+	var entries []string
+	for _, entry := range s.agents {
+		entries = append(entries, fmt.Sprint(entry))
+	}
+	return entries
+}
+
+// SaveAgents writes agents as the first line of config.toml, where a
+// top-level key stays outside any table.
+func SaveAgents(home string, names []string) error {
+	for _, name := range names {
+		if !IsAgentName(name) {
+			return errorf("unknown agent %s (known: %s)", name, strings.Join(AgentNames(), ", "))
+		}
+	}
+	path := filepath.Join(home, "config.toml")
+	existing, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if len(existing) > 0 {
+		data, err := readTOML(path)
+		if err != nil {
+			return err
+		}
+		if _, set := data["agents"]; set {
+			return errorf("%s already sets agents; edit it there", path)
+		}
+	}
+	quoted := make([]string, len(names))
+	for i, name := range names {
+		quoted[i] = `"` + name + `"`
+	}
+	line := "agents = [" + strings.Join(quoted, ", ") + "]\n"
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, append([]byte(line), existing...), 0o600)
 }
