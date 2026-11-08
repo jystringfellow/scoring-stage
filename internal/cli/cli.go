@@ -57,11 +57,12 @@ func New() *App {
 }
 
 type Task struct {
-	Slug       string `json:"slug"`
-	Sandbox    string `json:"sandbox"`
-	RepoDir    string `json:"repo_dir"`
-	GitHubRepo string `json:"github_repo"`
-	SourceRepo string `json:"source_repo"`
+	Slug       string   `json:"slug"`
+	Sandbox    string   `json:"sandbox"`
+	RepoDir    string   `json:"repo_dir"`
+	GitHubRepo string   `json:"github_repo"`
+	SourceRepo string   `json:"source_repo"`
+	Agents     []string `json:"agents,omitempty"`
 }
 
 const usage = `usage: stage <command> [options]
@@ -73,6 +74,7 @@ commands:
   broker start|stop|status|serve    manage the host AWS credential broker
   up <repo> <slug> [options]        create a sandbox for a repository
   shell <slug>                      open a login shell in the repository
+  login <slug>                      save the sandbox's copyable agent logins (copy_logins) for future sandboxes
   exec <slug> -- <command> [args]   run a command in the repository
   ship <slug> [--ref R] [--branch B] [--pr]
                                     push the sandbox's commit to agent/<slug>/<sha> from the host
@@ -88,7 +90,7 @@ func (a *App) Main(args []string) int {
 	}
 	commands := map[string]func([]string, string) (int, error){
 		"setup": a.cmdSetup, "broker": a.cmdBroker, "up": a.cmdUp, "shell": a.cmdShell,
-		"exec": a.cmdExec, "ship": a.cmdShip, "list": a.cmdList, "down": a.cmdDown,
+		"exec": a.cmdExec, "ship": a.cmdShip, "list": a.cmdList, "down": a.cmdDown, "login": a.cmdLogin,
 	}
 	name := args[0]
 	if name == "-h" || name == "--help" || name == "help" {
@@ -470,7 +472,7 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	task := Task{Slug: slug, Sandbox: sandbox, RepoDir: config.Resolve(scratch), GitHubRepo: github, SourceRepo: repo}
+	task := Task{Slug: slug, Sandbox: sandbox, RepoDir: config.Resolve(scratch), GitHubRepo: github, SourceRepo: repo, Agents: composition.Agents}
 	if err := writeTask(task, directory); err != nil {
 		return 0, err
 	}
@@ -490,6 +492,7 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	if err := sbx.Run("env", "create", "--force", "--no-input", directory); err != nil {
 		return 0, errorf("%s; run `stage down %s` to clean up", err, slug)
 	}
+	a.restoreLogins(settings, &task)
 	a.say("%s is up: %s at %s", sandbox, github, task.RepoDir)
 	var handles []string
 	for _, kit := range composition.AllKits() {
@@ -662,6 +665,13 @@ func (a *App) cmdDown(args []string, home string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	if task, taskErr := loadTask(home, slug); taskErr == nil && existing[sandbox] {
+		if settings, err := config.LoadSettings(home); err == nil && len(copiedAgents(settings, task)) > 0 {
+			if err := a.saveLogins(settings, task); err != nil {
+				a.warn("did not save logins: %s", err)
+			}
+		}
+	}
 	_, envErr := os.Stat(filepath.Join(directory, "sbxenv.yaml"))
 	switch {
 	case envErr == nil && existing[sandbox]:
@@ -680,4 +690,86 @@ func (a *App) cmdDown(args []string, home string) (int, error) {
 	}
 	a.say("%s removed", sandbox)
 	return 0, nil
+}
+
+func copiedAgents(settings *config.Settings, task *Task) []string {
+	var copied []string
+	for _, agent := range task.Agents {
+		if settings.CopiesLogin(agent) {
+			copied = append(copied, agent)
+		}
+	}
+	return copied
+}
+
+func (a *App) restoreLogins(settings *config.Settings, task *Task) {
+	for _, agent := range copiedAgents(settings, task) {
+		file, err := os.Open(settings.SavedLogin(agent))
+		if err != nil {
+			a.say("no saved %s login yet: sign in with %s in `stage shell %s`, then run `stage login %s`", agent, agent, task.Slug, task.Slug)
+			continue
+		}
+		err = sbx.Feed(file, "exec", "-i", "-u", "agent", task.Sandbox, "sh", "-c",
+			`umask 077 && mkdir -p "$(dirname "$1")" && cat > "$1"`, "sh", config.LoginFile(agent))
+		file.Close()
+		if err != nil {
+			a.warn("could not copy the saved %s login into %s: %s", agent, task.Sandbox, err)
+			continue
+		}
+		a.say("copied the saved %s login into %s", agent, task.Sandbox)
+	}
+}
+
+func (a *App) saveLogins(settings *config.Settings, task *Task) error {
+	for _, agent := range copiedAgents(settings, task) {
+		content, err := sbx.Output("exec", "-u", "agent", task.Sandbox, "cat", config.LoginFile(agent))
+		if err != nil || strings.TrimSpace(content) == "" {
+			return errorf("%s has no %s login yet; sign in with %s in `stage shell %s` first", task.Sandbox, agent, agent, task.Slug)
+		}
+		if err := writePrivate(settings.SavedLogin(agent), content); err != nil {
+			return err
+		}
+		a.say("saved the %s login to %s", agent, settings.SavedLogin(agent))
+	}
+	return nil
+}
+
+func (a *App) cmdLogin(args []string, home string) (int, error) {
+	fs := a.newFlags("login", "<slug>")
+	positional, err := fs.parse(args, "slug")
+	if err != nil {
+		return 0, err
+	}
+	task, err := loadTask(home, positional[0])
+	if err != nil {
+		return 0, err
+	}
+	settings, err := config.LoadSettings(home)
+	if err != nil {
+		return 0, err
+	}
+	if len(copiedAgents(settings, task)) == 0 {
+		return 0, errorf("%s has no agent listed in copy_logins in %s", task.Sandbox, filepath.Join(home, "config.toml"))
+	}
+	return 0, a.saveLogins(settings, task)
+}
+
+func writePrivate(path, content string) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(dir, ".login-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(temporary.Name())
+	_, writeErr := temporary.WriteString(content)
+	if err := errors.Join(writeErr, temporary.Close()); err != nil {
+		return err
+	}
+	return os.Rename(temporary.Name(), path)
 }

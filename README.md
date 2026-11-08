@@ -41,6 +41,7 @@ stage shell fix-login                # login shell in the repository; run claude
 stage exec fix-login -- git log -1
 stage ship fix-login [--pr]          # push the sandbox's HEAD to agent/fix-login/<sha> from the host
 stage list
+stage login fix-login                # save the sandbox's agy login for future sandboxes (copy_logins)
 stage down fix-login                 # remove the sandbox, its scoped secrets and the scratch clone
 stage broker start|stop|status       # the AWS broker (up starts it when a sandbox needs it)
 stage broker serve                   # run the broker in the foreground
@@ -62,9 +63,7 @@ clone, so ship anything you want to keep first.
    token (Contents, Metadata and Pull requests: read) and save it as
    `~/.scoring-stage/secrets/github-readonly-token` (mode 600). Pushes are refused at the proxy either way, but only
    a read-only token stops API writes such as comments or merges.
-3. **Agent logins.** Copilot uses a per-sandbox secret from `gh auth token`. Codex can log in on the host with
-   `sbx secret set openai --oauth`. Claude Code logs in from inside the sandbox; the proxy keeps the real token on
-   the host.
+3. **Agent logins.** See [Agent logins](#agent-logins).
 
 ## What a sandbox gets
 
@@ -84,13 +83,37 @@ each with its own egress and credentials:
 | `claude` | `docker.io/sbx/claude-mixin` | `anthropic` (OAuth) |
 | `codex` | `docker.io/sbx/codex-mixin` | `openai` (OAuth) |
 | `copilot` | `docker.io/sbx/copilot-mixin` | `copilot`, from `gh auth token` |
-| `agy` | `docker.io/sbx/antigravity-mixin` | none; sign in to Google inside the sandbox |
+| `agy` | `docker.io/sbx/antigravity-mixin` | none; see [Agent logins](#agent-logins) |
 
 A kit reference works wherever a name does, for another agent or another version of one of these.
 
 The `github` binding, an agent's bindings and, with AWS, `stage-broker` are written to sbx's
 `~/.config/sbx/credentials.yaml`. A binding approves a service's credential on named domains, capped by what the
 kits declare. Bindings are shared by every sandbox, so `stage down` leaves them in place.
+
+## Agent logins
+
+| Agent | Sign-in | Where the token lives |
+| --- | --- | --- |
+| `copilot` | Nothing to do: a per-sandbox secret runs `gh auth token` | Host |
+| `codex` | `sbx secret set openai --oauth` on the host | Host; the proxy holds it |
+| `claude` | Run `claude` in the sandbox and choose a login method | Host; the proxy holds it |
+| `agy` | Run `agy` in the sandbox and complete Google's sign-in | **Inside the sandbox** |
+
+Docker's Antigravity kit has no proxy-managed Google sign-in, so agy's token is a file in the sandbox
+(`~/.gemini/antigravity-cli/antigravity-oauth-token`) that the agent can read. Choose one of:
+
+- **Sign in per sandbox** (the default). The token exists only in that sandbox and goes away with `stage down`;
+  each new sandbox needs a new sign-in.
+- **Copy one sign-in into every sandbox.** Add `copy_logins = ["agy"]` to `~/.scoring-stage/config.toml`, sign in
+  once in `stage shell`, then run `stage login <slug>`. stage keeps the token in
+  `~/.scoring-stage/logins/agy/` (mode 600), copies it into each new sandbox that has agy, and saves it again on
+  `stage down` so a refreshed token is kept. Every sandbox with agy then holds a live copy of your Google sign-in.
+
+The kit also has a Gemini API-key mode that would keep a key on the host: a `google` secret plus
+`[bindings.google]` with `apiKey = { domains = ["generativelanguage.googleapis.com"] }` in your config. It uses the
+Gemini API and the key's project billing rather than your Google account's Antigravity access, and has not been
+tested with stage.
 
 ## Configuration and packs
 

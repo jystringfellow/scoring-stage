@@ -491,3 +491,23 @@ func TestTwoInstalledPacksCannotShareAName(t *testing.T) {
 	_, err := LoadSettings(home)
 	expectError(t, err, "are both named org")
 }
+
+func TestOnlyAgentsWithAnInSandboxLoginCanBeCopied(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "copy_logins = [\"agy\"]\n")
+	settings := load(t, home)
+	if !settings.CopiesLogin("agy") || settings.CopiesLogin("claude") {
+		t.Fatal("copy_logins not honoured")
+	}
+	if got := settings.SavedLogin("agy"); got != filepath.Join(home, "logins", "agy", "antigravity-oauth-token") {
+		t.Errorf("saved login path %s", got)
+	}
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "copy_logins = [\"claude\"]\n")
+	_, err := LoadSettings(home)
+	expectError(t, err, "copy_logins: claude cannot be copied (copyable: agy)")
+
+	repoDir := t.TempDir()
+	testutil.WriteFile(t, filepath.Join(repoDir, RepoConfigPath), "copy_logins = [\"agy\"]\n")
+	_, err = LoadRepoConfig(repoDir)
+	expectError(t, err, "a repository cannot set copy_logins")
+}

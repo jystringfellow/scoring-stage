@@ -34,7 +34,7 @@ func domains(kind string, hosts ...string) map[string]any {
 }
 
 var (
-	userKeys      = []string{"packs", "base", "agents", "kits", "aws", "secrets", "bindings", "ship"}
+	userKeys      = []string{"packs", "base", "agents", "copy_logins", "kits", "aws", "secrets", "bindings", "ship"}
 	packKeys      = []string{"name", "description", "base", "agents", "kits", "aws", "secrets", "bindings", "repos"}
 	repoMatchKeys = []string{"match", "agents", "kits", "aws"}
 	awsKeys       = []string{"profiles", "region"}
@@ -107,15 +107,16 @@ type Pack struct {
 }
 
 type Settings struct {
-	Home     string
-	Packs    []Pack
-	base     any
-	agents   []any
-	kits     []any
-	aws      aws
-	secrets  map[string]any
-	bindings map[string]any
-	prFooter string
+	Home       string
+	Packs      []Pack
+	base       any
+	agents     []any
+	kits       []any
+	aws        aws
+	secrets    map[string]any
+	bindings   map[string]any
+	prFooter   string
+	copyLogins []string
 }
 
 func (s *Settings) ReadonlyToken() string {
@@ -123,6 +124,13 @@ func (s *Settings) ReadonlyToken() string {
 }
 
 func (s *Settings) PRFooter() string { return s.prFooter }
+
+func (s *Settings) CopiesLogin(agent string) bool { return contains(s.copyLogins, agent) }
+
+// SavedLogin is the host copy of an agent's in-sandbox sign-in.
+func (s *Settings) SavedLogin(agent string) string {
+	return filepath.Join(s.Home, "logins", agent, filepath.Base(LoginFile(agent)))
+}
 
 func (s *Settings) CoreKits() string { return kits.Dir(s.Home) }
 
@@ -174,6 +182,14 @@ func LoadSettings(home string) (*Settings, error) {
 				return nil, errorf("%s [ship]: pr_footer must be a string", path)
 			}
 			settings.prFooter = text
+		}
+	}
+	if settings.copyLogins, err = optionalStrings(data, "copy_logins", path); err != nil {
+		return nil, err
+	}
+	for _, agent := range settings.copyLogins {
+		if !contains(copyableAgents(), agent) {
+			return nil, errorf("%s: copy_logins: %s cannot be copied (copyable: %s); claude, codex and copilot sign in through the proxy", path, agent, strings.Join(copyableAgents(), ", "))
 		}
 	}
 	packPaths, err := optionalStrings(data, "packs", path)

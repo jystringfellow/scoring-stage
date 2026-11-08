@@ -31,6 +31,15 @@ kits) or that the user has already accepted (installed packs, by name). Secrets 
 and AWS profiles hand out credentials, and a pack location would let a repository supply its own host commands, so
 those stay with the user and the packs they install.
 
+## Logins the proxy cannot hold
+
+Claude Code, Codex and Copilot sign in through credentials the proxy keeps on the host. Docker's Antigravity kit
+declares only an optional Gemini API key, so an agy sign-in is a token file inside the sandbox. `copy_logins` is the
+opt-in exception to credentials staying on the host: stage saves that file from a sandbox (`stage login`, and again
+on `stage down` to keep a refreshed token) and copies it into new ones through `sbx exec -i`, so it never appears on
+a command line or in the env file. It applies only to agents with a known login file, and only from the user's
+config.
+
 ## One binary
 
 `stage` is written in Go so it installs as one binary, like `sbx`. sbx accepts local kits only as directories, so

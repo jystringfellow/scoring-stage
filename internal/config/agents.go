@@ -8,6 +8,7 @@ import (
 type agentSpec struct {
 	kit      string
 	bindings map[string]any
+	login    string
 }
 
 var CopilotHosts = []string{
@@ -18,9 +19,9 @@ var CopilotHosts = []string{
 	"copilot.github.com",
 }
 
-// Agents maps the short agent names to Docker's published mixins and the
-// credential bindings each needs. agy signs in from inside the sandbox, so it
-// needs no binding.
+// agents maps the short agent names to Docker's published mixins and the
+// credential bindings each needs. agy signs in to Google inside the sandbox and
+// keeps the token in login, a file stage can copy between sandboxes.
 var agents = map[string]agentSpec{
 	"claude": {
 		kit:      "docker.io/sbx/claude-mixin:2.1.319",
@@ -35,7 +36,8 @@ var agents = map[string]agentSpec{
 		bindings: map[string]any{"copilot": domains("apiKey", CopilotHosts...)},
 	},
 	"agy": {
-		kit: "docker.io/sbx/antigravity-mixin:1.0.0",
+		kit:   "docker.io/sbx/antigravity-mixin:1.0.0",
+		login: "/home/agent/.gemini/antigravity-cli/antigravity-oauth-token",
 	},
 }
 
@@ -75,4 +77,20 @@ func repositoryOf(source string) string {
 	last, _, _ = strings.Cut(last, "@")
 	last, _, _ = strings.Cut(last, ":")
 	return head + last
+}
+
+// LoginFile is where an agent keeps a sign-in inside the sandbox, for agents
+// whose sign-in the proxy cannot hold on the host.
+func LoginFile(agent string) string {
+	return agents[agent].login
+}
+
+func copyableAgents() []string {
+	var names []string
+	for _, name := range AgentNames() {
+		if agents[name].login != "" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
