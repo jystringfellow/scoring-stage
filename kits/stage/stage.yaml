@@ -12,7 +12,7 @@ capabilities:
     config:
       runtime:
         deny:
-          - hosts: ["**"]
+          - hosts: ["**:443", "**:80"]
             methods: [POST]
             paths: ["/**/git-receive-pack"]
 

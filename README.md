@@ -73,7 +73,7 @@ Nothing you did not choose. Every sandbox gets:
 | Kit | Purpose |
 | --- | --- |
 | `docker.io/sbx/shell` | Debian base with git, gh, curl, jq, Python and Docker |
-| [`kits/stage`](kits/stage/stage.yaml) | Refuses `POST /**/git-receive-pack` on every host, sets your git identity, tells the agent the rules |
+| [`kits/stage`](kits/stage/stage.yaml) | Refuses `POST /**/git-receive-pack` on ports 443 and 80 of every host, sets your git identity, tells the agent the rules |
 | [`kits/aws-broker`](kits/aws-broker/aws-broker.yaml) | Only when AWS profiles are configured: `~/.aws/config` with a `credential_process` per profile |
 
 plus the agents chosen by your config, the repository, a book or `--agent`. Agents are Docker's published mixins,
