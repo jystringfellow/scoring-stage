@@ -167,7 +167,7 @@ func summarizeBook(book Book) []string {
 	for _, service := range sortedKeys(book.secrets) {
 		if table, ok := book.secrets[service].(map[string]any); ok {
 			if command, ok := table["command"].(string); ok {
-				details = append(details, fmt.Sprintf("host command for secret %s: %s", service, command))
+				details = append(details, fmt.Sprintf("host command for secret %s (runs on your machine; files it reads outside the book are not covered by this approval): %s", service, command))
 				continue
 			}
 		}

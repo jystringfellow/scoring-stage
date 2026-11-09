@@ -620,7 +620,7 @@ func TestABookTheRepositoryTurnsOnNeedsApprovalButOneTheUserAsksForDoesNot(t *te
 		t.Fatalf("approvals %v, %v", approvals, err)
 	}
 	details := strings.Join(approvals[0].Details, "\n")
-	for _, want := range []string{"AWS profiles: dev", "host command for secret feed: cat "} {
+	for _, want := range []string{"AWS profiles: dev", "host command for secret feed (runs on your machine; files it reads outside the book are not covered by this approval): cat "} {
 		if !strings.Contains(details, want) {
 			t.Errorf("details lack %q:\n%s", want, details)
 		}

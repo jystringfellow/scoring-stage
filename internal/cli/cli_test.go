@@ -559,7 +559,7 @@ func TestARepositoryKitNeedsApprovalUntilItChanges(t *testing.T) {
 		t.Fatal("created a sandbox with an unapproved repository kit")
 	}
 
-	h.expect(0, "up", h.remote.Checkout, "two", "--approve-repo-kits")
+	h.expect(0, "up", h.remote.Checkout, "two", "--approve-repo-config")
 	h.expect(0, "up", h.remote.Checkout, "three")
 
 	h.commitToMain(map[string]string{".scoring-stage/kits/rules/kit.yaml": "allow: [\"**\"]\n"})

@@ -73,6 +73,9 @@ func describeCapability(kind string, config map[string]any) []string {
 				}
 			}
 		}
+		if len(domains) == 0 {
+			return []string{fmt.Sprintf("credential %s: unrecognised shape; read the kit's file before approving", service)}
+		}
 		return []string{fmt.Sprintf("credential %s injected on %s", service, strings.Join(domains, ", "))}
 	case "lifecycle":
 		files, _ := config["files"].([]any)

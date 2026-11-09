@@ -191,7 +191,7 @@ symbolic links, or a published kit pinned by digest (`registry/name@sha256:...`)
 Kits and books can widen a sandbox's network access, send credentials and run commands, so `stage up` uses the
 kits a repository adds, and the installed books it turns on, only after you approve them. It lists each one with
 what it does (network rules, credentials, host commands, AWS profiles) and asks. Without a terminal, pass
-`--approve-repo-kits` after reviewing them. An approval covers that exact content (a local kit's files, a published
+`--approve-repo-config` after reviewing them. An approval covers that exact content (a local kit's files, a published
 kit's digest and arguments, a book's files) and is kept in `~/.scoring-stage/trusted-kits`, so a change asks
 again. A book you ask for yourself, with `--book` or a `[[repos]]` rule, needs no approval.
 
