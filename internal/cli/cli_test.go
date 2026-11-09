@@ -31,7 +31,16 @@ func setup(t *testing.T) *harness {
 	t.Setenv("STAGE_HOME", given)
 	h.sbx = testutil.NewFakeSbx(t)
 	h.remote = testutil.GitHubRemote(t)
+	writeToken(t, filepath.Join(given, "secrets", "github-readonly-token"), "github_pat_readonly\n")
 	return h
+}
+
+func writeToken(t *testing.T, path, token string) {
+	t.Helper()
+	testutil.WriteFile(t, path, token)
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (h *harness) stage(args ...string) int {
@@ -222,7 +231,7 @@ aws = { profiles = ["dev", "staging"], region = "us-west-2" }
 		t.Errorf("profiles = %q", got)
 	}
 	env := testutil.ReadFile(t, filepath.Join(h.task("fix"), "sbxenv.yaml"))
-	for _, fragment := range []string{`command: "/bin/cat ` + filepath.Join(grants, "fix.token") + `"`, `profiles: "dev staging"`, `region: "us-west-2"`, `"localhost"`} {
+	for _, fragment := range []string{`command: "/bin/cat ` + filepath.Join(grants, "fix.token") + `"`, `profiles: "dev staging"`, `region: "us-west-2"`, `"localhost:9911"`} {
 		if !strings.Contains(env, fragment) {
 			t.Errorf("env lacks %s:\n%s", fragment, env)
 		}
@@ -397,6 +406,7 @@ func TestTheRecordedRepoDirIsThePathSbxIsGivenEvenThroughASymlinkedHome(t *testi
 		t.Fatal(err)
 	}
 	t.Setenv("STAGE_HOME", filepath.Join(link, "home"))
+	writeToken(t, filepath.Join(real, "home", "secrets", "github-readonly-token"), "github_pat_readonly\n")
 	h.expect(0, "up", h.remote.Checkout, "fix")
 	var task Task
 	json.Unmarshal([]byte(testutil.ReadFile(t, filepath.Join(real, "home", "tasks", "fix", "task.json"))), &task)
@@ -696,4 +706,56 @@ func TestShipRefusesAScratchCloneWhoseConfigIncludesOtherFiles(t *testing.T) {
 	h.pinGitConfig("fix")
 	h.expect(1, "ship", "fix", "--yes")
 	h.expectStderr("includes other files (include.path)")
+}
+
+func TestUpRefusesToStartWithoutAReadOnlyGitHubToken(t *testing.T) {
+	h := setup(t)
+	if err := os.Remove(filepath.Join(h.home, "secrets", "github-readonly-token")); err != nil {
+		t.Fatal(err)
+	}
+	h.expect(1, "up", h.remote.Checkout, "fix")
+	h.expectStderr("no GitHub token at " + filepath.Join(h.home, "secrets", "github-readonly-token"))
+	if h.anyCall("env create") {
+		t.Error("created a sandbox without a GitHub token")
+	}
+}
+
+func TestUpRefusesAGitHubTokenThatCanWrite(t *testing.T) {
+	h := setup(t)
+	writeToken(t, filepath.Join(h.home, "secrets", "github-readonly-token"), "gho_fromghauth\n")
+	h.expect(1, "up", h.remote.Checkout, "fix")
+	h.expectStderr("gh CLI login token (gho_)")
+}
+
+func TestUpWithGitHubNoneGivesTheSandboxNoGitHubCredential(t *testing.T) {
+	h := setup(t)
+	if err := os.Remove(filepath.Join(h.home, "secrets", "github-readonly-token")); err != nil {
+		t.Fatal(err)
+	}
+	testutil.WriteFile(t, filepath.Join(h.home, "config.toml"), "github = \"none\"\n")
+	h.expect(0, "up", h.remote.Checkout, "fix")
+	if env := testutil.ReadFile(t, filepath.Join(h.task("fix"), "sbxenv.yaml")); strings.Contains(env, "github") {
+		t.Errorf("env mentions github:\n%s", env)
+	}
+}
+
+func TestUpRefusesWhileSbxHasAGlobalGitHubSecret(t *testing.T) {
+	h := setup(t)
+	h.sbx.SetSecrets(`{"secrets": [{"scope": "global", "type": "service", "name": "github", "secret": "(stored)"}]}`)
+	h.expect(1, "up", h.remote.Checkout, "fix")
+	h.expectStderr("sbx has a global github secret")
+	h.expectStderr("sbx secret rm github -f")
+	if h.anyCall("env create") {
+		t.Error("created a sandbox that could fall back to the global github secret")
+	}
+}
+
+func TestUpFailsClosedWhenItCannotReadSbxSecrets(t *testing.T) {
+	h := setup(t)
+	h.sbx.SetSecrets(`[{"scope": "global", "type": "service", "service": "github"}]`)
+	h.expect(1, "up", h.remote.Checkout, "fix")
+	h.expectStderr("cannot read sbx secret ls --json")
+	h.sbx.SetSecrets(`{"items": []}`)
+	h.expect(1, "up", h.remote.Checkout, "fix")
+	h.expectStderr("expected a secrets list")
 }
