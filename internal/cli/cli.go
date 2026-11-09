@@ -423,7 +423,7 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	cpus := fs.intFlag("cpus", "CPUs for the sandbox")
 	memory := fs.String("memory", "", "memory for the sandbox, such as 16g")
 	allowGlobal := fs.Bool("allow-global-policy", false, "continue even if the global sbx policy has allow rules")
-	approveRepoKits := fs.Bool("approve-repo-kits", false, "approve, and remember, the kits and books the repository's config asks for")
+	approveRepoConfig := fs.Bool("approve-repo-config", false, "approve, and remember, the kits and books the repository's config asks for")
 	plan := fs.Bool("plan", false, "write the env file and show sbx's plan without creating")
 	positional, err := fs.parse(args, "repo", "slug")
 	if err != nil {
@@ -501,7 +501,7 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if err := a.checkRepoApprovals(settings.Home, composition, *approveRepoKits, *plan); err != nil {
+	if err := a.checkRepoApprovals(settings.Home, composition, *approveRepoConfig, *plan); err != nil {
 		return 0, err
 	}
 	if len(composition.Agents) == 0 {
@@ -576,7 +576,7 @@ func (a *App) checkRepoApprovals(home string, composition *config.Composition, a
 		return nil
 	}
 	if !approve && !a.confirm("Approve these for this and future sandboxes while they are unchanged?") {
-		return errorf("not approved; review them and answer y, or pass --approve-repo-kits to approve them without asking")
+		return errorf("not approved; review them and answer y, or pass --approve-repo-config to approve them without asking")
 	}
 	if err := config.Approve(home, missing); err != nil {
 		return err
