@@ -65,8 +65,9 @@ asdf tool files), `.gitmodules` and `.scoring-stage/`, unless you pass `--allow-
 branch's workflow files with the repository's secrets, and `.scoring-stage/` widens future sandboxes. Azure
 Pipelines can read YAML from any path a pipeline names, so the file check is a heuristic there; use branch policies
 so `agent/*` branches cannot trigger pipelines that hold secrets. Pushing an `agent/*` branch triggers whatever CI
-the repository runs on branch pushes, so that CI should not hold privileged secrets for unreviewed branches. `ship`
-warns about commits without a `Co-authored-by` trailer, since commits carry your git identity.
+the repository runs on branch pushes, so that CI should not hold privileged secrets for unreviewed branches: on
+GitHub, keep secrets in environments with required reviewers or deployment branch rules, or limit push triggers to
+protected branches. `ship` warns about commits without a `Co-authored-by` trailer, since commits carry your git identity.
 
 Git on the host runs with hooks and fsmonitor off. `stage up` records a hash of the scratch clone's git config
 (`.git/config`, `.git/info/` and related files) after sbx creates the sandbox, and `ship` refuses to run git there
@@ -331,8 +332,8 @@ again.
 
 Known gap: a book you turn on yourself, with `--book` or a `[[repos]]` rule, is not reviewed. Its host commands
 (such as `secrets` commands) run as code on your host, with whatever the book's files say after your last
-`git pull`. Until content-pinned book approval lands in a later release, only turn on books from repositories whose
-main branch is protected and reviewed.
+`git pull`. Until books you turn on are approved by content, only turn on books from repositories whose main branch
+is protected and reviewed.
 
 Books and both configs are decoded strictly: an unknown key is an error. Two books that set the same base,
 region, AWS default profile, secret or binding differently are an error rather than a silent winner. Your config
@@ -410,8 +411,9 @@ asks sbx, git and GitHub to do, not what they then do.
 ### Checked live on sbx 0.51.0
 
 - The sbx behaviours listed in [docs/design.md](docs/design.md#verified-on-sbx-0510), including the push refusal on
-  ports 443 and 80, non-HTTP egress passing the push deny, and the broker reachable only on `localhost:9911` with
-  its token added by the proxy.
+  ports 443 and 80 and the broker reachable only on `localhost:9911` with its token added by the proxy. The push
+  deny is limited to ports 443 and 80, so non-HTTP connections on other ports, such as SQL Server on 1433, still
+  work.
 - The first version of `tests/acceptance.sh`, run against a sandbox made with `stage up`: the repository path, that
   the claude, codex and copilot CLIs start, the git identity and agent guidance, fetching from github.com, and that
   `git push` and an unlisted host are refused. Its secret checks from that run do not count; they could pass
@@ -438,6 +440,8 @@ asks sbx, git and GitHub to do, not what they then do.
 
 ## Limitations
 
+- Books you turn on yourself, with `--book` or a `[[repos]]` rule, are not reviewed; see the known gap under
+  [Configuration and books](#configuration-and-books).
 - GraphQL writes are not refused. They share `POST /graphql` with reads, so only the token's permissions stop
   them: nothing does in `gh` mode, and stage cannot see a fine-grained token's permissions.
 - `app` mode's check sees installation permissions only. An app's account permissions (on your own user) do not
