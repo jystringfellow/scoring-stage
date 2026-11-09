@@ -68,3 +68,13 @@ func agentNamed(entry any) (string, bool) {
 	}
 	return agentFor(source)
 }
+
+func KnownStageBindings() map[string]*StageBinding {
+	known := map[string]*StageBinding{}
+	AddStageBindings(known, map[string]any{BrokerService: brokerBinding()}, "the AWS broker")
+	AddStageBindings(known, map[string]any{GitHubService: gitHubBinding()}, "[github] mode")
+	for _, name := range AgentNames() {
+		AddStageBindings(known, agents[name].bindings, "agent "+name)
+	}
+	return known
+}

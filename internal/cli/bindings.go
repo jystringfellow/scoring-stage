@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"slices"
 	"strings"
 
 	"github.com/jystringfellow/scoring-stage/internal/config"
@@ -11,9 +12,11 @@ import (
 )
 
 const (
-	bindingExpected = "expected"
-	bindingStale    = "stale"
-	bindingOther    = "other"
+	bindingExpected      = "expected"
+	bindingStale         = "stale"
+	bindingNotConfigured = "stage (not configured)"
+	bindingOther         = "other"
+	bindingUnrecognised  = "unrecognised entry"
 )
 
 func (a *App) auditBindings(expected map[string]*config.StageBinding) {
@@ -24,7 +27,7 @@ func (a *App) auditBindings(expected map[string]*config.StageBinding) {
 	bindings, err := sbx.ReadBindings(path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		a.say("global credential bindings: none (%s does not exist)", printable(path))
+		a.say("global credential bindings: not found at %s (path inferred from sbx; only $HOME/.config verified)", printable(path))
 		return
 	case err != nil:
 		a.warn("cannot audit global credential bindings: %s", printable(err.Error()))
@@ -33,28 +36,46 @@ func (a *App) auditBindings(expected map[string]*config.StageBinding) {
 		a.say("global credential bindings: none in %s", printable(path))
 		return
 	}
-	a.say("global credential bindings in %s; sbx keeps them after sandboxes are gone, and any kit that declares credential@1 for a bound service can send its secret to any domain the kit names:", printable(path))
+	secrets, secretsErr := sbx.GlobalSecrets()
+	a.say("global credential bindings in %s; sbx keeps them after sandboxes are gone. Any kit that declares credential@1 for a bound service can send "+
+		"that service's secret to any domain the kit names; outside stage sandboxes a binding is inert unless its service has a global secret:", printable(path))
+	if secretsErr != nil {
+		a.warn("cannot tell which bound services have a global secret: %s", printable(secretsErr.Error()))
+	}
+	known := config.KnownStageBindings()
 	for _, binding := range bindings {
-		mark, extra := classifyBinding(binding, expected[binding.Service])
-		fmt.Fprintf(a.Stdout, "  %s (%s): %s\n", printable(binding.Service), mark, printable(strings.Join(binding.Domains, ", ")))
-		fmt.Fprintf(a.Stdout, "    %s\n", bindingGuidance(binding, mark, extra, expected[binding.Service], path))
+		mark, reference, extra := classifyBinding(binding, expected, known)
+		global := slices.Contains(secrets, binding.Service)
+		label := mark
+		if global {
+			label += ", global secret set"
+		}
+		fmt.Fprintf(a.Stdout, "  %s (%s): %s\n", printable(binding.Service), label, printable(strings.Join(binding.Domains, ", ")))
+		fmt.Fprintf(a.Stdout, "    %s\n", bindingGuidance(binding, mark, global, extra, reference, path))
 	}
 }
 
-func classifyBinding(binding sbx.Binding, stage *config.StageBinding) (string, []string) {
-	if stage == nil {
-		return bindingOther, nil
+func classifyBinding(binding sbx.Binding, expected, known map[string]*config.StageBinding) (string, *config.StageBinding, []string) {
+	if binding.Unrecognised {
+		return bindingUnrecognised, nil, nil
+	}
+	mark, reference := bindingExpected, expected[binding.Service]
+	if reference == nil {
+		mark, reference = bindingNotConfigured, known[binding.Service]
+	}
+	if reference == nil {
+		return bindingOther, nil, nil
 	}
 	var extra []string
 	for _, domain := range binding.Domains {
-		if !containsFold(stage.Domains, domain) {
+		if !containsFold(reference.Domains, domain) {
 			extra = append(extra, domain)
 		}
 	}
 	if len(extra) > 0 {
-		return bindingStale, extra
+		return bindingStale, reference, extra
 	}
-	return bindingExpected, nil
+	return mark, reference, nil
 }
 
 func containsFold(list []string, value string) bool {
@@ -66,17 +87,25 @@ func containsFold(list []string, value string) bool {
 	return false
 }
 
-func bindingGuidance(binding sbx.Binding, mark string, extra []string, stage *config.StageBinding, path string) string {
+func bindingGuidance(binding sbx.Binding, mark string, global bool, extra []string, reference *config.StageBinding, path string) string {
 	service := printable(binding.Service)
 	file := printable(path)
 	switch mark {
+	case bindingUnrecognised:
+		return fmt.Sprintf("stage cannot read this entry's domains; inspect the %s entry in %s", service, file)
 	case bindingExpected:
-		return fmt.Sprintf("stage binds this for %s; run only kits you trust with the %s credential", strings.Join(stage.Reasons, ", "), service)
+		return fmt.Sprintf("stage binds this for %s; run only kits you trust with the %s credential", strings.Join(reference.Reasons, ", "), service)
+	case bindingNotConfigured:
+		return fmt.Sprintf("stage binds this when you use %s; remove it only if you no longer do", strings.Join(reference.Reasons, " or "))
 	case bindingStale:
 		return fmt.Sprintf("stage binds only %s for %s; sbx never drops a binding domain, so delete %s from the %s entry in %s by hand",
-			strings.Join(stage.Domains, ", "), strings.Join(stage.Reasons, ", "), printable(strings.Join(extra, ", ")), service, file)
-	default:
-		return fmt.Sprintf("stage does not bind this; if nothing needs it, delete the %s entry from %s by hand, or `sbx secret rm %s` to drop the global secret it injects "+
-			"(never `sbx env rm --prune-bindings` a stage sandbox: it removes shared entries machine-wide)", service, file, printable(config.ShellQuote(binding.Service)))
+			strings.Join(reference.Domains, ", "), strings.Join(reference.Reasons, ", "), printable(strings.Join(extra, ", ")), service, file)
 	}
+	remove := fmt.Sprintf("if nothing needs it, delete the %s entry from %s by hand", service, file)
+	prune := "(never `sbx env rm --prune-bindings` a stage sandbox: it removes shared entries machine-wide)"
+	if global {
+		return fmt.Sprintf("`sbx secret rm %s` removes the global secret any kit can send anywhere; stage does not bind this, so %s %s",
+			printable(config.ShellQuote(binding.Service)), remove, prune)
+	}
+	return fmt.Sprintf("stage does not bind this; %s %s", remove, prune)
 }
