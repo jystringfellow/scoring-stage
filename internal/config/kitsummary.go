@@ -72,18 +72,103 @@ func loadKit(dir string) ([]kitDocument, error) {
 		}
 		decoder := yaml.NewDecoder(bytes.NewReader(content))
 		for {
-			var spec kitSpec
-			err := decoder.Decode(&spec)
+			var raw any
+			err := decoder.Decode(&raw)
 			if errors.Is(err, io.EOF) {
 				break
 			}
 			if err != nil {
 				return nil, errorf("kit %s: %s is unreadable: %v", dir, relative, err)
 			}
+			if err := checkKitKeys(raw); err != nil {
+				return nil, errorf("kit %s: %s: %v", dir, relative, err)
+			}
+			var spec kitSpec
+			if err := convert(raw, &spec); err != nil {
+				return nil, errorf("kit %s: %s is unreadable: %v", dir, relative, err)
+			}
 			documents = append(documents, kitDocument{file: relative, spec: spec})
 		}
 	}
 	return documents, nil
+}
+
+func convert(raw any, target any) error {
+	encoded, err := yaml.Marshal(raw)
+	if err != nil {
+		return err
+	}
+	return yaml.Unmarshal(encoded, target)
+}
+
+func refuseCaseVariants(table map[string]any, known []string, where string) error {
+	for key := range table {
+		for _, name := range known {
+			if key != name && strings.EqualFold(key, name) {
+				return errorf("%s: key %q differs from %q only in case", where, Printable(key), name)
+			}
+		}
+	}
+	return nil
+}
+
+func checkKitKeys(raw any) error {
+	if raw == nil {
+		return nil
+	}
+	top, ok := raw.(map[string]any)
+	if !ok {
+		return errorf("a kit document must be a mapping")
+	}
+	if err := refuseCaseVariants(top, []string{"capabilities", "extends"}, "kit"); err != nil {
+		return err
+	}
+	capabilities, _ := top["capabilities"].([]any)
+	for index, entry := range capabilities {
+		where := fmt.Sprintf("capabilities[%d]", index)
+		capability, ok := entry.(map[string]any)
+		if !ok {
+			return errorf("%s must be a mapping", where)
+		}
+		if err := refuseCaseVariants(capability, []string{"type", "config"}, where); err != nil {
+			return err
+		}
+		kind, _ := capability["type"].(string)
+		if capabilityName(kind) != "credential" {
+			continue
+		}
+		config, _ := capability["config"].(map[string]any)
+		if err := refuseCaseVariants(config, []string{"service"}, where+".config"); err != nil {
+			return err
+		}
+		for name, value := range config {
+			table, ok := value.(map[string]any)
+			if !ok {
+				continue
+			}
+			if err := refuseCaseVariants(table, []string{"inject"}, where+".config."+name); err != nil {
+				return err
+			}
+			injects, ok := table["inject"].([]any)
+			if table["inject"] != nil && !ok {
+				return errorf("%s.config.%s.inject must be a list", where, name)
+			}
+			for position, inject := range injects {
+				entryWhere := fmt.Sprintf("%s.config.%s.inject[%d]", where, name, position)
+				fields, ok := inject.(map[string]any)
+				if !ok {
+					return errorf("%s must be a mapping", entryWhere)
+				}
+				if err := refuseCaseVariants(fields, []string{"domain"}, entryWhere); err != nil {
+					return err
+				}
+				if domain, ok := fields["domain"].(string); !ok || strings.TrimSpace(domain) == "" {
+					return errorf("%s has no domain string", entryWhere)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 var knownCapabilities = []string{"network-policy", "credential", "lifecycle", "agent-context", "host-mount"}
@@ -167,6 +252,9 @@ func checkUntrustedKit(dir, owner string, owned map[string]any) error {
 				return errorf("%s: credential %s has no inject domains stage recognises", where, service)
 			}
 			for _, domain := range domains {
+				if hasDomainGlob(domain) {
+					return errorf("%s: credential %s is injected on %s; %s", where, service, Printable(domain), domainGlobReason)
+				}
 				if ReachesReserved(domain) {
 					return errorf("%s: credential %s is injected on %s, a host a reserved service uses; %s", where, service, Printable(domain), reservedReason())
 				}

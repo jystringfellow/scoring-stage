@@ -107,3 +107,6 @@ sandbox, and stay usable until they expire; signing requests at the proxy instea
   access token before it expires.
 - `workspace.clone` keeping the sandbox's `.git` writes out of the host scratch clone. `tests/acceptance.sh` checks
   it, but has no recorded run since that check was added.
+- sbx's kit loader: which files it reads from a kit directory, and whether it matches keys case-insensitively. stage
+  checks `.yaml`, `.yml` and `.json` files at any depth except under `files/`, and refuses keys that differ from
+  `capabilities`, `extends`, `type`, `config`, `service`, `inject` or `domain` only in case.

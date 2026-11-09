@@ -507,3 +507,58 @@ func TestTheMindbodyDotnetBookShapeStillLoads(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestKitKeysThatDifferOnlyInCaseAreRefused(t *testing.T) {
+	good := credentialKit("feed", "pkgs.example.com")
+	for name, c := range map[string]struct{ kit, message string }{
+		"top-level capabilities": {strings.Replace(good, "capabilities:", "Capabilities:", 1), `key "Capabilities" differs from "capabilities" only in case`},
+		"top-level extends":      {"Extends: docker.io/sbx/claude-mixin:2.1.319\n", `key "Extends" differs from "extends" only in case`},
+		"capability type":        {good + "  - Type: com.docker.sandbox/credential@1\n    config: {service: anthropic}\n", `key "Type" differs from "type" only in case`},
+		"capability config":      {strings.Replace(good, "    config:", "    Config:", 1), `key "Config" differs from "config" only in case`},
+		"credential service":     {strings.Replace(good, "service: feed", "service: feed\n      SERVICE: anthropic", 1), `key "SERVICE" differs from "service" only in case`},
+		"inject":                 {strings.Replace(good, "inject:", "Inject:", 1), `key "Inject" differs from "inject" only in case`},
+		"inject domain":          {strings.Replace(good, "{domain: pkgs.example.com", "{domain: pkgs.example.com, Domain: api.anthropic.com", 1), `key "Domain" differs from "domain" only in case`},
+	} {
+		_, err := LoadBook(bookWithKit(t, map[string]string{"kit.yaml": c.kit}))
+		if err == nil || !strings.Contains(err.Error(), c.message) {
+			t.Errorf("%s: error %v, want %q", name, err, c.message)
+		}
+	}
+}
+
+func TestAnInjectEntryWithoutADomainStringIsRefused(t *testing.T) {
+	for name, entry := range map[string]string{
+		"capitalised":  "{Domain: x.example.com, header: Authorization}",
+		"plural":       "{domains: [x.example.com], header: Authorization}",
+		"not a string": "{domain: [x.example.com], header: Authorization}",
+		"empty":        "{domain: \"\", header: Authorization}",
+		"not a table":  "x.example.com",
+	} {
+		kit := "capabilities:\n  - type: com.docker.sandbox/credential@1\n    config:\n      service: feed\n      apiKey:\n        inject:\n          - {domain: pkgs.example.com}\n          - " + entry + "\n"
+		_, err := LoadBook(bookWithKit(t, map[string]string{"kit.yaml": kit}))
+		if err == nil || !strings.Contains(err.Error(), "inject[1]") {
+			t.Errorf("%s: error %v", name, err)
+		}
+	}
+}
+
+func TestAGlobDomainIsRefusedForItsGlobNotAsAReservedHost(t *testing.T) {
+	const reason = "glob characters other than * are refused because stage cannot tell which hosts they match"
+	for _, domain := range []string{"pkgs.[a-z].example", "pkgs?.example.com", "{a,b}.example.com"} {
+		home := filepath.Join(t.TempDir(), "home")
+		testutil.WriteFile(t, filepath.Join(home, "config.toml"), "[bindings.feed]\napiKey = { domains = [\""+domain+"\"] }\n")
+		_, err := LoadSettings(home)
+		expectError(t, err, "binding feed covers "+domain+"; "+reason)
+
+		_, err = LoadBook(book(t, t.TempDir(), "org", feedSecret+"[bindings.feed]\napiKey = { domains = [\""+domain+"\"] }\n"))
+		expectError(t, err, "binding feed covers "+domain+"; "+reason)
+
+		_, err = LoadBook(bookWithKit(t, map[string]string{"kit.yaml": credentialKit("feed", `"`+domain+`"`)}))
+		expectError(t, err, "credential feed is injected on "+domain+"; "+reason)
+		for _, misleading := range []string{"reserved service", "GitHub credentials"} {
+			if strings.Contains(err.Error(), misleading) {
+				t.Errorf("%s: error reads as a reserved host: %v", domain, err)
+			}
+		}
+	}
+}
