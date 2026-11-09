@@ -174,7 +174,12 @@ func summarizeBook(book Book) []string {
 		details = append(details, "secret "+service)
 	}
 	for _, service := range sortedKeys(book.bindings) {
-		details = append(details, fmt.Sprintf("credential %s sent to %s", service, strings.Join(domainsOf(book.bindings[service]), ", ")))
+		domains, err := bindingDomains(book.bindings[service])
+		if err != nil {
+			details = append(details, fmt.Sprintf("credential %s: unrecognised binding; read the book before approving", service))
+			continue
+		}
+		details = append(details, fmt.Sprintf("credential %s sent to %s", service, strings.Join(domains, ", ")))
 	}
 	for _, entry := range book.kits {
 		kit, err := parseKit(entry, book.Path, "book "+book.Name)
@@ -193,17 +198,4 @@ func summarizeBook(book Book) []string {
 		details = append(details, fmt.Sprintf("%d per-repository rule(s)", len(book.repos)))
 	}
 	return details
-}
-
-func domainsOf(binding any) []string {
-	var found []string
-	kinds, _ := binding.(map[string]any)
-	for _, kind := range kinds {
-		table, _ := kind.(map[string]any)
-		list, _ := asList(table["domains"])
-		for _, domain := range list {
-			found = append(found, fmt.Sprint(domain))
-		}
-	}
-	return found
 }

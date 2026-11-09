@@ -395,13 +395,16 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 	} else {
 		a.warn("gh is missing or not logged in; Copilot will be unauthenticated")
 	}
-	if info, err := os.Stat(settings.ReadonlyToken()); err == nil && info.Mode().IsRegular() {
-		if err := os.Chmod(settings.ReadonlyToken(), 0o600); err != nil {
-			return 0, err
-		}
-		a.say("github read-only token: %s", settings.ReadonlyToken())
-	} else {
-		a.say("github read-only token: none at %s (boxes use the global sbx github secret, if any)", settings.ReadonlyToken())
+	switch tokenErr := settings.CheckGitHubToken(); {
+	case settings.GitHubAccess() == config.GitHubNone:
+		a.say("github: none (github = %q in config.toml; sandboxes get no GitHub credential)", config.GitHubNone)
+	case tokenErr != nil:
+		a.warn("%s", tokenErr)
+	default:
+		a.say("github token: %s is fine-grained. stage cannot see its permissions: keep it read-only (Contents and Metadata: read) and limited to your repositories", settings.ReadonlyToken())
+	}
+	if err := checkNoGlobalGitHubSecret(); err != nil {
+		a.warn("%s", err)
 	}
 	composition, err := config.Compose(settings, config.Selection{Gh: gh})
 	if err != nil {
@@ -455,6 +458,12 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	}
 	settings, err := config.LoadSettings(home)
 	if err != nil {
+		return 0, err
+	}
+	if err := settings.CheckGitHubToken(); err != nil {
+		return 0, err
+	}
+	if err := checkNoGlobalGitHubSecret(); err != nil {
 		return 0, err
 	}
 
@@ -599,6 +608,19 @@ func (a *App) checkRepoApprovals(home string, composition *config.Composition, a
 	}
 	for _, approval := range missing {
 		a.say("approved %s (%s); a change to it asks again", approval.Label, approval.Fingerprint[:12])
+	}
+	return nil
+}
+
+func checkNoGlobalGitHubSecret() error {
+	services, err := sbx.GlobalSecrets()
+	if err != nil {
+		return err
+	}
+	if slices.Contains(services, config.GitHubService) {
+		return errorf("sbx has a global %s secret, usually your full gh token; any sandbox with a %s binding, including one saved "+
+			"by an earlier sandbox, can fall back to it. Remove it with `sbx secret rm %s -f`; sandboxes get GitHub access "+
+			"only from %s", config.GitHubService, config.GitHubService, config.GitHubService, "the read-only token file")
 	}
 	return nil
 }
