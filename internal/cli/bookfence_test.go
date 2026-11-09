@@ -62,3 +62,46 @@ func TestABookCannotRedirectAnAgentsCredential(t *testing.T) {
 		t.Fatal("ran sbx with a book that redirects an agent credential")
 	}
 }
+
+const legacyClearedNotice = "stage now stores approvals as JSON; earlier approvals were cleared, and you'll be asked again"
+
+func TestALegacyTrustFileIsClearedOnceWithANotice(t *testing.T) {
+	h := setup(t)
+	h.commitToMain(map[string]string{
+		".scoring-stage/config.toml":         "kits = [\"./.scoring-stage/kits/rules\"]\n",
+		".scoring-stage/kits/rules/kit.yaml": "allow: [example.com]\n",
+	})
+	h.expect(0, "up", h.remote.Checkout, "one", "--approve-repo-config")
+	approved := testutil.ReadFile(t, filepath.Join(h.home, "trusted-kits"))
+	testutil.WriteFile(t, filepath.Join(h.home, "trusted-kits"), strings.Repeat("a", 64)+" kit forged\n")
+	h.expect(1, "up", h.remote.Checkout, "two")
+	h.expectStderr(legacyClearedNotice)
+	h.expectStderr("asks for kits or books you have not approved")
+	if got := testutil.ReadFile(t, filepath.Join(h.home, "trusted-kits")); got != "" {
+		t.Fatalf("legacy approvals survived: %q", got)
+	}
+	testutil.WriteFile(t, filepath.Join(h.home, "trusted-kits"), approved)
+	h.expect(0, "up", h.remote.Checkout, "three")
+	if strings.Contains(h.stderr.String(), legacyClearedNotice) {
+		t.Fatal("the notice repeated without a legacy file")
+	}
+}
+
+func TestStageNeverPrunesTheSharedBindings(t *testing.T) {
+	h := setup(t)
+	h.expect(0, "up", h.remote.Checkout, "fix", "--agent", "copilot")
+	h.sbx.SetSandboxes("stage-fix\n")
+	h.expect(0, "down", "fix")
+	h.expect(0, "up", h.remote.Checkout, "other")
+	h.sbx.SetSandboxes("stage-other\n")
+	if err := os.Remove(filepath.Join(h.task("other"), "sbxenv.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	h.expect(0, "down", "other")
+	if !h.anyCall("env rm", "rm") {
+		t.Fatal("down removed nothing")
+	}
+	if h.anyCallContaining("prune") {
+		t.Fatalf("stage pruned bindings: %v", h.sbx.Calls())
+	}
+}

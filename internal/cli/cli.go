@@ -614,6 +614,13 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 }
 
 func (a *App) checkRepoApprovals(home string, composition *config.Composition, approve, plan bool) error {
+	cleared, err := config.ClearLegacyTrust(home)
+	if err != nil {
+		return err
+	}
+	if cleared {
+		a.warn("stage now stores approvals as JSON; earlier approvals were cleared, and you'll be asked again")
+	}
 	approvals, err := config.RepoApprovals(composition)
 	if err != nil {
 		return err
