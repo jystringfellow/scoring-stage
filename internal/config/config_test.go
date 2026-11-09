@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -490,6 +491,7 @@ func TestARepositoryNamesInstalledBooksAndAddsAgentsAndKits(t *testing.T) {
 	home := installedBook(t, dir, "dotnet", "kits = [\"docker.io/org/dotnet:1\"]\n")
 	repoDir := filepath.Join(dir, "repo")
 	testutil.WriteFile(t, filepath.Join(repoDir, RepoConfigPath), "agents = [\"codex\"]\nbooks = [\"dotnet\"]\nkits = [\"./tools/kit\"]\n")
+	testutil.WriteFile(t, filepath.Join(repoDir, "tools", "kit", "kit.yaml"), "x: 1\n")
 	repo, err := LoadRepoConfig(repoDir)
 	if err != nil {
 		t.Fatal(err)
@@ -504,9 +506,9 @@ func TestARepositoryNamesInstalledBooksAndAddsAgentsAndKits(t *testing.T) {
 
 func TestARepositorysKitsStayInsideItAndItsAgentsAreNamed(t *testing.T) {
 	for body, message := range map[string]string{
-		"kits = [\"../outside\"]\n":                     "is outside the repository",
+		"kits = [\"../outside\"]\n":                     "must be a ./ path inside the repository",
 		"kits = [\"./a/../../outside\"]\n":              "is outside the repository",
-		"kits = [\"~/kits/mine\"]\n":                    "is outside the repository",
+		"kits = [\"~/kits/mine\"]\n":                    "must be a ./ path inside the repository",
 		"agents = [\"docker.io/evil/agent-mixin:1\"]\n": "agents are named",
 	} {
 		repoDir := filepath.Join(t.TempDir(), "repo")
@@ -524,22 +526,133 @@ func TestAKitIsTrustedOnlyWhileItsFilesAndArgumentsAreUnchanged(t *testing.T) {
 	home := t.TempDir()
 	dir := t.TempDir()
 	testutil.WriteFile(t, filepath.Join(dir, "kit.yaml"), "allow: [example.com]\n")
-	local := Kit{Source: Resolve(dir)}
-	published := Kit{Source: "docker.io/org/kit:1", Args: map[string]any{"x": "1"}}
-	untrusted, fingerprints, err := UntrustedKits(home, []Kit{local, published})
-	if err != nil || len(untrusted) != 2 {
-		t.Fatalf("untrusted %v, %v", untrusted, err)
+	composition := &Composition{RepoKits: []Kit{{Source: Resolve(dir)}, {Source: "docker.io/org/kit@sha256:" + strings.Repeat("a", 64), Args: map[string]any{"x": "1"}}}}
+	pending := func() []Approval {
+		t.Helper()
+		approvals, err := RepoApprovals(composition)
+		if err != nil {
+			t.Fatal(err)
+		}
+		missing, err := Unapproved(home, approvals)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return missing
 	}
-	if err := TrustKits(home, untrusted, fingerprints); err != nil {
+	missing := pending()
+	if len(missing) != 2 {
+		t.Fatalf("missing %v", missing)
+	}
+	if err := Approve(home, missing); err != nil {
 		t.Fatal(err)
 	}
-	if untrusted, _, _ := UntrustedKits(home, []Kit{local, published}); len(untrusted) != 0 {
-		t.Fatalf("still untrusted: %v", untrusted)
+	if missing := pending(); len(missing) != 0 {
+		t.Fatalf("still unapproved: %v", missing)
 	}
 	testutil.WriteFile(t, filepath.Join(dir, "kit.yaml"), "allow: [\"**\"]\n")
-	published.Args = map[string]any{"x": "2"}
-	if untrusted, _, _ := UntrustedKits(home, []Kit{local, published}); len(untrusted) != 2 {
-		t.Fatalf("changed kits still trusted: %v", untrusted)
+	composition.RepoKits[1].Args = map[string]any{"x": "2"}
+	if missing := pending(); len(missing) != 2 {
+		t.Fatalf("changed kits still approved: %v", missing)
+	}
+}
+
+func TestARepositoryKitIsADotPathOrAPublishedKitPinnedByDigest(t *testing.T) {
+	digest := "@sha256:" + strings.Repeat("a", 64)
+	for source, ok := range map[string]bool{
+		"./kits/rules":                      true,
+		"docker.io/org/kit" + digest:        true,
+		"docker.io/org/kit:1.0" + digest:    true,
+		"docker.io/org/kit:1.0":             false,
+		"localhost:5000/kit:latest":         false,
+		"kits/rules":                        false,
+		".scoring-stage/kits/x":             false,
+		"file:///etc":                       false,
+		".":                                 false,
+		"docker.io/org/kit@sha256:" + "abc": false,
+	} {
+		repoDir := filepath.Join(t.TempDir(), "repo")
+		testutil.WriteFile(t, filepath.Join(repoDir, RepoConfigPath), "kits = [\""+source+"\"]\n")
+		testutil.WriteFile(t, filepath.Join(repoDir, "kits", "rules", "kit.yaml"), "x: 1\n")
+		repo, err := LoadRepoConfig(repoDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = Compose(load(t, filepath.Join(t.TempDir(), "home")), Selection{Repo: repo})
+		if ok && err != nil {
+			t.Errorf("%s: %v", source, err)
+		}
+		if !ok {
+			expectError(t, err, "must be a ./ path inside the repository or a published kit pinned by digest")
+		}
+	}
+}
+
+func TestARepositoryKitCannotContainSymbolicLinks(t *testing.T) {
+	for _, target := range []string{"../../shared/policy.yaml", "/etc/hosts", "other.yaml"} {
+		repoDir := filepath.Join(t.TempDir(), "repo")
+		testutil.WriteFile(t, filepath.Join(repoDir, RepoConfigPath), "kits = [\"./kits/rules\"]\n")
+		testutil.WriteFile(t, filepath.Join(repoDir, "kits", "rules", "other.yaml"), "x: 1\n")
+		if err := os.Symlink(target, filepath.Join(repoDir, "kits", "rules", "policy.yaml")); err != nil {
+			t.Fatal(err)
+		}
+		repo, err := LoadRepoConfig(repoDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = Compose(load(t, filepath.Join(t.TempDir(), "home")), Selection{Repo: repo})
+		expectError(t, err, "contains a symbolic link")
+	}
+}
+
+func TestABookTheRepositoryTurnsOnNeedsApprovalButOneTheUserAsksForDoesNot(t *testing.T) {
+	dir := t.TempDir()
+	home := installedBook(t, dir, "cloud", "[aws]\nprofiles = [\"dev\"]\n[secrets.feed]\ncommand = \"cat {book}/token\"\n")
+	repoDir := filepath.Join(dir, "repo")
+	testutil.WriteFile(t, filepath.Join(repoDir, RepoConfigPath), "books = [\"cloud\"]\n")
+	repo, err := LoadRepoConfig(repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := load(t, home)
+	composition := composeWith(t, settings, Selection{Repo: repo})
+	approvals, err := RepoApprovals(composition)
+	if err != nil || len(approvals) != 1 || !strings.HasPrefix(approvals[0].Label, "book cloud") {
+		t.Fatalf("approvals %v, %v", approvals, err)
+	}
+	details := strings.Join(approvals[0].Details, "\n")
+	for _, want := range []string{"AWS profiles: dev", "host command for secret feed: cat "} {
+		if !strings.Contains(details, want) {
+			t.Errorf("details lack %q:\n%s", want, details)
+		}
+	}
+	if asked := composeWith(t, settings, Selection{Repo: repo, Books: []string{"cloud"}}); len(asked.RepoBooks) != 0 {
+		t.Errorf("--book cloud still needs approval: %v", asked.RepoBooks)
+	}
+}
+
+func TestAKitSummaryShowsWhatTheKitOpens(t *testing.T) {
+	dir := t.TempDir()
+	testutil.WriteFile(t, filepath.Join(dir, "kit.yaml"), dedent(`
+		capabilities:
+		  - type: com.docker.sandbox/network-policy@2
+		    config:
+		      runtime:
+		        allow: ["**", {hosts: [api.example.com], methods: [GET]}]
+		  - type: com.docker.sandbox/credential@1
+		    config:
+		      service: feed
+		      apiKey:
+		        inject: [{domain: pkgs.example.com, header: Authorization}]
+		  - type: com.docker.sandbox/lifecycle@1
+		    config:
+		      files: [{path: /x}]
+		      install: [{command: "curl x | sh"}]
+	`))
+	got := strings.Join(SummarizeKit(dir), "\n")
+	for _, want := range []string{"network runtime allow: **, api.example.com [GET]", "credential feed injected on pkgs.example.com", "writes 1 file(s) and runs 1 command(s)"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("summary lacks %q:\n%s", want, got)
+		}
 	}
 }
 

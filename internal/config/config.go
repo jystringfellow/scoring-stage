@@ -3,10 +3,12 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -77,6 +79,7 @@ type Composition struct {
 	Bindings          map[string]any
 	Books             []string
 	RepoKits          []Kit
+	RepoBooks         []Book
 }
 
 func (c *Composition) AllKits() []Kit {
@@ -427,6 +430,11 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 		if err := addAgents(repo.agents, repo.dir, repo.Path); err != nil {
 			return nil, err
 		}
+		for _, entry := range repo.kits {
+			if source := kitSource(entry); !strings.HasPrefix(source, "./") && !pinnedReference.MatchString(source) {
+				return nil, errorf("%s: kit %s must be a ./ path inside the repository or a published kit pinned by digest (...@sha256:<64 hex>)", repo.Path, source)
+			}
+		}
 		if err := addKits(&repoKits, repo.kits, repo.dir, repo.Path); err != nil {
 			return nil, err
 		}
@@ -437,6 +445,9 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 			}
 			if relative, err := filepath.Rel(root, kit.Source); err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, "../") {
 				return nil, errorf("%s: kit %s is outside the repository; a repository's local kits live in the repository", repo.Path, kit.Source)
+			}
+			if err := refuseLinks(kit.Source, repo.Path); err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -522,6 +533,7 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 		Secrets:           secrets,
 		Bindings:          bindings,
 		RepoKits:          repoKits,
+		RepoBooks:         booksOnlyTheRepoAskedFor(active, selection),
 	}
 	if base != nil {
 		composition.Base = *base
@@ -596,6 +608,59 @@ func activeBooks(settings *Settings, selection Selection) ([]Book, error) {
 		seen[book.Name] = book.Path
 	}
 	return active, nil
+}
+
+var pinnedReference = regexp.MustCompile(`^[a-z0-9]+(?:[.-][a-z0-9]+)*(?::[0-9]+)?(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+(?::[A-Za-z0-9_.-]+)?@sha256:[a-f0-9]{64}$`)
+
+func kitSource(entry any) string {
+	switch typed := entry.(type) {
+	case string:
+		return typed
+	case map[string]any:
+		source, _ := typed["source"].(string)
+		return source
+	}
+	return ""
+}
+
+// refuseLinks keeps a repository kit's content inside its own files, where
+// its fingerprint and the containment check can see it.
+func refuseLinks(dir, owner string) error {
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return errorf("%s: kit %s is not a directory in the repository", owner, dir)
+	}
+	return filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Type()&fs.ModeSymlink != 0 {
+			return errorf("%s: kit %s contains a symbolic link (%s); a repository's kits cannot use links", owner, dir, path)
+		}
+		return nil
+	})
+}
+
+// booksOnlyTheRepoAskedFor returns the active books that are on only because
+// the repository's config named them, rather than --book or a [[repos]] rule.
+func booksOnlyTheRepoAskedFor(active []Book, selection Selection) []Book {
+	if selection.Repo == nil {
+		return nil
+	}
+	var books []Book
+	for _, book := range active {
+		if !contains(selection.Repo.books, book.Name) || contains(selection.Books, book.Name) || contains(selection.Books, book.Path) {
+			continue
+		}
+		matched := false
+		for _, r := range book.repos {
+			matched = matched || matchesAny(selection.RepoNames, r.patterns)
+		}
+		if !matched {
+			books = append(books, book)
+		}
+	}
+	return books
 }
 
 func parseAgent(entry any, dir, owner string) (Kit, error) {

@@ -27,9 +27,10 @@ repository's config, a book or `--agent`, and an agent's bindings come with it.
 
 Configuration follows kapellmeister's split between the user's directory and the repository's. The repository's
 config is input from whoever can commit to it, so it may only ask for agents by name, things the user has already
-accepted (installed books, by name), and its own kits. A kit can widen egress, so a repository's kits must live in
-the repository and are used only after the user approves each one, by content hash for a local kit and by reference
-and arguments for a published one. Secrets run commands on the host, bindings
+installed (books, by name), and its own kits. Kits and books can widen egress, send credentials and run host
+commands, so a repository's kits must be link-free `./` directories in the repository or digest-pinned published
+kits, and its kits and the books it turns on are used only after the user approves each one by content: a local
+kit's or book's files, or a published kit's digest and arguments. Secrets run commands on the host, bindings
 and AWS profiles hand out credentials, and a book location would let a repository supply its own host commands, so
 those stay with the user and the books they install.
 

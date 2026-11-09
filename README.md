@@ -190,15 +190,17 @@ books = ["backend"]              # installed books, by name
 kits = ["./.scoring-stage/kits/rules"]  # inside the repository; approved by you before use
 ```
 
-A repository is not trusted with anything that acts on the host. It can add agents by name, its own kits and
-installed books, but it cannot set secrets, bindings, AWS profiles, GitHub access or the base, and it names books
-rather than pointing at them: a book it asks for that you have not installed is an error. A repository's local kits
-must live inside the repository.
+A repository is not trusted with anything that acts on the host. It can add agents by name, installed books by
+name, and its own kits, but it cannot set secrets, bindings, AWS profiles, GitHub access or the base. A book it asks
+for that you have not installed is an error. A repository's kit is either a `./` path inside the repository, with no
+symbolic links, or a published kit pinned by digest (`registry/name@sha256:...`).
 
-A kit can widen a sandbox's network access, so `stage up` uses a repository's kits only after you approve them. It
-lists the kits and asks; without a terminal, pass `--trust-repo-kits` after reviewing them. An approval covers that
-exact kit (a local kit's files, or a published kit's reference and arguments) and is kept in
-`~/.scoring-stage/trusted-kits`, so a changed kit asks again.
+Kits and books can widen a sandbox's network access, send credentials and run commands, so `stage up` uses the
+kits a repository adds, and the installed books it turns on, only after you approve them. It lists each one with
+what it does (network rules, credentials, host commands, AWS profiles) and asks. Without a terminal, pass
+`--approve-repo-kits` after reviewing them. An approval covers that exact content (a local kit's files, a published
+kit's digest and arguments, a book's files) and is kept in `~/.scoring-stage/trusted-kits`, so a change asks
+again. A book you ask for yourself, with `--book` or a `[[repos]]` rule, needs no approval.
 
 Books and both configs are decoded strictly: an unknown key is an error. Two books that set the same base,
 region, AWS default profile, secret or binding differently are an error rather than a silent winner. Your config
