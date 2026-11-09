@@ -300,8 +300,35 @@ func TestAManagedGitHubAppClientIDIsUsedAndAUserCannotPointElsewhere(t *testing.
 	load(t, home)
 
 	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "[github]\nmode = \"app\"\napp_client_id = \"Iv23other\"\n")
-	_, err := LoadSettings(home)
-	expectError(t, err, "app_client_id Iv23other differs from the GitHub App Iv23pinned pinned by")
+	settings = load(t, home)
+	if got := settings.GitHubAppClientID(); got != "Iv23pinned" {
+		t.Errorf("client ID %q, want the pinned one over the user's", got)
+	}
+	if ignored := settings.IgnoredGitHubAppClientID(); !strings.Contains(ignored, "app_client_id Iv23other is ignored") {
+		t.Errorf("no warning about the ignored client ID: %q", ignored)
+	}
+}
+
+func TestManagedSettingsWarnAboutAnUnpinnedAppAndAPinThatDoesNothing(t *testing.T) {
+	warnings := func() string {
+		managed, err := LoadManaged()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(managed.Warnings(), "\n")
+	}
+	managedFiles(t, "[github]\nallowed_modes = [\"app\"]\n")
+	if got := warnings(); !strings.Contains(got, "no managed file pins app_client_id") {
+		t.Errorf("warnings %q", got)
+	}
+	managedFiles(t, "[github]\napp_client_id = \"Iv23pinned\"\n")
+	if got := warnings(); !strings.Contains(got, "app_client_id Iv23pinned") || !strings.Contains(got, "has no effect") {
+		t.Errorf("warnings %q", got)
+	}
+	managedFiles(t, "[github]\nallowed_modes = [\"app\"]\napp_client_id = \"Iv23pinned\"\n")
+	if got := warnings(); strings.Contains(got, "app_client_id") {
+		t.Errorf("warned about a pinned, allowed app: %q", got)
+	}
 }
 
 func TestManagedFilesMustAgreeOnTheGitHubAppClientID(t *testing.T) {

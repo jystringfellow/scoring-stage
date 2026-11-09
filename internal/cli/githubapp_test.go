@@ -99,6 +99,12 @@ func TestAPinnedGitHubAppIsUsedWithoutAUserClientIDAndOtherAppsLoginsAreRefused(
 		t.Errorf("printed a token for an app the managed settings do not pin: %q", h.stdout.String())
 	}
 	h.expect(1, "up", h.remote.Checkout, "other")
+
+	testutil.WriteFile(t, h.managed, "[github]\nallowed_modes = [\"app\"]\napp_client_id = \"Iv23test\"\n")
+	testutil.WriteFile(t, filepath.Join(h.home, "config.toml"), "[github]\nmode = \"app\"\napp_client_id = \"Iv23other\"\n")
+	h.expect(0, "up", h.remote.Checkout, "third")
+	h.expectStderr("app_client_id Iv23other is ignored")
+	h.expect(0, "down", "fix")
 }
 
 func TestGitHubCommandsNeedAppMode(t *testing.T) {

@@ -360,10 +360,11 @@ allowed and the user has not chosen one, stage uses it without asking. An empty 
 refuses every sandbox.
 
 `[github] app_client_id` pins the GitHub App that app mode uses. Users then need no `app_client_id` of their own; one
-that differs from the pin is an error, and a saved login for any other app is refused, so `stage github token` stops
-handing its tokens to sandboxes. Managed files that pin different apps are an error. Without a pin, users under
-managed settings can point app mode at any app, and only stage's read-only installation check stands between them
-and an app that can write.
+that differs from the pin is ignored with a warning, and a saved login for any other app is refused, so
+`stage github token` stops handing its tokens to sandboxes. Managed files that pin different apps are an error.
+Without a pin, users under managed settings can point app mode at any app, and only stage's read-only installation
+check stands between them and an app that can write; `stage setup` warns when `allowed_modes` allows `"app"` without
+a pin, and when a pin is set but app mode is not allowed.
 
 `stage setup` shows the managed settings in effect and warns about a managed file or directory that is not owned by
 root or that others can write. A managed file stage cannot read stops stage rather than being skipped. They only

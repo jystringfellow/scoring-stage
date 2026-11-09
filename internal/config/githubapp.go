@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,13 +43,13 @@ func (s *Settings) GitHubAppClientID() string {
 	return s.githubApp
 }
 
-func (s *Settings) checkPinnedGitHubApp(path string) error {
+func (s *Settings) IgnoredGitHubAppClientID() string {
 	pinned := s.Managed.GitHubAppClientID()
 	if pinned == "" || s.githubApp == "" || s.githubApp == pinned {
-		return nil
+		return ""
 	}
-	return errorf("%s [github]: app_client_id %s differs from the GitHub App %s pinned by %s; remove app_client_id or set it to %s",
-		path, s.githubApp, pinned, s.Managed.appClientIDFile, pinned)
+	return fmt.Sprintf("%s [github]: app_client_id %s is ignored; %s pins the GitHub App %s, so remove app_client_id or set it to %s",
+		filepath.Join(s.Home, "config.toml"), s.githubApp, s.Managed.appClientIDFile, pinned, pinned)
 }
 
 func (s *Settings) GitHubAppStore() github.Store {

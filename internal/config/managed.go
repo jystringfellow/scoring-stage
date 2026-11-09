@@ -413,6 +413,18 @@ func (m *Managed) Warnings() []string {
 			}
 		}
 	}
+	if len(m.Paths) == 0 {
+		return warnings
+	}
+	appAllowed := contains(m.AllowedGitHubModes(), GitHubApp)
+	switch {
+	case appAllowed && m.appClientID == "":
+		warnings = append(warnings, fmt.Sprintf("[github] allowed_modes allows %q but no managed file pins app_client_id, so users may log in "+
+			"with any GitHub App and only stage's read-only installation check stands between them and an app that can write", GitHubApp))
+	case !appAllowed && m.appClientID != "":
+		warnings = append(warnings, fmt.Sprintf("[github] app_client_id %s (%s) has no effect: allowed_modes does not allow %q",
+			m.appClientID, m.appClientIDFile, GitHubApp))
+	}
 	return warnings
 }
 

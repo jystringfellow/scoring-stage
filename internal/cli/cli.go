@@ -654,6 +654,9 @@ func (a *App) checkGitHubAccess(settings *config.Settings, owner, gh string) err
 	if err := settings.CheckGitHub(owner, gh); err != nil {
 		return err
 	}
+	if ignored := settings.IgnoredGitHubAppClientID(); ignored != "" {
+		a.warn("%s", ignored)
+	}
 	if settings.GitHubMode() == config.GitHubApp {
 		return a.checkGitHubApp(settings)
 	}
@@ -668,6 +671,9 @@ func (a *App) checkGitHubAccess(settings *config.Settings, owner, gh string) err
 }
 
 func (a *App) reportGitHub(settings *config.Settings, gh string, ghLoggedIn bool) error {
+	if ignored := settings.IgnoredGitHubAppClientID(); ignored != "" {
+		a.warn("%s", ignored)
+	}
 	mode := settings.GitHubMode()
 	if mode == "" {
 		a.warn("%s", settings.CheckGitHub("", ""))
