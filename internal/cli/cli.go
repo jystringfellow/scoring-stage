@@ -76,7 +76,8 @@ const usage = `usage: stage <command> [options]
 Run coding agents in Docker Sandboxes with host-held credentials.
 
 commands:
-  setup [--yes] [--agent NAME]...   check sbx, the global policy, credentials and books; save your agents
+  setup [--yes] [--agent NAME]... [--github MODE]
+                                   check sbx, the global policy, credentials and books; save your agents
   broker start|stop|status|serve    manage the host AWS credential broker
   up <repo> <slug> [options]        create a sandbox for a repository
   shell <slug>                      open a login shell in the repository
@@ -315,10 +316,11 @@ func (a *App) brokerStatus(home string) int {
 }
 
 func (a *App) cmdSetup(args []string, home string) (int, error) {
-	fs := a.newFlags("setup", "[--yes] [--agent NAME]...")
+	fs := a.newFlags("setup", "[--yes] [--agent NAME]... [--github MODE]")
 	yes := fs.Bool("yes", false, "reset the global sbx policy to deny-all")
 	var agentFlags stringList
 	fs.Var(&agentFlags, "agent", "save an agent to config.toml: "+strings.Join(config.AgentNames(), ", ")+" (repeatable)")
+	githubMode := fs.String("github", "", "save how sandboxes reach GitHub to config.toml: "+strings.Join(config.GitHubModes, ", "))
 	if _, err := fs.parse(args); err != nil {
 		return 0, err
 	}
@@ -360,11 +362,20 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 			"  `stage setup --yes` runs `sbx policy reset --force` (deletes ALL local policies and stops\n"+
 			"  running sandboxes) and then `sbx policy init deny-all`.\n")
 	}
+	if *githubMode != "" && !slices.Contains(config.GitHubModes, *githubMode) {
+		return 0, errorf("--github must be one of %s", strings.Join(config.GitHubModes, ", "))
+	}
 	if len(agentFlags) > 0 {
 		if err := config.SaveAgents(home, agentFlags); err != nil {
 			return 0, err
 		}
 		a.say("saved agents %s to %s", strings.Join(agentFlags, ", "), filepath.Join(home, "config.toml"))
+	}
+	if *githubMode != "" {
+		if err := config.SaveGitHubMode(home, *githubMode); err != nil {
+			return 0, err
+		}
+		a.say("saved [github] mode = %q to %s", *githubMode, filepath.Join(home, "config.toml"))
 	}
 	settings, err := config.LoadSettings(home)
 	if err != nil {
@@ -390,18 +401,14 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 	}
 	a.say("installed books: %s", strings.Join(bookNames, ", "))
 	gh := a.FindGh()
-	if gh != "" && exec.Command(gh, "auth", "token").Run() == nil {
+	ghLoggedIn := gh != "" && exec.Command(gh, "auth", "token").Run() == nil
+	if ghLoggedIn {
 		a.say("gh auth: ok (source of the per-box copilot secret)")
 	} else {
 		a.warn("gh is missing or not logged in; Copilot will be unauthenticated")
 	}
-	switch tokenErr := settings.CheckGitHubToken(); {
-	case settings.GitHubAccess() == config.GitHubNone:
-		a.say("github: none (github = %q in config.toml; sandboxes get no GitHub credential)", config.GitHubNone)
-	case tokenErr != nil:
-		a.warn("%s", tokenErr)
-	default:
-		a.say("github token: %s is fine-grained. stage cannot see its permissions: keep it read-only (Contents and Metadata: read) and limited to your repositories", settings.ReadonlyToken())
+	if err := a.reportGitHub(settings, gh, ghLoggedIn); err != nil {
+		return 0, err
 	}
 	if err := checkNoGlobalGitHubSecret(); err != nil {
 		a.warn("%s", err)
@@ -460,7 +467,9 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if err := settings.CheckGitHubToken(); err != nil {
+	owner, _, _ := strings.Cut(github, "/")
+	gh := a.FindGh()
+	if err := a.checkGitHubAccess(settings, owner, gh); err != nil {
 		return 0, err
 	}
 	if err := checkNoGlobalGitHubSecret(); err != nil {
@@ -510,12 +519,13 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 		}
 	}
 	composition, err := config.Compose(settings, config.Selection{
-		RepoNames:  []string{filepath.Base(repo), github},
-		Agents:     agentFlags,
-		Books:      books,
-		Repo:       repoConfig,
-		Gh:         a.FindGh(),
-		AWSProfile: *awsProfile,
+		RepoNames:   []string{filepath.Base(repo), github},
+		Agents:      agentFlags,
+		Books:       books,
+		Repo:        repoConfig,
+		Gh:          gh,
+		AWSProfile:  *awsProfile,
+		GitHubOwner: owner,
 	})
 	if err != nil {
 		return 0, err
@@ -612,6 +622,59 @@ func (a *App) checkRepoApprovals(home string, composition *config.Composition, a
 	return nil
 }
 
+const ghModeWarning = "[github] mode = \"gh\": sandboxes use your gh login. GraphQL lets them do anything that login can: " +
+	"commit to and move or delete branches, open and merge pull requests, comment, change settings. The proxy refuses only " +
+	"git push and REST writes. Use mode = \"fine-grained\" to keep sandboxes read-only"
+
+func (a *App) checkGitHubAccess(settings *config.Settings, owner, gh string) error {
+	if err := settings.CheckGitHub(owner, gh); err != nil {
+		return err
+	}
+	if settings.GitHubMode() != config.GitHubGh {
+		return nil
+	}
+	if exec.Command(gh, "auth", "token").Run() != nil {
+		return errorf("[github] mode = %q, but `gh auth token` fails; log in with `gh auth login`", config.GitHubGh)
+	}
+	a.warn("%s", ghModeWarning)
+	return nil
+}
+
+func (a *App) reportGitHub(settings *config.Settings, gh string, ghLoggedIn bool) error {
+	switch settings.GitHubMode() {
+	case "":
+		a.warn("%s", settings.CheckGitHub("", ""))
+	case config.GitHubNone:
+		a.say("github: none (sandboxes get no GitHub credential)")
+	case config.GitHubGh:
+		if err := settings.CheckGitHub("", gh); err != nil {
+			a.warn("%s; stage up will refuse", err)
+		} else if !ghLoggedIn {
+			a.warn("[github] mode = %q, but gh is missing or not logged in; stage up will refuse", config.GitHubGh)
+		}
+		a.warn("%s", ghModeWarning)
+	case config.GitHubFineGrained:
+		owners, err := settings.GitHubTokenOwners()
+		if err != nil {
+			return err
+		}
+		if len(owners) == 0 {
+			a.warn("github: no fine-grained tokens in %s; save one per repository owner as <owner>.token (mode 600)", settings.GitHubTokenDir())
+		}
+		for _, owner := range owners {
+			if err := settings.CheckGitHub(owner, ""); err != nil {
+				a.warn("%s", err)
+			} else {
+				a.say("github token for %s: fine-grained. stage cannot see its permissions: keep it read-only (Contents and Metadata: read) and limited to your repositories", owner)
+			}
+		}
+		if _, err := os.Stat(settings.LegacyGitHubToken()); err == nil {
+			a.warn("%s is no longer used; move it to %s for the owner it was created for", settings.LegacyGitHubToken(), settings.GitHubTokenFile("<owner>"))
+		}
+	}
+	return nil
+}
+
 func checkNoGlobalGitHubSecret() error {
 	services, err := sbx.GlobalSecrets()
 	if err != nil {
@@ -620,7 +683,7 @@ func checkNoGlobalGitHubSecret() error {
 	if slices.Contains(services, config.GitHubService) {
 		return errorf("sbx has a global %s secret, usually your full gh token; any sandbox with a %s binding, including one saved "+
 			"by an earlier sandbox, can fall back to it. Remove it with `sbx secret rm %s -f`; sandboxes get GitHub access "+
-			"only from %s", config.GitHubService, config.GitHubService, config.GitHubService, "the read-only token file")
+			"only from [github] mode", config.GitHubService, config.GitHubService, config.GitHubService)
 	}
 	return nil
 }

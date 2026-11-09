@@ -21,10 +21,6 @@ const (
 	DefaultBase      = "docker.io/sbx/shell:1.1.0"
 	DefaultAWSRegion = "us-east-1"
 	BrokerService    = "stage-broker"
-	GitHubService    = "github"
-
-	GitHubReadonlyToken = "readonly-token"
-	GitHubNone          = "none"
 )
 
 func brokerBinding() map[string]any {
@@ -128,61 +124,10 @@ type Settings struct {
 	bindings   map[string]any
 	prFooter   string
 	copyLogins []string
-	github     string
-}
-
-func (s *Settings) ReadonlyToken() string {
-	return filepath.Join(s.Home, "secrets", "github-readonly-token")
+	githubMode string
 }
 
 func (s *Settings) PRFooter() string { return s.prFooter }
-
-// GitHubAccess is how sandboxes reach the GitHub API: GitHubReadonlyToken or GitHubNone.
-func (s *Settings) GitHubAccess() string { return s.github }
-
-// CheckGitHubToken refuses to go on unless sandboxes either have no GitHub
-// credential or have one that is a fine-grained token.
-func (s *Settings) CheckGitHubToken() error {
-	if s.github == GitHubNone {
-		return nil
-	}
-	info, statErr := os.Stat(s.ReadonlyToken())
-	content, err := os.ReadFile(s.ReadonlyToken())
-	token := strings.TrimSpace(string(content))
-	if statErr != nil || err != nil || token == "" {
-		return errorf("no GitHub token at %s. Sandboxes need a fine-grained, read-only token there (mode 600), "+
-			"limited to the repositories you work on, with Contents: read and Metadata: read; or set github = %q in %s "+
-			"to give sandboxes no GitHub credential", s.ReadonlyToken(), GitHubNone, filepath.Join(s.Home, "config.toml"))
-	}
-	if problem := GitHubTokenProblem(token); problem != "" {
-		return errorf("%s %s. Replace it with a fine-grained, read-only token (github_pat_...)", s.ReadonlyToken(), problem)
-	}
-	if info.Mode().Perm()&0o077 != 0 {
-		return errorf("%s is readable by other users (mode %o); run chmod 600 on it", s.ReadonlyToken(), info.Mode().Perm())
-	}
-	return nil
-}
-
-var fineGrainedToken = regexp.MustCompile(`^github_pat_[A-Za-z0-9_]+$`)
-
-// GitHubTokenProblem says why a token cannot be trusted to be read-only, or
-// returns "" for a fine-grained personal access token.
-func GitHubTokenProblem(token string) string {
-	switch {
-	case fineGrainedToken.MatchString(token):
-		return ""
-	case strings.HasPrefix(token, "github_pat_"):
-		return "holds more than a single fine-grained token"
-	case strings.HasPrefix(token, "gho_"):
-		return "holds a gh CLI login token (gho_), which carries your full repository access"
-	case strings.HasPrefix(token, "ghp_"):
-		return "holds a classic personal access token (ghp_); a classic token cannot read private repositories without write access"
-	case strings.HasPrefix(token, "ghu_"), strings.HasPrefix(token, "ghs_"), strings.HasPrefix(token, "ghr_"):
-		return "holds a GitHub App token, whose permissions stage cannot check"
-	default:
-		return "does not hold a GitHub fine-grained token"
-	}
-}
 
 func (s *Settings) CopiesLogin(agent string) bool { return contains(s.copyLogins, agent) }
 
@@ -243,13 +188,8 @@ func LoadSettings(home string) (*Settings, error) {
 			settings.prFooter = text
 		}
 	}
-	settings.github = GitHubReadonlyToken
-	if value, present := data["github"]; present {
-		text, ok := value.(string)
-		if !ok || (text != GitHubReadonlyToken && text != GitHubNone) {
-			return nil, errorf("%s: github must be %q or %q", path, GitHubReadonlyToken, GitHubNone)
-		}
-		settings.github = text
+	if settings.githubMode, err = decodeGitHub(data["github"], path); err != nil {
+		return nil, err
 	}
 	if err := refuseGitHubService(settings.secrets, settings.bindings, path); err != nil {
 		return nil, err
@@ -368,12 +308,13 @@ func LoadBook(path string) (*Book, error) {
 
 // Selection is what one sandbox asks for beyond the user's own settings.
 type Selection struct {
-	RepoNames  []string
-	Agents     []string
-	Books      []string
-	Repo       *RepoConfig
-	Gh         string
-	AWSProfile string
+	RepoNames   []string
+	Agents      []string
+	Books       []string
+	Repo        *RepoConfig
+	Gh          string
+	AWSProfile  string
+	GitHubOwner string
 }
 
 func Compose(settings *Settings, selection Selection) (*Composition, error) {
@@ -594,10 +535,7 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 			secrets["copilot"] = map[string]any{"command": ShellQuote(selection.Gh) + " auth token"}
 		}
 	}
-	if settings.github != GitHubNone && settings.CheckGitHubToken() == nil {
-		secrets[GitHubService] = map[string]any{"command": "/bin/cat " + ShellQuote(settings.ReadonlyToken())}
-		bindings[GitHubService] = domains("apiKey", "api.github.com", "github.com")
-	}
+	settings.gitHubCredential(selection, secrets, bindings)
 	for service, spec := range settings.secrets {
 		secrets[service] = spec
 	}
@@ -812,13 +750,11 @@ func parseKit(entry any, baseDir, owner string) (Kit, error) {
 	return kit, nil
 }
 
-// refuseGitHubService keeps the GitHub credential to the read-only token file,
-// which stage can check, so no config can hand sandboxes a token that writes.
 func refuseGitHubService(secrets, bindings map[string]any, where string) error {
 	_, secret := secrets[GitHubService]
 	_, binding := bindings[GitHubService]
 	if secret || binding {
-		return errorf("%s: the %s secret and binding come only from the read-only token file", where, GitHubService)
+		return errorf("%s: the %s secret and binding come only from [github] mode", where, GitHubService)
 	}
 	for _, service := range sortedKeys(bindings) {
 		domains, err := bindingDomains(bindings[service])
@@ -827,7 +763,7 @@ func refuseGitHubService(secrets, bindings map[string]any, where string) error {
 		}
 		for _, domain := range domains {
 			if ReachesGitHub(domain) {
-				return errorf("%s: binding %s covers %s; GitHub credentials come only from the read-only token file", where, service, domain)
+				return errorf("%s: binding %s covers %s; GitHub credentials come only from [github] mode", where, service, domain)
 			}
 		}
 	}

@@ -74,14 +74,30 @@ clone, so ship anything you want to keep first.
    default "balanced" lists) widens every sandbox. `stage up` refuses to run while global allow rules exist unless
    you pass `--allow-global-policy`. `stage setup --yes` runs `sbx policy reset --force` and
    `sbx policy init deny-all`; that deletes every local policy and stops running sandboxes.
-2. **GitHub token (required).** `stage up` refuses to start until
-   `~/.scoring-stage/secrets/github-readonly-token` (mode 600) holds a single fine-grained personal access token
-   (`github_pat_...`). stage checks only that the token is fine-grained; it cannot see the token's permissions, so
-   making it read-only is up to you. Limit it to the repositories you work on and give it only Contents: read and
-   Metadata: read (add Pull requests: read if agents should read pull requests). A read-only token can still read
-   every repository it is scoped to, so keep that list short. gh login tokens (`gho_`), classic tokens (`ghp_`) and
-   GitHub App tokens are refused. To give sandboxes no GitHub credential at all, set `github = "none"` in
-   `~/.scoring-stage/config.toml`.
+2. **GitHub access (required choice).** `stage up` refuses to start until you choose how sandboxes reach GitHub,
+   with `stage setup --github MODE` or `[github] mode` in `~/.scoring-stage/config.toml`. There is no default.
+
+   | Mode | The sandbox gets | Use it when |
+   | --- | --- | --- |
+   | `fine-grained` | The read-only token for its repository's owner | You want sandboxes that cannot write to GitHub |
+   | `gh` | Your gh login (`gh auth token`), as a per-sandbox secret | You accept that the sandbox can write as you |
+   | `none` | No GitHub credential | Public repositories only, or no GitHub API at all |
+
+   **fine-grained.** A fine-grained personal access token belongs to one owner (a user or an organization), so
+   stage keeps one per owner at `~/.scoring-stage/secrets/github/<owner>.token` (mode 600) and gives each sandbox
+   only the token for its repository's owner. A sandbox works in one owner's repositories. stage checks only that
+   the token is fine-grained; it cannot see the token's permissions, so making it read-only is up to you. Limit it
+   to the repositories you work on and give it only Contents: read and Metadata: read (add Pull requests: read if
+   agents should read pull requests). A read-only token can still read every repository it is scoped to, so keep
+   that list short. gh login tokens (`gho_`), classic tokens (`ghp_`) and GitHub App tokens are refused. The old
+   single `~/.scoring-stage/secrets/github-readonly-token` file is no longer read; move it to
+   `secrets/github/<owner>.token` for the owner it was created for.
+
+   **gh.** stage warns on `stage setup` and every `stage up` in this mode. GraphQL lets a sandbox do anything your gh
+   login can, in every repository it can write to: commit to and move or delete branches (`createCommitOnBranch`,
+   `updateRef`, `deleteRef`), open and merge pull requests, comment and change settings. In effect that is a push;
+   the proxy refuses only `git push` and REST writes. stage refuses gh mode whenever
+   [managed settings](#managed-settings) are in place.
 
    `stage up` also refuses while sbx has a global `github` secret (`sbx secret ls --global`), because any sandbox
    with a `github` binding, including one saved by an earlier sandbox, can fall back to it. Remove it with
@@ -114,7 +130,7 @@ each with its own egress and credentials:
 
 A kit reference works wherever a name does, for another agent or another version of one of these.
 
-The `github` binding (when a token is set), an agent's bindings and, with AWS, `stage-broker` are written to sbx's
+The `github` binding (in `fine-grained` and `gh` modes), an agent's bindings and, with AWS, `stage-broker` are written to sbx's
 `~/.config/sbx/credentials.yaml`. A binding approves a service's credential on named domains, capped by what the
 kits declare. Bindings are shared by every sandbox, so `stage down` leaves them in place.
 
@@ -154,10 +170,12 @@ in its `.scoring-stage/config.toml`.
 
 ```toml
 agents = ["claude", "codex"]                       # the agents you use; names or kit references
-github = "readonly-token"                          # or "none": sandboxes get no GitHub credential
 books = ["~/Code/my-org-books/backend"]            # installed books; each applies only when asked for
 base = "docker.io/sbx/shell:1.1.0"                 # the workload kit
 kits = ["./kits/personal"]                         # extra kits, relative to ~/.scoring-stage
+
+[github]
+mode = "fine-grained"                              # or "gh" (your gh login, which can write) or "none"
 
 [aws]
 profiles = ["sandbox"]

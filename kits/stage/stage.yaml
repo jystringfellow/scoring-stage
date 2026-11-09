@@ -52,9 +52,11 @@ capabilities:
         You are running in a scoring-stage sandbox with permission prompts off.
         The sandbox is the boundary, so work freely inside it, and keep within these rules:
 
-        - Commit your work locally. `git push` and GitHub API writes (comments, issues,
-          pull requests, merges) are refused by the sandbox proxy; the user ships your
-          commits from the host with `stage ship`.
+        - Commit your work locally and make no changes on GitHub: no pushes, branches,
+          comments, issues, pull requests or merges, by git, gh, the REST API or GraphQL.
+          The proxy refuses `git push` and REST writes, but it cannot stop every GraphQL
+          write, so do not try one. The user ships your commits from the host with
+          `stage ship`.
         - Network egress is deny-all apart from the hosts the sandbox's kits allow. A
           request refused by the sandbox comes back as HTTP 403 from the proxy. Do not
           work around a refusal; report the host and why you need it.

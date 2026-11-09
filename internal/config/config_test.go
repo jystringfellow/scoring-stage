@@ -122,10 +122,13 @@ func TestUnknownAgentNamesAreErrors(t *testing.T) {
 	expectError(t, err, "unknown agent gemeni (known: agy, claude, codex, copilot")
 }
 
-func TestCopilotSecretComesFromGhAndGitHubFromTheReadOnlyToken(t *testing.T) {
+const fineGrained = "[github]\nmode = \"fine-grained\"\n"
+
+func TestCopilotSecretComesFromGhAndGitHubFromTheOwnersToken(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
-	token := writeToken(t, filepath.Join(home, "secrets", "github-readonly-token"), "github_pat_readonly")
-	composition, err := Compose(load(t, home), Selection{Agents: []string{"copilot"}, Gh: "/opt/homebrew/bin/gh"})
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), fineGrained)
+	token := writeToken(t, filepath.Join(home, "secrets", "github", "acme.token"), "github_pat_readonly")
+	composition, err := Compose(load(t, home), Selection{Agents: []string{"copilot"}, Gh: "/opt/homebrew/bin/gh", GitHubOwner: "Acme"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,35 +143,52 @@ func TestCopilotSecretComesFromGhAndGitHubFromTheReadOnlyToken(t *testing.T) {
 	}
 }
 
-func TestAnEmptyReadOnlyTokenFileIsIgnored(t *testing.T) {
-	home := filepath.Join(t.TempDir(), "home")
-	testutil.WriteFile(t, filepath.Join(home, "secrets", "github-readonly-token"), "")
-	composition := composeWith(t, load(t, home), Selection{})
-	if _, set := composition.Secrets["github"]; set {
-		t.Fatal("github secret set from an empty token file")
-	}
-	if _, set := composition.Bindings["github"]; set {
-		t.Fatal("github binding without a token, which would fall back to the global sbx secret")
-	}
-}
-
-func TestGitHubNoneLeavesOutTheTokenEvenWhenTheFileExists(t *testing.T) {
-	home := filepath.Join(t.TempDir(), "home")
-	writeToken(t, filepath.Join(home, "secrets", "github-readonly-token"), "github_pat_readonly")
-	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "github = \"none\"\n")
-	settings := load(t, home)
-	composition := composeWith(t, settings, Selection{})
-	if composition.Secrets["github"] != nil || composition.Bindings["github"] != nil {
-		t.Fatalf("secrets %v bindings %v", composition.Secrets, composition.Bindings)
-	}
-	if err := settings.CheckGitHubToken(); err != nil {
-		t.Fatal(err)
+func TestNoGitHubCredentialWithoutAModeAnOwnerOrAGoodToken(t *testing.T) {
+	for name, files := range map[string]map[string]string{
+		"no mode":     {"secrets/github/acme.token": "github_pat_readonly"},
+		"empty token": {"config.toml": fineGrained, "secrets/github/acme.token": ""},
+		"other owner": {"config.toml": fineGrained, "secrets/github/globex.token": "github_pat_readonly"},
+		"none":        {"config.toml": "[github]\nmode = \"none\"\n", "secrets/github/acme.token": "github_pat_readonly"},
+		"gh, no gh":   {"config.toml": "[github]\nmode = \"gh\"\n"},
+	} {
+		home := filepath.Join(t.TempDir(), "home")
+		for path, content := range files {
+			writeToken(t, filepath.Join(home, path), content)
+		}
+		composition := composeWith(t, load(t, home), Selection{GitHubOwner: "acme"})
+		if composition.Secrets["github"] != nil || composition.Bindings["github"] != nil {
+			t.Errorf("%s: secrets %v bindings %v", name, composition.Secrets, composition.Bindings)
+		}
 	}
 }
 
-func TestOnlyAFineGrainedTokenPassesTheGitHubTokenCheck(t *testing.T) {
+func TestGhModeSendsTheGhLoginAsTheGitHubSecret(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "[github]\nmode = \"gh\"\n")
+	composition := composeWith(t, load(t, home), Selection{Gh: "/usr/bin/gh", GitHubOwner: "acme"})
+	if got := composition.Secrets["github"]; !reflect.DeepEqual(got, map[string]any{"command": "/usr/bin/gh auth token"}) {
+		t.Errorf("github = %v", got)
+	}
+}
+
+func TestTheGitHubSettingIsATableWithAKnownMode(t *testing.T) {
+	for config, fragment := range map[string]string{
+		"github = \"readonly-token\"\n": `replace github = "readonly-token" with [github] mode = "fine-grained"`,
+		"github = \"none\"\n":           `[github] mode = "none"`,
+		"[github]\nmode = \"app\"\n":    `mode must be one of "fine-grained", "gh", "none"`,
+		"github = \"foo\"\n":            `(modes: "fine-grained", "gh", "none")`,
+		"[github]\ntoken = \"x\"\n":     "[github]: unknown keys token",
+	} {
+		home := filepath.Join(t.TempDir(), "home")
+		testutil.WriteFile(t, filepath.Join(home, "config.toml"), config)
+		_, err := LoadSettings(home)
+		expectError(t, err, fragment)
+	}
+}
+
+func TestOnlyAFineGrainedTokenPassesTheGitHubCheck(t *testing.T) {
 	for token, fragment := range map[string]string{
-		"":                                "no GitHub token at",
+		"":                                "acme.token is empty",
 		"gho_abc":                         "gh CLI login token",
 		"ghp_abc":                         "classic personal access token",
 		"ghs_abc":                         "GitHub App token",
@@ -177,8 +197,9 @@ func TestOnlyAFineGrainedTokenPassesTheGitHubTokenCheck(t *testing.T) {
 		"github_pat_11ABCDEF":             "",
 	} {
 		home := filepath.Join(t.TempDir(), "home")
-		writeToken(t, filepath.Join(home, "secrets", "github-readonly-token"), token+"\n")
-		err := load(t, home).CheckGitHubToken()
+		testutil.WriteFile(t, filepath.Join(home, "config.toml"), fineGrained)
+		writeToken(t, filepath.Join(home, "secrets", "github", "acme.token"), token+"\n")
+		err := load(t, home).CheckGitHub("acme", "")
 		if fragment == "" {
 			if err != nil {
 				t.Errorf("%q: %v", token, err)
@@ -187,6 +208,15 @@ func TestOnlyAFineGrainedTokenPassesTheGitHubTokenCheck(t *testing.T) {
 		}
 		expectError(t, err, fragment)
 	}
+}
+
+func TestAnOwnerNameCannotLeaveTheTokenDirectory(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), fineGrained)
+	for _, owner := range []string{"", "..", "../secrets", "a/b", "-acme", "acme_"} {
+		expectError(t, load(t, home).CheckGitHub(owner, ""), "is not a GitHub owner name")
+	}
+	expectError(t, load(t, home).CheckGitHub("jdoe_acme", ""), "no GitHub token for jdoe_acme")
 }
 
 func writeToken(t *testing.T, path, token string) string {
@@ -200,10 +230,11 @@ func writeToken(t *testing.T, path, token string) string {
 
 func TestATokenFileOthersCanReadIsRefusedAndNeverBound(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
-	testutil.WriteFile(t, filepath.Join(home, "secrets", "github-readonly-token"), "github_pat_readonly")
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), fineGrained)
+	testutil.WriteFile(t, filepath.Join(home, "secrets", "github", "acme.token"), "github_pat_readonly")
 	settings := load(t, home)
-	expectError(t, settings.CheckGitHubToken(), "is readable by other users (mode 644)")
-	if composeWith(t, settings, Selection{}).Bindings["github"] != nil {
+	expectError(t, settings.CheckGitHub("acme", ""), "is readable by other users (mode 644)")
+	if composeWith(t, settings, Selection{GitHubOwner: "acme"}).Bindings["github"] != nil {
 		t.Fatal("bound a token that failed the check")
 	}
 }
@@ -228,12 +259,12 @@ func TestConfigAndBooksCannotSupplyTheGitHubCredential(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
 	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "[secrets.github]\ncommand = \"gh auth token\"\n")
 	_, err := LoadSettings(home)
-	expectError(t, err, "the github secret and binding come only from the read-only token file")
+	expectError(t, err, "the github secret and binding come only from [github] mode")
 
 	dir := t.TempDir()
 	testutil.WriteFile(t, filepath.Join(dir, "book.toml"), "name = \"b\"\n[bindings.github]\napiKey = { domains = [\"api.github.com\"] }\n")
 	_, err = LoadBook(dir)
-	expectError(t, err, "the github secret and binding come only from the read-only token file")
+	expectError(t, err, "the github secret and binding come only from [github] mode")
 }
 
 func TestAWSProfilesAddTheBrokerKitAndBinding(t *testing.T) {
