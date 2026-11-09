@@ -19,8 +19,8 @@ const (
 )
 
 var (
-	GitHubModes = []string{GitHubFineGrained, GitHubGh, GitHubNone}
-	githubKeys  = []string{"mode"}
+	GitHubModes = []string{GitHubFineGrained, GitHubApp, GitHubGh, GitHubNone}
+	githubKeys  = []string{"mode", "app_client_id"}
 	githubOwner = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?$`)
 )
 
@@ -75,7 +75,7 @@ func (s *Settings) LegacyGitHubToken() string {
 
 func (s *Settings) noModeError() error {
 	return errorf("choose how sandboxes reach GitHub: run `stage setup --github MODE` or set [github] mode in %s "+
-		"(fine-grained: a read-only token per owner; gh: your gh login, which can write; none: no GitHub credential)",
+		"(fine-grained: a read-only token per owner; app: your own read-only GitHub App; gh: your gh login, which can write; none: no GitHub credential)",
 		filepath.Join(s.Home, "config.toml"))
 }
 
@@ -85,6 +85,8 @@ func (s *Settings) CheckGitHub(owner, gh string) error {
 		return s.noModeError()
 	case GitHubNone:
 		return nil
+	case GitHubApp:
+		return s.checkGitHubApp()
 	case GitHubGh:
 		if len(s.Managed.orUnmanaged().Paths) > 0 {
 			return errorf("[github] mode = %q is refused while managed settings are in place (%s); use %q or %q",
@@ -180,6 +182,12 @@ func (s *Settings) gitHubCredential(selection Selection, secrets, bindings map[s
 		secrets[GitHubService] = map[string]any{"command": "/bin/cat " + ShellQuote(s.GitHubTokenFile(selection.GitHubOwner))}
 	case GitHubGh:
 		secrets[GitHubService] = map[string]any{"command": ShellQuote(selection.Gh) + " auth token"}
+	case GitHubApp:
+		secret, err := s.gitHubAppSecret()
+		if err != nil {
+			return
+		}
+		secrets[GitHubService] = secret
 	default:
 		return
 	}

@@ -47,6 +47,8 @@ stage login fix-login                # save the sandbox's agy login for future s
 stage down fix-login                 # remove the sandbox, its scoped secrets and the scratch clone
 stage broker start|stop|status       # the AWS broker (up starts it when a sandbox needs it)
 stage broker serve                   # run the broker in the foreground
+stage github login                   # log in to your GitHub App ([github] mode = "app")
+stage github token                   # print a fresh app token; sbx runs this on the host
 ```
 
 `stage ship` shows the commits and a diffstat, with control characters escaped, and asks before pushing (`--yes`
@@ -80,6 +82,7 @@ clone, so ship anything you want to keep first.
    | Mode | The sandbox gets | Use it when |
    | --- | --- | --- |
    | `fine-grained` | The read-only token for its repository's owner | You want sandboxes that cannot write to GitHub |
+   | `app` | A token from your own read-only GitHub App, refreshed on the host | You want read-only access across several organizations without a token per owner |
    | `gh` | Your gh login (`gh auth token`), as a per-sandbox secret | You accept that the sandbox can write as you |
    | `none` | No GitHub credential | Public repositories only, or no GitHub API at all |
 
@@ -89,9 +92,45 @@ clone, so ship anything you want to keep first.
    the token is fine-grained; it cannot see the token's permissions, so making it read-only is up to you. Limit it
    to the repositories you work on and give it only Contents: read and Metadata: read (add Pull requests: read if
    agents should read pull requests). A read-only token can still read every repository it is scoped to, so keep
-   that list short. gh login tokens (`gho_`), classic tokens (`ghp_`) and GitHub App tokens are refused. The old
+   that list short. gh login tokens (`gho_`), classic tokens (`ghp_`) and GitHub App tokens are refused (use `app`
+   mode for an app). The old
    single `~/.scoring-stage/secrets/github-readonly-token` file is no longer read; move it to
    `secrets/github/<owner>.token` for the owner it was created for.
+
+   **app.** stage ships no GitHub App; you register your own (enterprise-owned, organization-owned or public all
+   work) and install it on every organization whose repositories sandboxes work in. Configure the app with:
+
+   - Repository permissions: Contents, Metadata, Pull requests, Issues and Actions set to Read-only, and no
+     permission set to Read and write or Admin
+   - Enable Device Flow: on
+   - Webhook: off
+   - Expire user authorization tokens: on (recommended; stage also works without expiry)
+
+   Then put its Client ID in `~/.scoring-stage/config.toml` and log in on the host:
+
+   ```toml
+   [github]
+   mode = "app"
+   app_client_id = "Iv23li..."
+   ```
+
+   ```sh
+   stage github login     # shows a code to enter at https://github.com/login/device
+   ```
+
+   Login uses GitHub's device flow with the Client ID only; there is no client secret. The access token (`ghu_`,
+   about 8 hours) and refresh token (`ghr_`, about 6 months) are saved with their expiry times in
+   `~/.scoring-stage/secrets/github/app.json` (mode 600). Each sandbox gets a `github` secret whose command is
+   `stage github token`, with `refresh: 30m` in its env file: sbx runs it on the host at most every 30 minutes, and
+   it refreshes the access token when fewer than 40 minutes remain. The refresh token never enters the sandbox,
+   and concurrent refreshes take a lock so a rotated refresh token is not lost.
+
+   After login, on every refresh and on every `stage up`, stage lists the app's installations
+   (`GET /user/installations`) and refuses, removing the saved login, if any installation grants a write or admin
+   permission; the error names the account and the permission. `stage setup` and `stage github login` list the
+   accounts the app is installed on: a sandbox can read what the app and you can both read in all of them, so app
+   mode is not limited to one owner per sandbox. If the refresh token expires or is revoked, or `app_client_id`
+   changes, run `stage github login` again.
 
    **gh.** stage warns on `stage setup` and every `stage up` in this mode. GraphQL lets a sandbox do anything your gh
    login can, in every repository it can write to: commit to and move or delete branches (`createCommitOnBranch`,
@@ -130,7 +169,7 @@ each with its own egress and credentials:
 
 A kit reference works wherever a name does, for another agent or another version of one of these.
 
-The `github` binding (in `fine-grained` and `gh` modes), an agent's bindings and, with AWS, `stage-broker` are written to sbx's
+The `github` binding (in `fine-grained`, `app` and `gh` modes), an agent's bindings and, with AWS, `stage-broker` are written to sbx's
 `~/.config/sbx/credentials.yaml`. A binding approves a service's credential on named domains, capped by what the
 kits declare. Bindings are shared by every sandbox, so `stage down` leaves them in place.
 
@@ -175,7 +214,7 @@ base = "docker.io/sbx/shell:1.1.0"                 # the workload kit
 kits = ["./kits/personal"]                         # extra kits, relative to ~/.scoring-stage
 
 [github]
-mode = "fine-grained"                              # or "gh" (your gh login, which can write) or "none"
+mode = "fine-grained"                              # or "app" (with app_client_id), "gh" (your gh login, which can write) or "none"
 
 [aws]
 profiles = ["sandbox"]

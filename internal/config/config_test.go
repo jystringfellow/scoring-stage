@@ -175,8 +175,8 @@ func TestTheGitHubSettingIsATableWithAKnownMode(t *testing.T) {
 	for config, fragment := range map[string]string{
 		"github = \"readonly-token\"\n": `replace github = "readonly-token" with [github] mode = "fine-grained"`,
 		"github = \"none\"\n":           `[github] mode = "none"`,
-		"[github]\nmode = \"app\"\n":    `mode must be one of "fine-grained", "gh", "none"`,
-		"github = \"foo\"\n":            `(modes: "fine-grained", "gh", "none")`,
+		"[github]\nmode = \"bogus\"\n":  `mode must be one of "fine-grained", "app", "gh", "none"`,
+		"github = \"foo\"\n":            `(modes: "fine-grained", "app", "gh", "none")`,
 		"[github]\ntoken = \"x\"\n":     "[github]: unknown keys token",
 	} {
 		home := filepath.Join(t.TempDir(), "home")

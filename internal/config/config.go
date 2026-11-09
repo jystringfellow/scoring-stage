@@ -125,6 +125,7 @@ type Settings struct {
 	prFooter   string
 	copyLogins []string
 	githubMode string
+	githubApp  string
 }
 
 func (s *Settings) PRFooter() string { return s.prFooter }
@@ -189,6 +190,9 @@ func LoadSettings(home string) (*Settings, error) {
 		}
 	}
 	if settings.githubMode, err = decodeGitHub(data["github"], path); err != nil {
+		return nil, err
+	}
+	if settings.githubApp, err = decodeGitHubAppClientID(data["github"], path); err != nil {
 		return nil, err
 	}
 	if err := refuseGitHubService(settings.secrets, settings.bindings, path); err != nil {
