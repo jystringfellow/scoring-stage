@@ -47,7 +47,8 @@ func (h *harness) expectStdout(fragments ...string) {
 const globalSecrets = `{"secrets": [
 	{"scope": "global", "type": "service", "name": "anthropic", "secret": "(stored)"},
 	{"scope": "global", "type": "service", "name": "nuget-feed", "secret": "(stored)"},
-	{"scope": "stage-other", "type": "service", "name": "openai", "secret": "(stored)"}
+	{"scope": "global", "type": "service", "name": "openai", "secret": "(stored)"},
+	{"scope": "stage-other", "type": "service", "name": "copilot", "secret": "(stored)"}
 ]}`
 
 func TestSetupMarksGlobalBindingsExpectedStaleOrOther(t *testing.T) {
@@ -59,7 +60,7 @@ func TestSetupMarksGlobalBindingsExpectedStaleOrOther(t *testing.T) {
 		"stage: global credential bindings in "+h.credentials,
 		"Any kit that declares credential@1 for a bound service can send that service's secret to any domain the kit names; outside stage sandboxes a binding is inert unless its service has a global secret",
 		"  anthropic (expected, global secret set): platform.claude.com, api.anthropic.com\n    stage binds this for agent claude;",
-		"  openai (stage (not configured)): auth.openai.com, chatgpt.com\n    stage binds this when you use agent codex; remove it only if you no longer do\n",
+		"  openai (not configured, global secret set): auth.openai.com, chatgpt.com\n    stage binds this when you use agent codex; remove it only if you no longer do\n",
 		"  github (expected): api.github.com, github.com\n    stage binds this for [github] mode \"fine-grained\";",
 		"  stage-broker (stale): localhost, localhost:9911\n    stage binds only localhost:9911 for the AWS broker; sbx never drops a binding domain, so delete localhost from the stage-broker entry in "+h.credentials,
 		"  nuget-feed (other, global secret set): pkgs.example.com\n    `sbx secret rm nuget-feed` removes the global secret any kit can send anywhere; stage does not bind this, so if nothing needs it, delete the nuget-feed entry from "+h.credentials+" by hand",
@@ -78,7 +79,7 @@ func TestSetupMarksAStageServiceWhoseAgentIsNotConfigured(t *testing.T) {
 	testutil.WriteFile(t, h.credentials, globalBindings)
 	h.expect(0, "setup")
 	h.expectStdout(
-		"  anthropic (stage (not configured)): platform.claude.com, api.anthropic.com\n    stage binds this when you use agent claude; remove it only if you no longer do\n",
+		"  anthropic (not configured): platform.claude.com, api.anthropic.com\n    stage binds this when you use agent claude; remove it only if you no longer do\n",
 		"  nuget-feed (other): pkgs.example.com\n    stage does not bind this; if nothing needs it, delete the nuget-feed entry from "+h.credentials+" by hand",
 	)
 }
@@ -95,9 +96,10 @@ func TestSetupStillAuditsBindingsWhenGlobalSecretsAreUnreadable(t *testing.T) {
 func TestSetupSkipsAnUnrecognisedBindingAndListsTheRest(t *testing.T) {
 	h := setup(t)
 	testutil.WriteFile(t, h.credentials, "bindings:\n  odd: [1, 2]\n  nuget-feed:\n    apiKey:\n      domains: [pkgs.example.com]\n")
+	h.sbx.SetSecrets(`{"secrets": [{"scope": "global", "type": "service", "name": "odd", "secret": "(stored)"}]}`)
 	h.expect(0, "setup")
 	h.expectStdout(
-		"  odd (unrecognised entry): \n    stage cannot read this entry's domains; inspect the odd entry in "+h.credentials,
+		"  odd (unrecognised entry, global secret set): \n    `sbx secret rm odd` removes the global secret any kit can send anywhere; stage cannot read this entry's domains; inspect the odd entry in "+h.credentials,
 		"  nuget-feed (other): pkgs.example.com",
 	)
 }

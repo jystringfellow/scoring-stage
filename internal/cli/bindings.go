@@ -14,7 +14,7 @@ import (
 const (
 	bindingExpected      = "expected"
 	bindingStale         = "stale"
-	bindingNotConfigured = "stage (not configured)"
+	bindingNotConfigured = "not configured"
 	bindingOther         = "other"
 	bindingUnrecognised  = "unrecognised entry"
 )
@@ -90,9 +90,14 @@ func containsFold(list []string, value string) bool {
 func bindingGuidance(binding sbx.Binding, mark string, global bool, extra []string, reference *config.StageBinding, path string) string {
 	service := printable(binding.Service)
 	file := printable(path)
+	removeSecret := fmt.Sprintf("`sbx secret rm %s` removes the global secret any kit can send anywhere; ", printable(config.ShellQuote(binding.Service)))
 	switch mark {
 	case bindingUnrecognised:
-		return fmt.Sprintf("stage cannot read this entry's domains; inspect the %s entry in %s", service, file)
+		guidance := fmt.Sprintf("stage cannot read this entry's domains; inspect the %s entry in %s", service, file)
+		if global {
+			return removeSecret + guidance
+		}
+		return guidance
 	case bindingExpected:
 		return fmt.Sprintf("stage binds this for %s; run only kits you trust with the %s credential", strings.Join(reference.Reasons, ", "), service)
 	case bindingNotConfigured:
@@ -104,8 +109,7 @@ func bindingGuidance(binding sbx.Binding, mark string, global bool, extra []stri
 	remove := fmt.Sprintf("if nothing needs it, delete the %s entry from %s by hand", service, file)
 	prune := "(never `sbx env rm --prune-bindings` a stage sandbox: it removes shared entries machine-wide)"
 	if global {
-		return fmt.Sprintf("`sbx secret rm %s` removes the global secret any kit can send anywhere; stage does not bind this, so %s %s",
-			printable(config.ShellQuote(binding.Service)), remove, prune)
+		return fmt.Sprintf("%sstage does not bind this, so %s %s", removeSecret, remove, prune)
 	}
 	return fmt.Sprintf("stage does not bind this; %s %s", remove, prune)
 }

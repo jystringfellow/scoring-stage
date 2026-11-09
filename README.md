@@ -230,8 +230,11 @@ clone, so ship anything you want to keep first.
    has a global secret (`sbx secret ls --global`); that pairing is the standing risk, even under a plain `sbx run`.
    `stage setup` (and `stage up --plan`) reads that file, never writes it, and lists each bound service with its
    domains, noting `global secret set` where there is one, and marks it:
-   - `expected`: stage binds it for your agents, `[github]` mode, the AWS broker, or your config and books;
-   - `stage (not configured)`: stage binds it for an agent or mode you have not configured; remove it only if you
+   - `expected`: stage binds it for your agents, `[github]` mode, the AWS broker, or your config and books.
+     Expected does not mean safe. If your agent sign-ins live as global sbx secrets (such as `anthropic` or
+     `openai`), any kit run under a plain `sbx run` outside stage can redirect them, so "run only kits you trust"
+     covers your own agent sign-ins too, not only the secrets stage creates;
+   - `not configured`: stage binds it for an agent or mode you have not configured; remove it only if you
      no longer use that agent or mode;
    - `stale`: a stage service listing a domain that is not, as literal text ignoring case, one stage binds, such as
      `localhost` beside `localhost:9911`;
