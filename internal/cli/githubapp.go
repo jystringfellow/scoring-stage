@@ -41,6 +41,9 @@ func (a *App) gitHubAppClientID(settings *config.Settings) (string, error) {
 	if settings.GitHubMode() != config.GitHubApp {
 		return "", errorf("stage github works only with [github] mode = %q; set it in %s", config.GitHubApp, filepath.Join(settings.Home, "config.toml"))
 	}
+	if err := settings.Managed.CheckGitHubMode(config.GitHubApp); err != nil {
+		return "", err
+	}
 	if settings.GitHubAppClientID() == "" {
 		return "", settings.CheckGitHub("", "")
 	}

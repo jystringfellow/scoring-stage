@@ -61,7 +61,12 @@ func quotedList(values []string) string {
 	return strings.Join(quoted, ", ")
 }
 
-func (s *Settings) GitHubMode() string { return s.githubMode }
+func (s *Settings) GitHubMode() string {
+	if s.githubMode == "" {
+		return s.Managed.DefaultGitHubMode()
+	}
+	return s.githubMode
+}
 
 func (s *Settings) GitHubTokenDir() string { return filepath.Join(s.Home, "secrets", "github") }
 
@@ -73,25 +78,46 @@ func (s *Settings) LegacyGitHubToken() string {
 	return filepath.Join(s.Home, "secrets", "github-readonly-token")
 }
 
+var gitHubModeDescriptions = map[string]string{
+	GitHubFineGrained: "a read-only token per owner",
+	GitHubApp:         "your own read-only GitHub App",
+	GitHubGh:          "your gh login, which can write",
+	GitHubNone:        "no GitHub credential",
+}
+
 func (s *Settings) noModeError() error {
-	return errorf("choose how sandboxes reach GitHub: run `stage setup --github MODE` or set [github] mode in %s "+
-		"(fine-grained: a read-only token per owner; app: your own read-only GitHub App; gh: your gh login, which can write; none: no GitHub credential)",
-		filepath.Join(s.Home, "config.toml"))
+	allowed := s.Managed.AllowedGitHubModes()
+	if len(allowed) == 0 {
+		return s.Managed.orUnmanaged().noGitHubModeAllowed()
+	}
+	described := make([]string, len(allowed))
+	for i, mode := range allowed {
+		described[i] = mode
+		if description, known := gitHubModeDescriptions[mode]; known {
+			described[i] += ": " + description
+		}
+	}
+	return errorf("choose how sandboxes reach GitHub: run `stage setup --github MODE` or set [github] mode in %s (%s)",
+		filepath.Join(s.Home, "config.toml"), strings.Join(described, "; "))
 }
 
 func (s *Settings) CheckGitHub(owner, gh string) error {
-	switch s.githubMode {
-	case "":
+	mode := s.GitHubMode()
+	if mode == "" {
 		return s.noModeError()
+	}
+	if err := s.Managed.CheckGitHubMode(mode); err != nil {
+		if len(s.Managed.AllowedGitHubModes()) == 0 {
+			return err
+		}
+		return errorf("%v; set [github] mode in %s to an allowed mode", err, filepath.Join(s.Home, "config.toml"))
+	}
+	switch mode {
 	case GitHubNone:
 		return nil
 	case GitHubApp:
 		return s.checkGitHubApp()
 	case GitHubGh:
-		if len(s.Managed.orUnmanaged().Paths) > 0 {
-			return errorf("[github] mode = %q is refused while managed settings are in place (%s); use %q or %q",
-				GitHubGh, s.Managed.where(), GitHubFineGrained, GitHubNone)
-		}
 		if gh == "" {
 			return errorf("[github] mode = %q needs the gh CLI on the host, logged in with `gh auth login`", GitHubGh)
 		}
@@ -177,7 +203,7 @@ func (s *Settings) gitHubCredential(selection Selection, secrets, bindings map[s
 	if s.CheckGitHub(selection.GitHubOwner, selection.Gh) != nil {
 		return
 	}
-	switch s.githubMode {
+	switch s.GitHubMode() {
 	case GitHubFineGrained:
 		secrets[GitHubService] = map[string]any{"command": "/bin/cat " + ShellQuote(s.GitHubTokenFile(selection.GitHubOwner))}
 	case GitHubGh:

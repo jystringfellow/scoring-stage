@@ -65,6 +65,26 @@ func TestGitHubTokenPrintsTheTokenAndRefreshesItNearExpiry(t *testing.T) {
 	}
 }
 
+func TestManagedSettingsRefuseAppModeUntilAllowedModesListsIt(t *testing.T) {
+	h := appSetup(t)
+	h.expect(0, "github", "login")
+	testutil.WriteFile(t, h.managed, "repo_kits = \"ask\"\n")
+	h.expect(1, "up", h.remote.Checkout, "fix")
+	h.expectStderr(`GitHub mode "app" is not allowed`)
+	h.expect(1, "github", "token")
+	h.expectStderr(`GitHub mode "app" is not allowed`)
+	if h.stdout.String() != "" {
+		t.Errorf("printed a token while app mode is refused: %q", h.stdout.String())
+	}
+	h.expect(1, "github", "login")
+	if h.anyCall("env create") {
+		t.Error("created an app-mode sandbox that managed settings do not allow")
+	}
+	testutil.WriteFile(t, h.managed, "[github]\nallowed_modes = [\"app\"]\n")
+	h.expect(0, "github", "token")
+	h.expect(0, "up", h.remote.Checkout, "fix")
+}
+
 func TestGitHubCommandsNeedAppMode(t *testing.T) {
 	h := setup(t)
 	h.expect(1, "github", "login")
