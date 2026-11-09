@@ -89,14 +89,29 @@ clone, so ship anything you want to keep first.
 
    **fine-grained.** A fine-grained personal access token belongs to one owner (a user or an organization), so
    stage keeps one per owner at `~/.scoring-stage/secrets/github/<owner>.token` (mode 600) and gives each sandbox
-   only the token for its repository's owner. A sandbox works in one owner's repositories. stage checks only that
-   the token is fine-grained; it cannot see the token's permissions, so making it read-only is up to you. Limit it
-   to the repositories you work on and give it only Contents: read and Metadata: read (add Pull requests: read if
-   agents should read pull requests). A read-only token can still read every repository it is scoped to, so keep
-   that list short. gh login tokens (`gho_`), classic tokens (`ghp_`) and GitHub App tokens are refused (use `app`
-   mode for an app). The old
-   single `~/.scoring-stage/secrets/github-readonly-token` file is no longer read; move it to
-   `secrets/github/<owner>.token` for the owner it was created for.
+   only the token for its repository's owner. A sandbox works in one owner's repositories. stage checks that the
+   token is fine-grained, that GitHub accepts it and when it expires, but it cannot see the token's permissions, so
+   making it read-only is up to you. Limit it to the repositories you work on and give it only Contents: read and
+   Metadata: read (add Pull requests: read if agents should read pull requests). A read-only token can still read
+   every repository it is scoped to, so keep that list short. gh login tokens (`gho_`), classic tokens (`ghp_`) and
+   GitHub App tokens are refused (use `app` mode for an app). The old single `~/.scoring-stage/secrets/github-readonly-token` file is no longer
+   read; move it to `secrets/github/<owner>.token` for the owner it was created for.
+
+   Save each token with `stage token set <owner>`. When stdin is a terminal it reads the token without echoing it;
+   otherwise it reads stdin, so `pbpaste | stage token set acme` works. It refuses anything but a single fine-grained token,
+   checks it with GitHub (`GET /rate_limit`) and refuses to save one GitHub rejects with 401, then writes
+   `secrets/github/<owner>.token` atomically with mode 600, replacing any token already there. It never prints the
+   token. A file you write by hand still works.
+
+   stage reads a token's expiry from the `GitHub-Authentication-Token-Expiration` header GitHub sends on
+   authenticated requests (a token with no expiry gets no header). `stage setup` reports each owner's token
+   expiry and warns when it is within 7 days or GitHub rejects the token. In fine-grained mode `stage up` calls
+   `GET /repos/<owner>/<repo>` with the sandbox's token: it refuses when GitHub answers 401 (expired or revoked),
+   warns when GitHub answers 404 (the token does not include that repository, or was created for another owner) or
+   403 (also: the token is not authorized for the organization's SAML SSO, or a rate limit), and warns when the
+   token expires within 7 days. An expiry that reads as past on a token GitHub accepts is a warning to check the
+   clock, not a refusal. If GitHub cannot be reached, `stage up` warns and
+   continues. stage sends tokens only to `api.github.com`.
 
    **app.** stage ships no GitHub App; you register your own (enterprise-owned, organization-owned or public all
    work) and install it on every organization whose repositories sandboxes work in. Configure the app with:

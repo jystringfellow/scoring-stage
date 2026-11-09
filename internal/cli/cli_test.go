@@ -26,7 +26,12 @@ type harness struct {
 	managed        string
 	hostProfiles   []string
 	gh             string
-	github         *githubtest.Fake
+	github         *fakeGitHub
+	githubApp      *githubtest.Fake
+	terminal       bool
+	stdinTerminal  bool
+	stdin          string
+	typed          string
 }
 
 func setup(t *testing.T) *harness {
@@ -41,6 +46,7 @@ func setup(t *testing.T) *harness {
 	config.ManagedPaths = func() []string { return []string{h.managed} }
 	t.Cleanup(func() { config.ManagedPaths = original })
 	writeGitHubSetup(t, given, "")
+	h.github = newFakeGitHub(t)
 	return h
 }
 
@@ -64,18 +70,22 @@ func (h *harness) stage(args ...string) int {
 	h.stdout.Reset()
 	h.stderr.Reset()
 	app := &App{
-		Stdout:      &h.stdout,
-		Stderr:      &h.stderr,
-		FindGh:      func() string { return h.gh },
-		BrokerPID:   func(string) int { return 0 },
-		BrokerStart: func(home string) error { h.brokerStarts = append(h.brokerStarts, home); return nil },
-		IsTerminal:  func() bool { return false },
+		Stdin:           strings.NewReader(h.stdin),
+		Stdout:          &h.stdout,
+		Stderr:          &h.stderr,
+		FindGh:          func() string { return h.gh },
+		BrokerPID:       func(string) int { return 0 },
+		BrokerStart:     func(home string) error { h.brokerStarts = append(h.brokerStarts, home); return nil },
+		IsTerminal:      func() bool { return h.terminal },
+		StdinIsTerminal: func() bool { return h.stdinTerminal },
+		ReadSecret:      func() ([]byte, error) { return []byte(h.typed), nil },
+		GitHubAPI:       h.github.api(),
 		HostAWSProfiles: func() ([]string, error) {
 			return h.hostProfiles, nil
 		},
 	}
-	if h.github != nil {
-		app.GitHub = h.github.Client()
+	if h.githubApp != nil {
+		app.GitHub = h.githubApp.Client()
 	}
 	return app.Main(args)
 }

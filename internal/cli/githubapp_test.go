@@ -18,7 +18,7 @@ const appMode = "[github]\nmode = \"app\"\napp_client_id = \"Iv23test\"\n"
 func appSetup(t *testing.T) *harness {
 	t.Helper()
 	h := setup(t)
-	h.github = githubtest.NewFake(t)
+	h.githubApp = githubtest.NewFake(t)
 	testutil.WriteFile(t, filepath.Join(h.home, "config.toml"), appMode)
 	stage := testutil.WriteFile(t, filepath.Join(t.TempDir(), "bin", "stage"), "")
 	original := config.StageExecutable
@@ -31,7 +31,7 @@ func (h *harness) appLogin() string { return filepath.Join(h.home, "secrets", "g
 
 func TestGitHubLoginShowsTheCodeSavesTheLoginAndListsTheAccounts(t *testing.T) {
 	h := appSetup(t)
-	h.github.Permissions["globex"] = map[string]string{"contents": "read"}
+	h.githubApp.Permissions["globex"] = map[string]string{"contents": "read"}
 	h.expect(0, "github", "login")
 	h.expectStderr("open https://github.com/login/device and enter the code ABCD-1234")
 	for _, fragment := range []string{"logged in to the GitHub App Iv23test", "installed on acme, globex, read-only"} {
@@ -58,10 +58,10 @@ func TestGitHubTokenPrintsTheTokenAndRefreshesItNearExpiry(t *testing.T) {
 	if h.stdout.String() != "ghu_access1\n" {
 		t.Errorf("stdout %q", h.stdout.String())
 	}
-	h.github.Advance(8 * time.Hour)
+	h.githubApp.Advance(8 * time.Hour)
 	h.expect(0, "github", "token")
-	if h.stdout.String() != "ghu_access2\n" || h.github.Refreshes != 1 {
-		t.Errorf("stdout %q after %d refreshes", h.stdout.String(), h.github.Refreshes)
+	if h.stdout.String() != "ghu_access2\n" || h.githubApp.Refreshes != 1 {
+		t.Errorf("stdout %q after %d refreshes", h.stdout.String(), h.githubApp.Refreshes)
 	}
 }
 
@@ -113,7 +113,7 @@ func TestUpInAppModeGivesTheSandboxTheStageTokenCommand(t *testing.T) {
 func TestUpInAppModeRefusesAnAppThatCanWriteAndRemovesTheLogin(t *testing.T) {
 	h := appSetup(t)
 	h.expect(0, "github", "login")
-	h.github.Permissions["acme"]["contents"] = "write"
+	h.githubApp.Permissions["acme"]["contents"] = "write"
 	h.expect(1, "up", h.remote.Checkout, "fix")
 	h.expectStderr("the installation on acme grants contents: write")
 	if h.anyCall("env create") {
@@ -149,7 +149,7 @@ func TestSetupInAppModeReportsTheLoginOrSaysToLogIn(t *testing.T) {
 			t.Errorf("stdout lacks %q:\n%s", fragment, h.stdout.String())
 		}
 	}
-	delete(h.github.Permissions, "acme")
+	delete(h.githubApp.Permissions, "acme")
 	h.expect(0, "setup")
 	h.expectStderr("the GitHub App is not installed on any account")
 }
@@ -158,12 +158,12 @@ func TestGitHubTokenRefusesOnceAnInstallationCanWriteWithoutWaitingForARefresh(t
 	h := appSetup(t)
 	h.expect(0, "github", "login")
 	h.expect(0, "github", "token")
-	h.github.Permissions["acme"]["contents"] = "write"
+	h.githubApp.Permissions["acme"]["contents"] = "write"
 	h.expect(1, "github", "token")
 	h.expectStderr("the installation on acme grants contents: write")
 	h.expectStderr("run `stage down` on running sandboxes")
-	if h.stdout.String() != "" || h.github.Refreshes != 0 {
-		t.Errorf("stdout %q after %d refreshes", h.stdout.String(), h.github.Refreshes)
+	if h.stdout.String() != "" || h.githubApp.Refreshes != 0 {
+		t.Errorf("stdout %q after %d refreshes", h.stdout.String(), h.githubApp.Refreshes)
 	}
 	if _, err := os.Stat(h.appLogin()); err == nil {
 		t.Error("kept the login of an app that can write")
@@ -173,8 +173,8 @@ func TestGitHubTokenRefusesOnceAnInstallationCanWriteWithoutWaitingForARefresh(t
 func TestGitHubTokenWarnsAndKeepsTheCurrentTokenWhileGitHubCannotRefreshIt(t *testing.T) {
 	h := appSetup(t)
 	h.expect(0, "github", "login")
-	h.github.RefreshStatus = http.StatusServiceUnavailable
-	h.github.Advance(8*time.Hour - 20*time.Minute)
+	h.githubApp.RefreshStatus = http.StatusServiceUnavailable
+	h.githubApp.Advance(8*time.Hour - 20*time.Minute)
 	h.expect(0, "github", "token")
 	if h.stdout.String() != "ghu_access1\n" {
 		t.Errorf("stdout %q", h.stdout.String())
