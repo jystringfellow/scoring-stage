@@ -423,7 +423,7 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	cpus := fs.intFlag("cpus", "CPUs for the sandbox")
 	memory := fs.String("memory", "", "memory for the sandbox, such as 16g")
 	allowGlobal := fs.Bool("allow-global-policy", false, "continue even if the global sbx policy has allow rules")
-	trustRepoKits := fs.Bool("trust-repo-kits", false, "approve the kits the repository's config adds, without asking")
+	approveRepoKits := fs.Bool("approve-repo-kits", false, "approve, and remember, the kits and books the repository's config asks for")
 	plan := fs.Bool("plan", false, "write the env file and show sbx's plan without creating")
 	positional, err := fs.parse(args, "repo", "slug")
 	if err != nil {
@@ -501,7 +501,7 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if err := a.checkRepoKits(settings.Home, composition.RepoKits, *trustRepoKits, *plan); err != nil {
+	if err := a.checkRepoApprovals(settings.Home, composition, *approveRepoKits, *plan); err != nil {
 		return 0, err
 	}
 	if len(composition.Agents) == 0 {
@@ -554,27 +554,36 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	return 0, nil
 }
 
-func (a *App) checkRepoKits(home string, repoKits []config.Kit, trust, plan bool) error {
-	untrusted, fingerprints, err := config.UntrustedKits(home, repoKits)
-	if err != nil || len(untrusted) == 0 {
+func (a *App) checkRepoApprovals(home string, composition *config.Composition, approve, plan bool) error {
+	approvals, err := config.RepoApprovals(composition)
+	if err != nil {
 		return err
 	}
-	fmt.Fprintf(a.Stderr, "stage: the repository's %s adds kits you have not approved. A kit can widen the sandbox's\n"+
-		"  network access and run setup commands in it. Review them before approving:\n", config.RepoConfigPath)
-	for _, kit := range untrusted {
-		fmt.Fprintf(a.Stderr, "  - %s\n", kit.Source)
+	missing, err := config.Unapproved(home, approvals)
+	if err != nil || len(missing) == 0 {
+		return err
+	}
+	fmt.Fprintf(a.Stderr, "stage: the repository's %s asks for kits or books you have not approved. They can widen the\n"+
+		"  sandbox's network access, send credentials or run commands. Review them before approving:\n", config.RepoConfigPath)
+	for _, approval := range missing {
+		fmt.Fprintf(a.Stderr, "  - %s\n", approval.Label)
+		for _, detail := range approval.Details {
+			fmt.Fprintf(a.Stderr, "      %s\n", detail)
+		}
 	}
 	if plan {
-		a.warn("plan only; stage up will ask you to approve these kits")
+		a.warn("plan only; stage up will ask you to approve these")
 		return nil
 	}
-	if !trust && !a.confirm("Approve these kits for this and future sandboxes while they are unchanged?") {
-		return errorf("repository kits not approved; review them and run stage up again with --trust-repo-kits, or answer y")
+	if !approve && !a.confirm("Approve these for this and future sandboxes while they are unchanged?") {
+		return errorf("not approved; review them and answer y, or pass --approve-repo-kits to approve them without asking")
 	}
-	if err := config.TrustKits(home, untrusted, fingerprints); err != nil {
+	if err := config.Approve(home, missing); err != nil {
 		return err
 	}
-	a.say("approved %d repository kit(s); a change to one asks again", len(untrusted))
+	for _, approval := range missing {
+		a.say("approved %s (%s); a change to it asks again", approval.Label, approval.Fingerprint[:12])
+	}
 	return nil
 }
 

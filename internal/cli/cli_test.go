@@ -553,16 +553,16 @@ func TestARepositoryKitNeedsApprovalUntilItChanges(t *testing.T) {
 		".scoring-stage/kits/rules/kit.yaml": "allow: [example.com]\n",
 	})
 	h.expect(1, "up", h.remote.Checkout, "one")
-	h.expectStderr("adds kits you have not approved")
-	h.expectStderr("repository kits not approved")
+	h.expectStderr("asks for kits or books you have not approved")
+	h.expectStderr("not approved; review them")
 	if h.anyCall("env create") {
 		t.Fatal("created a sandbox with an unapproved repository kit")
 	}
 
-	h.expect(0, "up", h.remote.Checkout, "two", "--trust-repo-kits")
+	h.expect(0, "up", h.remote.Checkout, "two", "--approve-repo-kits")
 	h.expect(0, "up", h.remote.Checkout, "three")
 
 	h.commitToMain(map[string]string{".scoring-stage/kits/rules/kit.yaml": "allow: [\"**\"]\n"})
 	h.expect(1, "up", h.remote.Checkout, "four")
-	h.expectStderr("adds kits you have not approved")
+	h.expectStderr("asks for kits or books you have not approved")
 }
