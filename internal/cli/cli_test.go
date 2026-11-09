@@ -838,19 +838,76 @@ func TestUpInGhModeUsesAPerSandboxGhSecretAndWarnsThatItCanWrite(t *testing.T) {
 	h.expectStderr("The proxy refuses only git push and REST writes")
 }
 
-func TestManagedSettingsRefuseGhMode(t *testing.T) {
+func TestManagedSettingsRefuseGhModeUntilAllowedModesListsIt(t *testing.T) {
 	h := setup(t)
 	h.gh = fakeGh(t, 0)
 	testutil.WriteFile(t, h.managed, "repo_kits = \"ask\"\n")
 	testutil.WriteFile(t, filepath.Join(h.home, "config.toml"), "[github]\nmode = \"gh\"\n")
 	h.expect(1, "up", h.remote.Checkout, "fix")
-	h.expectStderr(`[github] mode = "gh" is refused while managed settings are in place`)
+	h.expectStderr(`GitHub mode "gh" is not allowed by ` + h.managed + `: managed settings allow it only when [github] allowed_modes lists "gh"`)
 	if h.anyCall("env create") {
 		t.Error("created a gh-mode sandbox under managed settings")
 	}
 	h.expect(0, "setup")
-	h.expectStderr("is refused while managed settings are in place")
 	h.expectStderr("stage up will refuse")
+	if !strings.Contains(h.stdout.String(), "allowed GitHub modes: fine-grained, none (gh needs [github] allowed_modes)") {
+		t.Errorf("setup output lacks the allowed GitHub modes:\n%s", h.stdout.String())
+	}
+	testutil.WriteFile(t, h.managed, "[github]\nallowed_modes = [\"gh\", \"none\"]\n")
+	h.expect(0, "up", h.remote.Checkout, "fix")
+	h.expectStderr("The proxy refuses only git push and REST writes")
+}
+
+func TestManagedAllowedGitHubModesRefuseOtherModesOnUpAndSetup(t *testing.T) {
+	h := setup(t)
+	testutil.WriteFile(t, h.managed, "[github]\nallowed_modes = [\"gh\", \"none\"]\n")
+	h.expect(1, "up", h.remote.Checkout, "fix")
+	h.expectStderr(`GitHub mode "fine-grained" is not allowed by ` + h.managed + ` (allowed: "gh", "none"); set [github] mode in`)
+	if h.anyCall("env create") {
+		t.Error("created a sandbox in a mode the managed settings refuse")
+	}
+	testutil.WriteFile(t, filepath.Join(h.home, "config.toml"), "")
+	h.expect(1, "setup", "--agent", "codex", "--github", "fine-grained")
+	h.expectStderr(`--github: GitHub mode "fine-grained" is not allowed by`)
+	if got := testutil.ReadFile(t, filepath.Join(h.home, "config.toml")); got != "" {
+		t.Fatalf("config.toml = %q", got)
+	}
+	h.expect(1, "up", h.remote.Checkout, "fix")
+	h.expectStderr("(gh: your gh login, which can write; none: no GitHub credential)")
+	if strings.Contains(h.stderr.String(), "fine-grained") {
+		t.Errorf("the no-mode error offers a refused mode: %s", h.stderr.String())
+	}
+	h.expect(0, "setup", "--github", "none")
+	h.expect(0, "up", h.remote.Checkout, "fix")
+}
+
+func TestASingleManagedGitHubModeIsTheDefault(t *testing.T) {
+	h := setup(t)
+	testutil.WriteFile(t, h.managed, "[github]\nallowed_modes = [\"none\"]\n")
+	testutil.WriteFile(t, filepath.Join(h.home, "config.toml"), "")
+	h.expect(0, "setup")
+	if !strings.Contains(h.stdout.String(), "github: none") {
+		t.Errorf("setup did not use the managed default:\n%s\n%s", h.stdout.String(), h.stderr.String())
+	}
+	h.expect(0, "up", h.remote.Checkout, "fix")
+	if env := testutil.ReadFile(t, filepath.Join(h.task("fix"), "sbxenv.yaml")); strings.Contains(env, "github") {
+		t.Errorf("env mentions github:\n%s", env)
+	}
+}
+
+func TestAnEmptyManagedGitHubModeListRefusesEveryMode(t *testing.T) {
+	h := setup(t)
+	testutil.WriteFile(t, h.managed, "[github]\nallowed_modes = []\n")
+	for _, config := range []string{"", "[github]\nmode = \"none\"\n"} {
+		testutil.WriteFile(t, filepath.Join(h.home, "config.toml"), config)
+		h.expect(1, "up", h.remote.Checkout, "fix")
+		h.expectStderr("sets [github] allowed_modes = [], so no GitHub mode is allowed")
+	}
+	h.expect(1, "setup", "--github", "none")
+	h.expectStderr("no GitHub mode is allowed")
+	if h.anyCall("env create") {
+		t.Error("created a sandbox although no GitHub mode is allowed")
+	}
 }
 
 func TestSetupRejectsABadGitHubModeBeforeSavingAgents(t *testing.T) {

@@ -93,10 +93,14 @@ func TestManagedSettingsCanRefuseRepositoryKitsAndCopiedLogins(t *testing.T) {
 
 func TestManagedSettingsAreDecodedStrictly(t *testing.T) {
 	for content, fragment := range map[string]string{
-		"allowed_agent = [\"claude\"]\n": "unknown keys allowed_agent",
-		"repo_kits = \"allow\"\n":        "repo_kits must be",
-		"allow_global_policy = \"no\"\n": "allow_global_policy must be true or false",
-		"[aws]\nallowed = [\"dev\"]\n":   "unknown keys allowed",
+		"allowed_agent = [\"claude\"]\n":                   "unknown keys allowed_agent",
+		"repo_kits = \"allow\"\n":                          "repo_kits must be",
+		"allow_global_policy = \"no\"\n":                   "allow_global_policy must be true or false",
+		"[aws]\nallowed = [\"dev\"]\n":                     "unknown keys allowed",
+		"[github]\nmode = \"gh\"\n":                        "[github]: unknown keys mode",
+		"github = \"gh\"\n":                                "github must be a table",
+		"[github]\nallowed_modes = \"gh\"\n":               "allowed_modes must be a list of strings",
+		"[github]\nallowed_modes = [\"readonly-token\"]\n": `allowed_modes has unknown mode "readonly-token"`,
 	} {
 		managedFiles(t, content)
 		_, err := LoadManaged()
@@ -109,6 +113,9 @@ func TestWithoutManagedSettingsNothingIsLimited(t *testing.T) {
 	managed, err := LoadManaged()
 	if err != nil || len(managed.Paths) != 0 || managed.Summary() != nil {
 		t.Fatalf("managed %+v, %v", managed, err)
+	}
+	if !reflect.DeepEqual(managed.AllowedGitHubModes(), GitHubModes) || managed.DefaultGitHubMode() != "" {
+		t.Fatalf("unmanaged GitHub modes %v, default %q", managed.AllowedGitHubModes(), managed.DefaultGitHubMode())
 	}
 	if managed.CheckAgent("agy", true, "x") != nil || managed.CheckAWSProfile("prod") != nil || !managed.AllowsGlobalPolicy() || managed.RepoKitsDenied() {
 		t.Fatal("unmanaged settings refused something")
@@ -188,5 +195,59 @@ func TestSetupWarnsAboutManagedFilesOthersCouldWrite(t *testing.T) {
 	}
 	if warnings := strings.Join(managed.Warnings(), "\n"); !strings.Contains(warnings, "is not owned by root") {
 		t.Fatalf("warnings %q", warnings)
+	}
+}
+
+func TestManagedGitHubModesNarrowAcrossFiles(t *testing.T) {
+	managedFiles(t,
+		"[github]\nallowed_modes = [\"fine-grained\", \"gh\"]\n",
+		"[github]\nallowed_modes = [\"gh\", \"none\"]\n")
+	managed, err := LoadManaged()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(managed.AllowedGitHubModes(), []string{GitHubGh}) || managed.DefaultGitHubMode() != GitHubGh {
+		t.Errorf("allowed %v, default %q", managed.AllowedGitHubModes(), managed.DefaultGitHubMode())
+	}
+	expectError(t, managed.CheckGitHubMode(GitHubNone), `GitHub mode "none" is not allowed by`)
+	if !contains(managed.Summary(), "  allowed GitHub modes: gh") {
+		t.Errorf("summary %q", managed.Summary())
+	}
+}
+
+func TestManagedSettingsWithoutAllowedModesRefuseOnlyGhMode(t *testing.T) {
+	managedFiles(t, "repo_kits = \"ask\"\n")
+	managed, err := LoadManaged()
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectError(t, managed.CheckGitHubMode(GitHubGh), `allowed_modes lists "gh"`)
+	if managed.CheckGitHubMode(GitHubFineGrained) != nil || managed.CheckGitHubMode(GitHubNone) != nil || managed.DefaultGitHubMode() != "" {
+		t.Error("managed settings without allowed_modes refused more than gh mode, or chose a default")
+	}
+
+	managedFiles(t, "repo_kits = \"ask\"\n", "[github]\nallowed_modes = [\"gh\"]\n")
+	if managed, err = LoadManaged(); err != nil {
+		t.Fatal(err)
+	}
+	if err := managed.CheckGitHubMode(GitHubGh); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAnEmptyManagedGitHubModeListAllowsNoMode(t *testing.T) {
+	managedFiles(t, "[github]\nallowed_modes = []\n")
+	managed, err := LoadManaged()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range GitHubModes {
+		expectError(t, managed.CheckGitHubMode(mode), "no GitHub mode is allowed")
+	}
+	if managed.DefaultGitHubMode() != "" {
+		t.Error("an empty list chose a default mode")
+	}
+	if summary := strings.Join(managed.Summary(), "\n"); !strings.Contains(summary, "allowed GitHub modes: no mode") {
+		t.Errorf("summary %q", summary)
 	}
 }

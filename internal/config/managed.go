@@ -8,6 +8,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 )
@@ -17,8 +18,9 @@ const (
 	RepoKitsDeny = "deny"
 )
 
-var managedKeys = []string{"allowed_agents", "denied_agents", "aws", "repo_kits", "copy_logins", "allow_global_policy"}
+var managedKeys = []string{"allowed_agents", "denied_agents", "aws", "github", "repo_kits", "copy_logins", "allow_global_policy"}
 var managedAWSKeys = []string{"allowed_profiles", "denied_profiles"}
+var managedGitHubKeys = []string{"allowed_modes"}
 
 // ManagedPaths lists where an administrator's managed settings may live, most specific first.
 var ManagedPaths = func() []string {
@@ -46,6 +48,8 @@ type Managed struct {
 	copyLogins        []string
 	copyLoginsSet     bool
 	allowGlobalPolicy bool
+	gitHubModes       []string
+	gitHubModesSet    bool
 }
 
 func fileExists(path string) bool {
@@ -135,6 +139,9 @@ func LoadManaged() (*Managed, error) {
 			}
 			managed.deniedProfiles = append(managed.deniedProfiles, deniedProfiles...)
 		}
+		if err := managed.loadGitHub(data["github"], file); err != nil {
+			return nil, err
+		}
 		if value, present := data["repo_kits"]; present {
 			text, _ := value.(string)
 			if text != RepoKitsAsk && text != RepoKitsDeny {
@@ -161,6 +168,35 @@ func LoadManaged() (*Managed, error) {
 		}
 	}
 	return managed, nil
+}
+
+func (m *Managed) loadGitHub(value any, file string) error {
+	if value == nil {
+		return nil
+	}
+	where := file + " [github]"
+	table, ok := value.(map[string]any)
+	if !ok {
+		return errorf("%s: github must be a table", file)
+	}
+	if err := checkKeys(table, managedGitHubKeys, where); err != nil {
+		return err
+	}
+	if table["allowed_modes"] == nil {
+		return nil
+	}
+	modes, err := optionalStrings(table, "allowed_modes", where)
+	if err != nil {
+		return err
+	}
+	for _, mode := range modes {
+		if !contains(GitHubModes, mode) {
+			return errorf("%s: allowed_modes has unknown mode %q; modes are %s", where, mode, quotedList(GitHubModes))
+		}
+	}
+	m.gitHubModes = narrow(m.gitHubModes, modes, m.gitHubModesSet)
+	m.gitHubModesSet = true
+	return nil
 }
 
 func narrow(current, next []string, both bool) []string {
@@ -250,6 +286,56 @@ func (m *Managed) CheckCopyLogin(agent string) error {
 
 func (m *Managed) AllowsGlobalPolicy() bool { return m.orUnmanaged().allowGlobalPolicy }
 
+func (m *Managed) AllowedGitHubModes() []string {
+	m = m.orUnmanaged()
+	switch {
+	case m.gitHubModesSet:
+		return append([]string{}, m.gitHubModes...)
+	case len(m.Paths) > 0:
+		return slices.DeleteFunc(slices.Clone(GitHubModes), func(mode string) bool { return mode == GitHubGh })
+	}
+	return slices.Clone(GitHubModes)
+}
+
+func (m *Managed) DefaultGitHubMode() string {
+	if allowed := m.AllowedGitHubModes(); m.orUnmanaged().gitHubModesSet && len(allowed) == 1 {
+		return allowed[0]
+	}
+	return ""
+}
+
+func (m *Managed) CheckGitHubMode(mode string) error {
+	m = m.orUnmanaged()
+	allowed := m.AllowedGitHubModes()
+	switch {
+	case contains(allowed, mode):
+		return nil
+	case len(allowed) == 0:
+		return m.noGitHubModeAllowed()
+	case !m.gitHubModesSet && mode == GitHubGh:
+		return errorf("GitHub mode %q is not allowed by %s: managed settings allow it only when [github] allowed_modes lists %q (allowed: %s)",
+			mode, m.where(), GitHubGh, quotedList(allowed))
+	}
+	return errorf("GitHub mode %q is not allowed by %s (allowed: %s)", mode, m.where(), quotedList(allowed))
+}
+
+func (m *Managed) noGitHubModeAllowed() error {
+	return errorf("%s sets [github] allowed_modes = [], so no GitHub mode is allowed and stage up refuses every sandbox; "+
+		"ask the administrator to allow a mode", m.where())
+}
+
+func (m *Managed) gitHubModesSummary() string {
+	allowed := m.AllowedGitHubModes()
+	summary := strings.Join(allowed, ", ")
+	if len(allowed) == 0 {
+		summary = "no mode (stage up refuses every sandbox)"
+	}
+	if !m.gitHubModesSet {
+		summary += " (gh needs [github] allowed_modes)"
+	}
+	return summary
+}
+
 // Summary describes the managed settings in effect, for stage setup.
 func (m *Managed) Summary() []string {
 	if m == nil || len(m.Paths) == 0 {
@@ -276,6 +362,7 @@ func (m *Managed) Summary() []string {
 	if m.copyLoginsSet {
 		lines = append(lines, "  copyable logins: "+strings.Join(m.copyLogins, ", "))
 	}
+	lines = append(lines, "  allowed GitHub modes: "+m.gitHubModesSummary())
 	if !m.allowGlobalPolicy {
 		lines = append(lines, "  --allow-global-policy: refused")
 	}
