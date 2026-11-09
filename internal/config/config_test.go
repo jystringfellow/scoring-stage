@@ -209,7 +209,7 @@ func TestATokenFileOthersCanReadIsRefusedAndNeverBound(t *testing.T) {
 }
 
 func TestNoConfigOrBookBindingMaySendACredentialToGitHub(t *testing.T) {
-	for _, domain := range []string{"github.com", "api.github.com:443", "*.github.com", "**", "uploads.github.com"} {
+	for _, domain := range []string{"github.com", "api.github.com:443", "*.github.com", "**", "uploads.github.com", "gist.github.com", "github.com.", "models.github.ai"} {
 		home := filepath.Join(t.TempDir(), "home")
 		testutil.WriteFile(t, filepath.Join(home, "config.toml"), "[bindings.gh2]\napiKey = { domains = [\""+domain+"\"] }\n")
 		_, err := LoadSettings(home)
@@ -218,6 +218,10 @@ func TestNoConfigOrBookBindingMaySendACredentialToGitHub(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
 	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "[bindings.copilot]\napiKey = { domains = [\"copilot.github.com\", \"api.githubcopilot.com\"] }\n")
 	load(t, home)
+
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "[bindings.gh3]\napiKey = { hosts = [\"api.github.com\"] }\n")
+	_, err := LoadSettings(home)
+	expectError(t, err, "binding gh3: apiKey must be { domains = [...] }")
 }
 
 func TestConfigAndBooksCannotSupplyTheGitHubCredential(t *testing.T) {

@@ -176,17 +176,20 @@ func GlobalSecrets() ([]string, error) {
 		return nil, err
 	}
 	var listing struct {
-		Secrets []struct {
+		Secrets *[]struct {
 			Scope string `json:"scope"`
 			Type  string `json:"type"`
 			Name  string `json:"name"`
 		} `json:"secrets"`
 	}
-	if err := json.Unmarshal([]byte(text), &listing); err != nil {
-		return nil, &Error{fmt.Sprintf("cannot read sbx secret ls --json: %v", err)}
+	if err := json.Unmarshal([]byte(text), &listing); err != nil || listing.Secrets == nil {
+		return nil, &Error{fmt.Sprintf("cannot read sbx secret ls --json (expected a secrets list): %v", err)}
 	}
 	var services []string
-	for _, secret := range listing.Secrets {
+	for _, secret := range *listing.Secrets {
+		if secret.Scope == "" || secret.Type == "" || secret.Name == "" {
+			return nil, &Error{"cannot read sbx secret ls --json: a secret has no scope, type or name"}
+		}
 		if secret.Scope == "global" && secret.Type == "service" {
 			services = append(services, secret.Name)
 		}

@@ -587,3 +587,13 @@ func TestUpRefusesWhileSbxHasAGlobalGitHubSecret(t *testing.T) {
 		t.Error("created a sandbox that could fall back to the global github secret")
 	}
 }
+
+func TestUpFailsClosedWhenItCannotReadSbxSecrets(t *testing.T) {
+	h := setup(t)
+	h.sbx.SetSecrets(`[{"scope": "global", "type": "service", "service": "github"}]`)
+	h.expect(1, "up", h.remote.Checkout, "fix")
+	h.expectStderr("cannot read sbx secret ls --json")
+	h.sbx.SetSecrets(`{"items": []}`)
+	h.expect(1, "up", h.remote.Checkout, "fix")
+	h.expectStderr("expected a secrets list")
+}

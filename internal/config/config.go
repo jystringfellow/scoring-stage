@@ -710,7 +710,11 @@ func refuseGitHubService(secrets, bindings map[string]any, where string) error {
 		return errorf("%s: the %s secret and binding come only from the read-only token file", where, GitHubService)
 	}
 	for _, service := range sortedKeys(bindings) {
-		for _, domain := range bindingDomains(bindings[service]) {
+		domains, err := bindingDomains(bindings[service])
+		if err != nil {
+			return errorf("%s: binding %s: %v", where, service, err)
+		}
+		for _, domain := range domains {
 			if ReachesGitHub(domain) {
 				return errorf("%s: binding %s covers %s; GitHub credentials come only from the read-only token file", where, service, domain)
 			}
@@ -719,33 +723,46 @@ func refuseGitHubService(secrets, bindings map[string]any, where string) error {
 	return nil
 }
 
-func bindingDomains(binding any) []string {
+func bindingDomains(binding any) ([]string, error) {
+	kinds, ok := binding.(map[string]any)
+	if !ok || len(kinds) == 0 {
+		return nil, errorf("a binding is a table such as apiKey = { domains = [...] }")
+	}
 	var found []string
-	kinds, _ := binding.(map[string]any)
-	for _, kind := range kinds {
-		table, _ := kind.(map[string]any)
-		list, _ := asList(table["domains"])
+	for kind, value := range kinds {
+		table, ok := value.(map[string]any)
+		list, listOK := asList(table["domains"])
+		if !ok || !listOK || len(unknownKeys(table, []string{"domains"})) > 0 {
+			return nil, errorf("%s must be { domains = [...] }", kind)
+		}
 		for _, domain := range list {
-			if text, ok := domain.(string); ok {
-				found = append(found, text)
+			text, ok := domain.(string)
+			if !ok {
+				return nil, errorf("%s domains must be strings", kind)
 			}
+			found = append(found, text)
 		}
 	}
-	return found
+	return found, nil
 }
 
-// ReachesGitHub reports whether a binding domain would send a credential to
-// github.com or its API and upload hosts, directly or through a wildcard.
+// ReachesGitHub reports whether a binding domain would send a credential to a
+// GitHub host other than Copilot's, directly or through a wildcard.
 func ReachesGitHub(domain string) bool {
-	host := strings.ToLower(domain)
+	host := strings.ToLower(strings.TrimSpace(domain))
 	if index := strings.LastIndex(host, ":"); index >= 0 {
 		host = host[:index]
 	}
-	switch host {
-	case "github.com", "api.github.com", "uploads.github.com", "codeload.github.com":
-		return true
+	host = strings.TrimSuffix(host, ".")
+	if host == "copilot.github.com" {
+		return false
 	}
-	return strings.Contains(host, "*") && (strings.HasSuffix(host, "github.com") || strings.HasSuffix(host, "*"))
+	for _, apex := range []string{"github.com", "github.ai", "githubusercontent.com"} {
+		if host == apex || strings.HasSuffix(host, "."+apex) {
+			return true
+		}
+	}
+	return strings.Contains(host, "*") && (strings.HasSuffix(host, "github.com") || strings.HasSuffix(host, "github.ai") || strings.HasSuffix(host, "*"))
 }
 
 func bookSecret(spec any, bookPath, owner string) (map[string]any, error) {
