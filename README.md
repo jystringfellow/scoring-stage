@@ -64,8 +64,9 @@ checks out the branch (`.devcontainer/`, `.vscode/`, `.husky/`, pre-commit and l
 asdf tool files), `.gitmodules` and `.scoring-stage/`, unless you pass `--allow-protected-paths`: CI runs a pushed
 branch's workflow files with the repository's secrets, and `.scoring-stage/` widens future sandboxes. Azure
 Pipelines can read YAML from any path a pipeline names, so the file check is a heuristic there; use branch policies
-so `agent/*` branches cannot trigger pipelines that hold secrets. `ship` warns about commits without a
-`Co-authored-by` trailer, since commits carry your git identity.
+so `agent/*` branches cannot trigger pipelines that hold secrets. Pushing an `agent/*` branch triggers whatever CI
+the repository runs on branch pushes, so that CI should not hold privileged secrets for unreviewed branches. `ship`
+warns about commits without a `Co-authored-by` trailer, since commits carry your git identity.
 
 Git on the host runs with hooks and fsmonitor off. `stage up` records a hash of the scratch clone's git config
 (`.git/config`, `.git/info/` and related files) after sbx creates the sandbox, and `ship` refuses to run git there
@@ -326,7 +327,12 @@ kits a repository adds, and the installed books it turns on, only after you appr
 what it does (network rules, credentials, host commands, AWS profiles) and asks. Without a terminal, pass
 `--approve-repo-config` after reviewing them. An approval covers that exact content (a local kit's files, a published
 kit's digest and arguments, a book's files) and is kept in `~/.scoring-stage/trusted-kits`, so a change asks
-again. A book you ask for yourself, with `--book` or a `[[repos]]` rule, needs no approval.
+again.
+
+Known gap: a book you turn on yourself, with `--book` or a `[[repos]]` rule, is not reviewed. Its host commands
+(such as `secrets` commands) run as code on your host, with whatever the book's files say after your last
+`git pull`. Until content-pinned book approval lands in a later release, only turn on books from repositories whose
+main branch is protected and reviewed.
 
 Books and both configs are decoded strictly: an unknown key is an error. Two books that set the same base,
 region, AWS default profile, secret or binding differently are an error rather than a silent winner. Your config
@@ -401,27 +407,33 @@ sandbox's egress to its vendor.
 github.com, a simulated GitHub API and device flow, and a stub `aws` CLI behind the broker. The tests show what stage
 asks sbx, git and GitHub to do, not what they then do.
 
-Checked against live sandboxes on sbx 0.51.0:
+### Checked live on sbx 0.51.0
 
 - The sbx behaviours listed in [docs/design.md](docs/design.md#verified-on-sbx-0510), including the push refusal on
-  ports 443 and 80 and the broker reachable only on `localhost:9911` with its token added by the proxy.
-- `tests/acceptance.sh`, run against a sandbox made with `stage up`, checks the repository path, that the claude,
-  codex and copilot CLIs start, the git identity and agent guidance, fetching from github.com, that `git push` and
-  an unlisted host are refused, that the sandbox's writes to its `.git` do not reach the host scratch clone, that
-  the task directory is hidden, and that the host source mount is read-only (skipped when sbx adds none). For
-  secrets, the sandbox reports SHA-256 hashes of the token-like strings in its environment, `~/.aws/config`,
-  `/home/agent`, `/etc` and `/tmp`, and the host checks that none matches its gh token, its owner tokens, the
-  GitHub App access and refresh tokens or the broker token. Given an AWS profile, it also checks that the broker
-  serves that profile and refuses another. It has no CI. The project history records an earlier version passing
-  on sbx 0.51; the current checks have no recorded live run.
+  ports 443 and 80, non-HTTP egress passing the push deny, and the broker reachable only on `localhost:9911` with
+  its token added by the proxy.
+- The first version of `tests/acceptance.sh`, run against a sandbox made with `stage up`: the repository path, that
+  the claude, codex and copilot CLIs start, the git identity and agent guidance, fetching from github.com, and that
+  `git push` and an unlisted host are refused. Its secret checks from that run do not count; they could pass
+  without looking at anything.
 
-Not yet checked live:
+### Written but not yet run live
 
+- The current `tests/acceptance.sh` as a whole. Beyond the checks above, it checks that the sandbox's writes to its
+  `.git` do not reach the host scratch clone, that the task directory is hidden, and that the host source mount is
+  read-only (skipped when sbx adds none). Given an AWS profile, it checks that the broker serves that profile and
+  refuses another. It has no CI.
+- The acceptance script's secret scan. The sandbox reports hashes of the token-like strings it finds in its
+  environment, its processes' environments, its home directory, `/etc`, `/tmp` and the repository, and the host
+  compares them with the hashes of its own secrets. A canary planted in the sandbox before the scan proves the scan
+  ran: if the canary's hash is missing, the run fails.
 - The GitHub REST write refusals in the stage kit (the same deny mechanism as the push refusal).
 - `fine-grained` token checks and `stage token set` against GitHub itself.
-- `app` mode against a registered GitHub App, and sbx refreshing its secret.
+- `app` mode end to end: a registered GitHub App, `stage github login`, the installation check and sbx refreshing
+  the secret.
 - `stage ship` pushing to GitHub, and `--pr`.
-- Agent sign-ins and `copy_logins` with a real agy login; the acceptance script only starts the CLIs.
+- The tag-driven release workflow.
+- Agent sign-ins and `copy_logins` with a real agy login.
 - Books, repository kit approval and managed settings, beyond unit tests.
 
 ## Limitations
