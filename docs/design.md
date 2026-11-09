@@ -62,8 +62,8 @@ sbx names `host.docker.internal` "localhost" when matching policy and credential
 `localhost:9911` and injects the token only on `localhost:9911` (verified on sbx 0.51.0: the broker answers, other
 host ports are refused with 403); injecting on `host.docker.internal` reaches the broker without the header. The
 broker serves only temporary credentials (an `ASIA` key with a `SessionToken`) that expire within about 12 hours,
-so an IAM user's long-lived keys never reach a sandbox. Those temporary keys do enter the sandbox, and stay usable
-until they expire; signing requests at the proxy instead would keep them out.
+so an IAM user's long-lived keys never reach a sandbox through the broker. Those temporary keys do enter the
+sandbox, and stay usable until they expire; signing requests at the proxy instead would keep them out.
 
 ## Verified on sbx 0.51.0
 
@@ -88,3 +88,12 @@ until they expire; signing requests at the proxy instead would keep them out.
   always names a v3 workload by reference.
 - `kit.allowedSources` defaults to Docker Hub and dhi.io. Books published to another registry need it widened, and
   signed kits must be published images: local and git sources cannot be signed.
+
+## Not yet verified on sbx
+
+- The stage kit's GitHub REST denies. They are bounded deny entries like the push deny, but no request has been
+  checked against them.
+- A secret's `refresh` interval. App mode relies on sbx re-running `stage github token` on the host to replace an
+  access token before it expires.
+- `workspace.clone` keeping the sandbox's `.git` writes out of the host scratch clone. `tests/acceptance.sh` checks
+  it, but has no recorded run since that check was added.

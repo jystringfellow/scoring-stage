@@ -5,22 +5,25 @@
 the boundary:
 
 - **Egress is deny-all** apart from what the sandbox's kits allow, enforced by the sbx proxy.
-- **Credentials stay on the host.** The sandbox sees placeholders; the proxy adds the real values to outbound
-  requests. AWS credentials come from a host broker that serves only the profiles granted to that sandbox.
-- **Pushes happen from the host.** `git push` from the sandbox is refused at the proxy; `stage ship` pushes the
-  sandbox's commit to an `agent/` branch from the host.
+- **Credentials stay on the host**, with the exceptions under [Limitations](#limitations). The sandbox sees
+  placeholders; the proxy adds the real values to outbound requests. AWS credentials come from a host broker that
+  serves only short-lived keys, and only for the profiles granted to that sandbox.
+- **Pushes happen from the host.** `git push` over HTTP or HTTPS from the sandbox is refused at the proxy;
+  `stage ship` pushes the sandbox's commit to an `agent/` branch from the host. GraphQL writes are not refused; see
+  [Limitations](#limitations).
 - **Each task gets its own scratch clone**, so the agent never touches your working copy.
 
 Organizations adapt it with **books**: a directory of [kits](https://github.com/docker/sandbox-kit-spec) plus the
 host-side wiring they need (secrets, credential bindings, AWS profiles, per-repository additions). Like the book a
 session player is handed for a gig, a book holds what the stage needs for one kind of work.
 
-> Status: early. The core flow is tested end to end on sbx 0.51; the command line and book format may still change.
+> Status: early. Some of it has been checked against live sandboxes on sbx 0.51; much is covered only by unit tests
+> with fakes. [What is verified](#what-is-verified) says which. The command line and book format may still change.
 
 ## Requirements
 
-macOS or Linux with `sbx` 0.51.0 or later (signed in), `git`, and optionally `gh` (Copilot credentials and
-`stage ship --pr`) and the `aws` CLI (the AWS broker). Building `stage` needs Go 1.26 or later.
+macOS or Linux with `sbx` 0.51.0 or later (signed in), `git`, and optionally `gh` (Copilot credentials, `gh`
+mode and `stage ship --pr`) and the `aws` CLI (the AWS broker). Building `stage` needs Go 1.26 or later.
 
 ## Install
 
@@ -71,23 +74,30 @@ stage login fix-login                # save the sandbox's agy login for future s
 stage down fix-login                 # remove the sandbox, its scoped secrets and the scratch clone
 stage broker start|stop|status       # the AWS broker (up starts it when a sandbox needs it)
 stage broker serve                   # run the broker in the foreground
+stage token set acme                 # save a fine-grained token for owner acme ([github] mode = "fine-grained")
 stage github login                   # log in to your GitHub App ([github] mode = "app")
 stage github token                   # print a fresh app token; sbx runs this on the host
 ```
 
-`stage ship` shows the commits and a diffstat, with control characters escaped, and asks before pushing (`--yes`
-skips the question). It refuses changes to CI and workflow files (`.github/`, `azure-pipelines*.yml`,
-`.azure-pipelines/`, `.pipelines/`, GitLab, Jenkins, CircleCI, Buildkite), files that run code when someone opens or
+`stage ship` pushes to `agent/<slug>/<first 8 characters of the sha>` with your host git credentials; `--branch`
+names another branch, which must also start with `agent/`. It shows the commits and a diffstat, with control
+characters escaped, and asks before pushing (`--yes` skips the question). It refuses changes to CI and workflow
+files (`.github/`, `azure-pipelines*.yml`, `.azure-pipelines/`, `.pipelines/`, GitLab, Jenkins, CircleCI,
+Buildkite), files that run code when someone opens or
 checks out the branch (`.devcontainer/`, `.vscode/`, `.husky/`, pre-commit and lefthook configs, `.envrc`, mise and
 asdf tool files), `.gitmodules` and `.scoring-stage/`, unless you pass `--allow-protected-paths`: CI runs a pushed
 branch's workflow files with the repository's secrets, and `.scoring-stage/` widens future sandboxes. Azure
 Pipelines can read YAML from any path a pipeline names, so the file check is a heuristic there; use branch policies
-so `agent/*` branches cannot trigger pipelines that hold secrets. `ship` warns about commits without a
-`Co-authored-by` trailer, since commits carry your git identity.
+so `agent/*` branches cannot trigger pipelines that hold secrets. Pushing an `agent/*` branch triggers whatever CI
+the repository runs on branch pushes, so that CI should not hold privileged secrets for unreviewed branches: on
+GitHub, keep secrets in environments with required reviewers or deployment branch rules, or limit push triggers to
+protected branches. `ship` warns about commits without a `Co-authored-by` trailer, since commits carry your git identity.
 
 Git on the host runs with hooks and fsmonitor off. `stage up` records a hash of the scratch clone's git config
 (`.git/config`, `.git/info/` and related files) after sbx creates the sandbox, and `ship` refuses to run git there
-if it changed. sbx mounts the scratch clone into the sandbox read-only; `tests/acceptance.sh` checks that.
+if it changed, or if it includes other files. The env file asks sbx to clone the scratch clone into the sandbox
+(`workspace.clone`) rather than share it; `tests/acceptance.sh` checks that the sandbox's writes to its `.git` do not
+reach the host scratch clone, and that the host source mount, if sbx adds one, is read-only.
 
 `stage up` clones the repository to `~/.scoring-stage/tasks/<slug>/src`, writes an
 [sbx environment file](https://docs.docker.com/ai/sandboxes/configuration/environment-files/) next to it and runs
@@ -106,7 +116,7 @@ clone, so ship anything you want to keep first.
 
    | Mode | The sandbox gets | Use it when |
    | --- | --- | --- |
-   | `fine-grained` | The read-only token for its repository's owner | You want sandboxes that cannot write to GitHub |
+   | `fine-grained` | Your fine-grained token for its repository's owner, which you make read-only | You want sandboxes that cannot write to GitHub |
    | `app` | A token from your own read-only GitHub App, refreshed on the host | You want read-only access across several organizations without a token per owner |
    | `gh` | Your gh login (`gh auth token`), as a per-sandbox secret | You accept that the sandbox can write as you |
    | `none` | No GitHub credential | Public repositories only, or no GitHub API at all |
@@ -123,7 +133,8 @@ clone, so ship anything you want to keep first.
 
    Save each token with `stage token set <owner>`. When stdin is a terminal it reads the token without echoing it;
    otherwise it reads stdin, so `pbpaste | stage token set acme` works. It refuses anything but a single fine-grained token,
-   checks it with GitHub (`GET /rate_limit`) and refuses to save one GitHub rejects with 401, then writes
+   checks it with GitHub (`GET /rate_limit`) and refuses to save one GitHub rejects with 401 (if GitHub cannot be
+   reached, it warns and saves the token unchecked), then writes
    `secrets/github/<owner>.token` atomically with mode 600, replacing any token already there. It never prints the
    token. A file you write by hand still works.
 
@@ -135,7 +146,8 @@ clone, so ship anything you want to keep first.
    403 (also: the token is not authorized for the organization's SAML SSO, or a rate limit), and warns when the
    token expires within 7 days. An expiry that reads as past on a token GitHub accepts is a warning to check the
    clock, not a refusal. If GitHub cannot be reached, `stage up` warns and
-   continues. stage sends tokens only to `api.github.com`.
+   continues. These checks send the token only to `api.github.com` and do not follow redirects; in the sandbox,
+   the proxy adds it to requests for `api.github.com` and `github.com`.
 
    **app.** stage ships no GitHub App; you register your own (enterprise-owned, organization-owned or public all
    work) and install it on every organization whose repositories sandboxes work in. Configure the app with:
@@ -172,9 +184,11 @@ clone, so ship anything you want to keep first.
    `~/.scoring-stage/secrets/github/app.json` (mode 600). Each sandbox gets a `github` secret whose command is
    `stage github token`, with `refresh: 30m` in its env file: sbx runs it on the host at most every 30 minutes, and
    it refreshes the access token when fewer than 40 minutes remain. The refresh token never enters the sandbox,
-   and concurrent refreshes take a lock so a rotated refresh token is not lost. If GitHub cannot be reached for a
-   refresh and the current token has more than 5 minutes left, `stage github token` warns and returns the current
-   token; a refused refresh token fails at once.
+   and concurrent refreshes take a lock so a rotated refresh token is not lost. If a refresh fails because GitHub
+   cannot be reached or answers with a server error, and the current token has more than 5 minutes left,
+   `stage github token` warns and returns the current token; a refused refresh token fails at once. Because every
+   `stage github token` also checks the app's installations (below), it fails whenever `api.github.com` cannot be
+   reached.
 
    On login, on every `stage github token` (so at least every 30 minutes per sandbox) and on every `stage up`,
    stage lists the app's installations (`GET /user/installations`) and refuses, removing the saved login, if any
@@ -186,7 +200,9 @@ clone, so ship anything you want to keep first.
    changes, run `stage github login` again.
 
    App mode has been tested only against a simulated GitHub, not yet against a registered app; in particular,
-   whether `/user/installations` reports every permission a user token carries is unverified.
+   whether `/user/installations` reports every permission a user token carries is unverified. That sbx re-runs a
+   secret's command on its `refresh` interval is also unverified: if it does not, a sandbox loses GitHub access
+   when its first token expires.
 
    **gh.** stage warns on `stage setup` and every `stage up` in this mode. GraphQL lets a sandbox do anything your gh
    login can, in every repository it can write to: commit to and move or delete branches (`createCommitOnBranch`,
@@ -196,11 +212,15 @@ clone, so ship anything you want to keep first.
 
    `stage up` also refuses while sbx has a global `github` secret (`sbx secret ls --global`), because any sandbox
    with a `github` binding, including one saved by an earlier sandbox, can fall back to it. Remove it with
-   `sbx secret rm github -f`. Your config and books cannot bind any credential to GitHub's hosts.
+   `sbx secret rm github -f`. Your config and books cannot set the `github` secret or binding, and stage refuses any
+   of their bindings on `github.com`, `github.ai`, `githubusercontent.com` or their subdomains, apart from
+   `copilot.github.com`. A wildcard domain is refused when the literal text after its last `*` could end a GitHub
+   host name, and a domain with any other glob character (`?`, `[`, `]`, `{`, `}`, `\`) is refused.
 
-   The proxy refuses `git push`, PUT, PATCH and DELETE to GitHub, and POST to the API's repository, user,
-   organization, gist and webhook-subscription endpoints. GraphQL writes share `POST /graphql` with reads, so only
-   the token's own permissions stop those.
+   The proxy refuses `git push` over HTTP and HTTPS; PUT, PATCH and DELETE to `api.github.com`, `github.com` and
+   `uploads.github.com`; and POST to the API's repository, user, organization, team, project, enterprise, gist,
+   app and webhook-subscription endpoints (the list is in [`kits/stage/stage.yaml`](kits/stage/stage.yaml)).
+   GraphQL writes share `POST /graphql` with reads, so only the token's own permissions stop those.
 3. **Agent logins.** See [Agent logins](#agent-logins).
 
 ## What a sandbox gets
@@ -332,7 +352,12 @@ kits a repository adds, and the installed books it turns on, only after you appr
 what it does (network rules, credentials, host commands, AWS profiles) and asks. Without a terminal, pass
 `--approve-repo-config` after reviewing them. An approval covers that exact content (a local kit's files, a published
 kit's digest and arguments, a book's files) and is kept in `~/.scoring-stage/trusted-kits`, so a change asks
-again. A book you ask for yourself, with `--book` or a `[[repos]]` rule, needs no approval.
+again.
+
+Known gap: a book you turn on yourself, with `--book` or a `[[repos]]` rule, is not reviewed. Its host commands
+(such as `secrets` commands) run as code on your host, with whatever the book's files say after your last
+`git pull`. Until books you turn on are approved by content, only turn on books from repositories whose main branch
+is protected and reviewed.
 
 Books and both configs are decoded strictly: an unknown key is an error. Two books that set the same base,
 region, AWS default profile, secret or binding differently are an error rather than a silent winner. Your config
@@ -361,7 +386,7 @@ stage on Windows runs inside WSL. When more than one file exists, each can only 
 optional, and an unknown key is an error:
 
 ```toml
-allowed_agents = ["claude", "copilot"]   # only these agents; agents given only as kit references are refused
+allowed_agents = ["claude", "copilot"]   # only these agents
 denied_agents = ["agy"]
 repo_kits = "deny"                       # "ask" (default) or "deny": refuse kits and books a repository asks for
 copy_logins = []                         # agents whose logins may be copied between sandboxes
@@ -391,19 +416,94 @@ check stands between them and an app that can write; `stage setup` warns when `a
 a pin, and when a pin is set but app mode is not allowed.
 
 `stage setup` shows the managed settings in effect and warns about a managed file or directory that is not owned by
-root or that others can write. A managed file stage cannot read stops stage rather than being skipped. They only
+root or that its group or others can write. A managed file stage cannot read stops stage rather than being skipped. They only
 restrict, so they guard against mistakes and record policy; a user with administrator rights on the machine can
 still remove the file.
 
 Agent policy covers the agents stage puts in a sandbox: agents named anywhere, and Docker's agent mixins
-(`sbx/*-mixin` on any registry or mirror) wherever they appear, including as plain kits. It cannot
+(`sbx/*-mixin` on any registry or mirror) wherever they appear, including as plain kits. While either agent list is
+set, an agent given as a kit reference stage does not recognise is refused. It cannot
 stop a kit's setup commands from installing an agent CLI by other means; what stops that agent from working is the
 sandbox's egress to its vendor.
+
+## What is verified
+
+`go test ./...` runs every command against fakes: an `sbx` script on PATH, a local repository standing in for
+github.com, a simulated GitHub API and device flow, and a stub `aws` CLI behind the broker. The tests show what stage
+asks sbx, git and GitHub to do, not what they then do.
+
+### Checked live on sbx 0.51.0
+
+- The sbx behaviours listed in [docs/design.md](docs/design.md#verified-on-sbx-0510), including the push refusal on
+  ports 443 and 80 and the broker reachable only on `localhost:9911` with its token added by the proxy. The push
+  deny is limited to ports 443 and 80, so non-HTTP connections on other ports, such as SQL Server on 1433, still
+  work.
+- The first version of `tests/acceptance.sh`, run against a sandbox made with `stage up`: the repository path, that
+  the claude, codex and copilot CLIs start, the git identity and agent guidance, fetching from github.com, and that
+  `git push` and an unlisted host are refused. Its secret checks from that run do not count; they could pass
+  without looking at anything.
+
+### Written but not yet run live
+
+- The current `tests/acceptance.sh` as a whole. Beyond the checks above, it checks that the sandbox's writes to its
+  `.git` do not reach the host scratch clone, that the task directory is hidden, and that the host source mount is
+  read-only (skipped when sbx adds none). Given an AWS profile, it checks that the broker serves that profile and
+  refuses another. It has no CI.
+- The acceptance script's secret scan, which has run only in a local harness. As the sandbox's own user, the
+  sandbox hashes the token-like words in its environment, the environments and command lines of processes that user
+  can see (not root's or the proxy's), its home directory, `/tmp`, the repository and its git history, the strings in
+  binary files under the home directory and repository, and `/etc`. The host checks those hashes against its secrets, as written and base64-encoded.
+- The scan plants a canary in the environment, the home directory, the repository, `/tmp` and a binary file, and
+  adds an end marker. A missing canary fails the run and names where it was missing. `/etc` cannot hold a canary, so
+  its coverage is unproven. Matching is by whole token-like word, so a base64 token sitting at an offset inside a
+  longer blob is not found.
+- The GitHub REST write refusals in the stage kit (the same deny mechanism as the push refusal).
+- `fine-grained` token checks and `stage token set` against GitHub itself.
+- `app` mode end to end: a registered GitHub App, `stage github login`, the installation check and sbx refreshing
+  the secret.
+- `stage ship` pushing to GitHub, and `--pr`.
+- The tag-driven release workflow.
+- Agent sign-ins and `copy_logins` with a real agy login.
+- Books, repository kit approval and managed settings, beyond unit tests.
+
+## Limitations
+
+- Books you turn on yourself, with `--book` or a `[[repos]]` rule, are not reviewed; see the known gap under
+  [Configuration and books](#configuration-and-books).
+- GraphQL writes are not refused. They share `POST /graphql` with reads, so only the token's permissions stop
+  them: nothing does in `gh` mode, and stage cannot see a fine-grained token's permissions.
+- `app` mode's check sees installation permissions only. An app's account permissions (on your own user) do not
+  appear there, and GraphQL can use them.
+- agy's Google sign-in is a token file inside the sandbox that the agent can read. With `copy_logins`, every
+  sandbox with agy holds a live copy.
+- AWS keys from the broker enter the sandbox and stay usable until they expire, up to about 12 hours, even after
+  `stage down`.
+- Bindings are shared by every sandbox. One written for a sandbox stays after `stage down` and approves that service
+  on its domains for all sandboxes; a sandbox gets a value only from its own secret or a global sbx secret, and
+  `stage up` checks for a global secret only for `github`.
+- The push refusal covers HTTP on ports 443 and 80. A kit that allows SSH or another port to a git host opens a
+  push path the proxy does not refuse.
+- Deny-all egress limits where data can go, not what goes there: an agent can send what it can read to any host
+  its kits allow, including its vendor's API.
+- `stage up` checks the global sbx policy only when it creates a sandbox. Allow rules added later widen running
+  sandboxes, and so does approving a refused host when sbx offers to, which happens outside stage's view.
+- A credential the proxy injects can do anything it permits on its bound domains. stage restricts methods and paths
+  only for GitHub: a book's binding, such as an Azure DevOps package feed token, is added on every method, so the
+  sandbox can publish or write wherever that credential allows.
+- With the `copilot` agent, the `copilot` secret is your gh login (`gh auth token`), in every GitHub mode,
+  `fine-grained` and `app` included. The proxy adds it only on Copilot's hosts (`api.githubcopilot.com`, its
+  `individual`, `business` and `enterprise` variants, and `copilot.github.com`). Whether any of them accepts that
+  token for more than Copilot is unverified.
+- stage's defaults are named by tag, not digest: the base `docker.io/sbx/shell:1.1.0` and the agent mixins
+  (`claude-mixin:2.1.319`, `codex-mixin:0.167.0`, `copilot-mixin:1.0.86`, `antigravity-mixin:1.0.0`). A tag can be
+  repointed without stage noticing.
+- A book's approval covers the files in its directory. Files its host commands read, kits it uses from outside the
+  directory and published kits it names by tag can change without asking again.
 
 ## Development
 
 ```
-go test ./...                                # unit tests, with a fake sbx on PATH and an offline git remote
+go test ./...                                # unit tests with fakes; see What is verified
 tests/acceptance.sh <slug> [granted] [other] # checks a live sandbox made with stage up
 ```
 
