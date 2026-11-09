@@ -47,23 +47,41 @@ for line in sys.stdin: print(hashlib.sha256(line.rstrip("\n").encode()).hexdiges
     while read -r word; do printf %s "$word" | sha256sum | cut -d' ' -f1; done
   fi
 }
-canary="stagecanary$(od -An -tx1 -N16 /dev/urandom 2>/dev/null | tr -dc '0-9a-f')${RANDOM}${RANDOM}${RANDOM}$$"
-canary_file="/tmp/stage-scan-canary.$$"
-printf '%s\n' "$canary" >"$canary_file" 2>/dev/null
-export STAGE_SCAN_CANARY="$canary"
-printf 'canary %s\n' "$(printf '%s\n' "$canary" | hash_lines)"
+new_canary() { printf 'stagecanary%s%s%s%s%s\n' "$(od -An -tx1 -N16 /dev/urandom 2>/dev/null | tr -dc '0-9a-f')" "$RANDOM" "$RANDOM" "$RANDOM" "$$"; }
+announce() { printf 'canary %s %s\n' "$1" "$(printf '%s\n' "$2" | hash_lines)"; }
+env_canary="$(new_canary)" home_canary="$(new_canary)" repo_canary="$(new_canary)"
+tmp_canary="$(new_canary)" bin_canary="$(new_canary)" end_canary="$(new_canary)"
+home_file="$AGENT_HOME/.stage-scan-canary.$$"
+repo_file="$REPO_DIR/.git/stage-scan-canary.$$"
+tmp_file="$TMP_ROOT/stage-scan-canary.$$"
+bin_file="$AGENT_HOME/.stage-scan-bin.$$"
+export STAGE_SCAN_CANARY="$env_canary"
+printf '%s\n' "$home_canary" >"$home_file" 2>/dev/null
+printf '%s\n' "$repo_canary" >"$repo_file" 2>/dev/null
+printf '%s\n' "$tmp_canary" >"$tmp_file" 2>/dev/null
+printf 'x\0%s\n' "$bin_canary" >"$bin_file" 2>/dev/null
+announce env "$env_canary"
+announce home "$home_canary"
+announce repo "$repo_canary"
+announce tmp "$tmp_canary"
+announce bin "$bin_canary"
+announce end "$end_canary"
+command -v strings >/dev/null || echo nostrings
 {
   env
   cat /proc/[0-9]*/environ /proc/[0-9]*/cmdline 2>/dev/null | tr '\0' '\n'
   echo
-  cat ~/.aws/config 2>/dev/null
+  cat "$AGENT_HOME/.aws/config" 2>/dev/null
   echo
   grep -rIhoE '[A-Za-z0-9+/=_-]{20,}' --exclude-dir=ssl --exclude-dir=ca-certificates \
-    /home/agent "$REPO_DIR" /etc /tmp 2>/dev/null
+    "$AGENT_HOME" "$REPO_DIR" /etc "$TMP_ROOT" 2>/dev/null
+  git -C "$REPO_DIR" log -p --all 2>/dev/null
   if command -v strings >/dev/null; then
-    find /home/agent "$REPO_DIR" -type f -size -64M -exec grep -IL . {} + 2>/dev/null |
+    comm -23 <(find "$AGENT_HOME" "$REPO_DIR" -type f -size -64M 2>/dev/null | sort) \
+      <(find "$AGENT_HOME" "$REPO_DIR" -type f -size -64M -exec grep -lI '' {} + 2>/dev/null | sort) |
       while read -r binary; do strings -n 20 "$binary"; done
   fi
+  printf '%s\n' "$end_canary"
 } | grep -oE '[A-Za-z0-9+/=_-]{20,}' | awk '{
   print
   n = split($0, words, /[^A-Za-z0-9_]+/)
@@ -77,34 +95,41 @@ printf 'canary %s\n' "$(printf '%s\n' "$canary" | hash_lines)"
     if (length(rest) >= 20) print rest
   }
 }' | sort -u | hash_lines | awk '{ print } END { print "scanned " NR }'
-rm -f "$canary_file"
+rm -f "$home_file" "$repo_file" "$tmp_file" "$bin_file" 2>/dev/null
 SCAN
 
+agent_home=/home/agent
+sandbox_tmp=/tmp
+
 sandbox_hashes() {
-  box "REPO_DIR=$(printf %q "$repo_dir"); $scan_script"
+  box "REPO_DIR=$(printf %q "$repo_dir"); AGENT_HOME=$(printf %q "$agent_home"); TMP_ROOT=$(printf %q "$sandbox_tmp"); $scan_script"
 }
 
 scan_sandbox() {
-  local output canary_hash scanned
+  local output scanned label canary_hash missing=""
   output="$(sandbox_hashes 2>/dev/null)"
   hashes="$(printf '%s\n' "$output" | grep -E '^[0-9a-f]{64}$')"
-  canary_hash="$(printf '%s\n' "$output" | sed -n 's/^canary \([0-9a-f]\{64\}\)$/\1/p' | head -1)"
   scanned="$(printf '%s\n' "$output" | sed -n 's/^scanned \([0-9][0-9]*\)$/\1/p' | tail -1)"
+  for label in env home repo tmp bin end; do
+    canary_hash="$(printf '%s\n' "$output" | sed -n "s/^canary $label \\([0-9a-f]\\{64\\}\\)\$/\\1/p" | head -1)"
+    if [ -z "$canary_hash" ] || ! printf '%s\n' "$hashes" | grep -qxF "$canary_hash"; then
+      missing="$missing $label"
+    fi
+  done
   scan_ok=0
   if [ -z "$scanned" ]; then
     echo "FAIL the sandbox scan for token-like strings did not finish"
   elif [ "$scanned" -eq 0 ]; then
     echo "FAIL the sandbox scan for token-like strings found nothing to hash"
-  elif [ -z "$canary_hash" ]; then
-    echo "FAIL the sandbox scan for token-like strings planted no canary"
-  elif ! printf '%s\n' "$hashes" | grep -qxF "$canary_hash"; then
-    echo "FAIL the sandbox scan for token-like strings missed its own canary"
+  elif [ -n "$missing" ]; then
+    echo "FAIL the sandbox scan for token-like strings missed its canary in:$missing"
+    printf '%s\n' "$output" | grep -qx nostrings && echo "     strings is not installed in the sandbox, so binaries were not scanned"
   else
     scan_ok=1
-    echo "ok   the sandbox scan hashed $scanned token-like strings and found its canary"
-    return
+    echo "ok   the sandbox scan hashed $scanned token-like strings and found its canary in every planted source"
   fi
-  failures=$((failures + 1))
+  echo "note /etc is scanned but cannot hold a canary, so its coverage is unproven"
+  [ "$scan_ok" = 1 ] || failures=$((failures + 1))
 }
 
 secret_absent() {
