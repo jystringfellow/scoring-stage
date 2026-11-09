@@ -9,7 +9,8 @@ the boundary:
   placeholders; the proxy adds the real values to outbound requests. AWS credentials come from a host broker that
   serves only short-lived keys, and only for the profiles granted to that sandbox.
 - **Pushes happen from the host.** `git push` over HTTP or HTTPS from the sandbox is refused at the proxy;
-  `stage ship` pushes the sandbox's commit to an `agent/` branch from the host.
+  `stage ship` pushes the sandbox's commit to an `agent/` branch from the host. GraphQL writes are not refused; see
+  [Limitations](#limitations).
 - **Each task gets its own scratch clone**, so the agent never touches your working copy.
 
 Organizations adapt it with **books**: a directory of [kits](https://github.com/docker/sandbox-kit-spec) plus the
@@ -187,7 +188,8 @@ clone, so ship anything you want to keep first.
    with a `github` binding, including one saved by an earlier sandbox, can fall back to it. Remove it with
    `sbx secret rm github -f`. Your config and books cannot set the `github` secret or binding, and stage refuses any
    of their bindings on `github.com`, `github.ai`, `githubusercontent.com` or their subdomains, apart from
-   `copilot.github.com`.
+   `copilot.github.com`. A wildcard domain is refused when the literal text after its last `*` could end a GitHub
+   host name, and a domain with any other glob character (`?`, `[`, `]`, `{`, `}`, `\`) is refused.
 
    The proxy refuses `git push` over HTTP and HTTPS; PUT, PATCH and DELETE to `api.github.com`, `github.com` and
    `uploads.github.com`; and POST to the API's repository, user, organization, team, project, enterprise, gist,
@@ -405,10 +407,13 @@ Checked against live sandboxes on sbx 0.51.0:
   ports 443 and 80 and the broker reachable only on `localhost:9911` with its token added by the proxy.
 - `tests/acceptance.sh`, run against a sandbox made with `stage up`, checks the repository path, that the claude,
   codex and copilot CLIs start, the git identity and agent guidance, fetching from github.com, that `git push` and
-  an unlisted host are refused, that `GH_TOKEN` is not your gh token, and, given an AWS profile, that the broker
-  serves the granted profile, refuses another and that its token is nowhere in the sandbox. It has no CI. The
-  project history records it passing on sbx 0.51 before the checks on the sandbox's `.git`, the task directory and
-  the source mount were added; those have no recorded run.
+  an unlisted host are refused, that the sandbox's writes to its `.git` do not reach the host scratch clone, that
+  the task directory is hidden, and that the host source mount is read-only (skipped when sbx adds none). For
+  secrets, the sandbox reports SHA-256 hashes of the token-like strings in its environment, `~/.aws/config`,
+  `/home/agent`, `/etc` and `/tmp`, and the host checks that none matches its gh token, its owner tokens, the
+  GitHub App access and refresh tokens or the broker token. Given an AWS profile, it also checks that the broker
+  serves that profile and refuses another. It has no CI. The project history records an earlier version passing
+  on sbx 0.51; the current checks have no recorded live run.
 
 Not yet checked live:
 
@@ -436,8 +441,18 @@ Not yet checked live:
   push path the proxy does not refuse.
 - Deny-all egress limits where data can go, not what goes there: an agent can send what it can read to any host
   its kits allow, including its vendor's API.
-- `stage up` checks the global sbx policy only when it creates a sandbox; allow rules added later widen running
-  sandboxes.
+- `stage up` checks the global sbx policy only when it creates a sandbox. Allow rules added later widen running
+  sandboxes, and so does approving a refused host when sbx offers to, which happens outside stage's view.
+- A credential the proxy injects can do anything it permits on its bound domains. stage restricts methods and paths
+  only for GitHub: a book's binding, such as an Azure DevOps package feed token, is added on every method, so the
+  sandbox can publish or write wherever that credential allows.
+- With the `copilot` agent, the `copilot` secret is your gh login (`gh auth token`), in every GitHub mode,
+  `fine-grained` and `app` included. The proxy adds it only on Copilot's hosts (`api.githubcopilot.com`, its
+  `individual`, `business` and `enterprise` variants, and `copilot.github.com`). Whether any of them accepts that
+  token for more than Copilot is unverified.
+- stage's defaults are named by tag, not digest: the base `docker.io/sbx/shell:1.1.0` and the agent mixins
+  (`claude-mixin:2.1.319`, `codex-mixin:0.167.0`, `copilot-mixin:1.0.86`, `antigravity-mixin:1.0.0`). A tag can be
+  repointed without stage noticing.
 - A book's approval covers the files in its directory. Files its host commands read, kits it uses from outside the
   directory and published kits it names by tag can change without asking again.
 
