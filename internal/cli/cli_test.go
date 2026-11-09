@@ -27,6 +27,7 @@ type harness struct {
 	gh             string
 	github         *fakeGitHub
 	terminal       bool
+	stdinTerminal  bool
 	stdin          string
 	typed          string
 }
@@ -67,15 +68,16 @@ func (h *harness) stage(args ...string) int {
 	h.stdout.Reset()
 	h.stderr.Reset()
 	app := &App{
-		Stdin:       strings.NewReader(h.stdin),
-		Stdout:      &h.stdout,
-		Stderr:      &h.stderr,
-		FindGh:      func() string { return h.gh },
-		BrokerPID:   func(string) int { return 0 },
-		BrokerStart: func(home string) error { h.brokerStarts = append(h.brokerStarts, home); return nil },
-		IsTerminal:  func() bool { return h.terminal },
-		ReadSecret:  func() ([]byte, error) { return []byte(h.typed), nil },
-		GitHubAPI:   h.github.api(),
+		Stdin:           strings.NewReader(h.stdin),
+		Stdout:          &h.stdout,
+		Stderr:          &h.stderr,
+		FindGh:          func() string { return h.gh },
+		BrokerPID:       func(string) int { return 0 },
+		BrokerStart:     func(home string) error { h.brokerStarts = append(h.brokerStarts, home); return nil },
+		IsTerminal:      func() bool { return h.terminal },
+		StdinIsTerminal: func() bool { return h.stdinTerminal },
+		ReadSecret:      func() ([]byte, error) { return []byte(h.typed), nil },
+		GitHubAPI:       h.github.api(),
 		HostAWSProfiles: func() ([]string, error) {
 			return h.hostProfiles, nil
 		},

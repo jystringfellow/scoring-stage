@@ -49,6 +49,7 @@ type App struct {
 	BrokerStart     func(home string) error
 	IsTerminal      func() bool
 	HostAWSProfiles func() ([]string, error)
+	StdinIsTerminal func() bool
 	ReadSecret      func() ([]byte, error)
 	GitHubAPI       config.GitHubAPI
 }
@@ -57,6 +58,7 @@ func New() *App {
 	app := &App{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, FindGh: config.FindGh, BrokerPID: brokerPID}
 	app.BrokerStart = app.brokerStart
 	app.HostAWSProfiles = hostAWSProfiles
+	app.StdinIsTerminal = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
 	app.ReadSecret = func() ([]byte, error) { return term.ReadPassword(int(os.Stdin.Fd())) }
 	app.GitHubAPI = config.NewGitHubAPI()
 	app.IsTerminal = func() bool {

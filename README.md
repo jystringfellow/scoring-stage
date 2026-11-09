@@ -93,18 +93,20 @@ clone, so ship anything you want to keep first.
    GitHub App tokens are refused. The old single `~/.scoring-stage/secrets/github-readonly-token` file is no longer
    read; move it to `secrets/github/<owner>.token` for the owner it was created for.
 
-   Save each token with `stage token set <owner>`. On a terminal it reads the token without echoing it; otherwise
-   it reads stdin, so `pbpaste | stage token set acme` works. It refuses anything but a single fine-grained token,
+   Save each token with `stage token set <owner>`. When stdin is a terminal it reads the token without echoing it;
+   otherwise it reads stdin, so `pbpaste | stage token set acme` works. It refuses anything but a single fine-grained token,
    checks it with GitHub (`GET /rate_limit`) and refuses to save one GitHub rejects with 401, then writes
    `secrets/github/<owner>.token` atomically with mode 600, replacing any token already there. It never prints the
    token. A file you write by hand still works.
 
    stage reads a token's expiry from the `GitHub-Authentication-Token-Expiration` header GitHub sends on
    authenticated requests (a token with no expiry gets no header). `stage setup` reports each owner's token
-   expiry and warns when it is within 7 days or past. In fine-grained mode `stage up` calls
+   expiry and warns when it is within 7 days or GitHub rejects the token. In fine-grained mode `stage up` calls
    `GET /repos/<owner>/<repo>` with the sandbox's token: it refuses when GitHub answers 401 (expired or revoked),
-   warns when GitHub answers 404 or 403 (the token does not include that repository, or was created for another
-   owner) and warns when the token expires within 7 days. If GitHub cannot be reached, `stage up` warns and
+   warns when GitHub answers 404 (the token does not include that repository, or was created for another owner) or
+   403 (also: the token is not authorized for the organization's SAML SSO, or a rate limit), and warns when the
+   token expires within 7 days. An expiry that reads as past on a token GitHub accepts is a warning to check the
+   clock, not a refusal. If GitHub cannot be reached, `stage up` warns and
    continues. stage sends tokens only to `api.github.com`.
 
    **gh.** stage warns on `stage setup` and every `stage up` in this mode. GraphQL lets a sandbox do anything your gh

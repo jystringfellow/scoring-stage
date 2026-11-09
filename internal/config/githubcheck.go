@@ -22,16 +22,13 @@ type GitHubAPI struct {
 type GitHubTokenStatus struct {
 	StatusCode    int
 	Expires       time.Time
+	ExpiryHeader  string
 	ExpiryProblem string
 }
 
 func (s GitHubTokenStatus) HasExpiry() bool { return !s.Expires.IsZero() }
 
 func (s GitHubTokenStatus) Rejected() bool { return s.StatusCode == http.StatusUnauthorized }
-
-func (s GitHubTokenStatus) CannotSee() bool {
-	return s.StatusCode == http.StatusNotFound || s.StatusCode == http.StatusForbidden
-}
 
 func (s GitHubTokenStatus) ExpiredAt(now time.Time) bool {
 	return s.HasExpiry() && !s.Expires.After(now)
@@ -77,6 +74,7 @@ func (api GitHubAPI) get(token, path string) (GitHubTokenStatus, error) {
 	response.Body.Close()
 	status := GitHubTokenStatus{StatusCode: response.StatusCode}
 	if value := response.Header.Get(GitHubTokenExpiryHeader); value != "" {
+		status.ExpiryHeader = value
 		if status.Expires, err = ParseGitHubTokenExpiry(value); err != nil {
 			status.ExpiryProblem = err.Error()
 		}

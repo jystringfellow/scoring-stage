@@ -106,9 +106,10 @@ func TestTokenSetSavesATokenPipedOnStdinWithMode600(t *testing.T) {
 	}
 }
 
-func TestTokenSetOnATerminalReadsWithoutEcho(t *testing.T) {
+func TestTokenSetReadsWithoutEchoWhenOnlyStdinIsATerminal(t *testing.T) {
 	h := setup(t)
-	h.terminal = true
+	h.stdinTerminal = true
+	h.terminal = false
 	h.stdin = "github_pat_fromstdin\n"
 	h.typed = "github_pat_typedsecret"
 	h.expect(0, "token", "set", "globex")
@@ -117,6 +118,20 @@ func TestTokenSetOnATerminalReadsWithoutEcho(t *testing.T) {
 	}
 	h.expectStderr("(input hidden)")
 	h.expectOutputLacks("typedsecret")
+}
+
+func TestTokenSetReadsPipedStdinEvenWhenStdoutIsATerminal(t *testing.T) {
+	h := setup(t)
+	h.terminal = true
+	h.stdin = "github_pat_piped\n"
+	h.typed = "github_pat_typed"
+	h.expect(0, "token", "set", "globex")
+	if got := testutil.ReadFile(t, h.tokenFile("globex")); got != "github_pat_piped\n" {
+		t.Fatalf("token file = %q", got)
+	}
+	if strings.Contains(h.stderr.String(), "(input hidden)") {
+		t.Error("prompted for a hidden token while stdin was a pipe")
+	}
 }
 
 func TestTokenSetReplacesAnExistingTokenAndSaysSo(t *testing.T) {
@@ -242,12 +257,26 @@ func TestUpWarnsWhenTheTokenExpiresWithinAWeek(t *testing.T) {
 }
 
 func TestUpWarnsWhenTheTokenCannotSeeTheRepository(t *testing.T) {
-	for _, status := range []int{http.StatusNotFound, http.StatusForbidden} {
-		h := setup(t)
-		h.github.answer(status, "")
-		h.expect(0, "up", h.remote.Checkout, "fix")
-		h.expectStderr("the GitHub token for acme cannot see acme/api")
-		h.expectStderr("resource owner")
+	h := setup(t)
+	h.github.answer(http.StatusNotFound, "")
+	h.expect(0, "up", h.remote.Checkout, "fix")
+	h.expectStderr("the GitHub token for acme cannot see acme/api (GitHub answered 404)")
+	h.expectStderr("resource owner")
+	h.github.answer(http.StatusForbidden, "")
+	h.expect(0, "up", h.remote.Checkout, "other", "--plan")
+	h.expectStderr("the GitHub token for acme cannot see acme/api (GitHub answered 403)")
+	h.expectStderr("SAML SSO")
+	h.expectStderr("rate limit")
+}
+
+func TestUpWarnsButContinuesWhenGitHubAcceptsATokenWhoseExpiryReadsAsPast(t *testing.T) {
+	h := setup(t)
+	h.github.answer(http.StatusOK, expiryIn(-time.Hour))
+	h.expect(0, "up", h.remote.Checkout, "fix")
+	h.expectStderr("GitHub accepted the token for acme, but its expiry header (")
+	h.expectStderr("check this machine's clock")
+	if !h.anyCall("env create") {
+		t.Error("did not create the sandbox for a token GitHub accepted")
 	}
 }
 
@@ -288,8 +317,8 @@ func TestSetupReportsEachTokensExpiry(t *testing.T) {
 	h.expectStderr("the GitHub token for acme expires")
 	h.github.answer(http.StatusOK, expiryIn(-time.Hour))
 	h.expect(0, "setup")
-	h.expectStderr("the GitHub token for acme expired")
-	h.expectStderr("stage up will refuse")
+	h.expectStderr("GitHub accepted the token for acme, but its expiry header (")
+	h.expectStderr("check this machine's clock")
 	h.github.answer(http.StatusUnauthorized, "")
 	h.expect(0, "setup")
 	h.expectStderr("GitHub rejected the token for globex")

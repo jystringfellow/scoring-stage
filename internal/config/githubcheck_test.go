@@ -62,7 +62,7 @@ func TestGitHubTokenStatusComesFromTheStatusCodeAndExpiryHeader(t *testing.T) {
 	if err != nil || status.StatusCode != 200 || status.HasExpiry() || status.ExpiryProblem == "" {
 		t.Errorf("unreadable expiry: %+v, %v", status, err)
 	}
-	if status, _ := api.CheckRepoAccess("github_pat_x", "acme", "hidden"); !status.CannotSee() || status.Rejected() {
+	if status, _ := api.CheckRepoAccess("github_pat_x", "acme", "hidden"); status.StatusCode != http.StatusNotFound || status.Rejected() {
 		t.Errorf("404: %+v", status)
 	}
 	if status, _ := api.CheckRepoAccess("github_pat_x", "acme", "moved"); status.StatusCode != http.StatusMovedPermanently {
