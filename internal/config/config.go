@@ -814,6 +814,9 @@ func ReachesGitHub(domain string) bool {
 			return true
 		}
 	}
+	if strings.ContainsAny(host, `?[]{}\`) {
+		return true
+	}
 	star := strings.LastIndex(host, "*")
 	if star < 0 {
 		return false

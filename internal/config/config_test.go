@@ -240,7 +240,7 @@ func TestATokenFileOthersCanReadIsRefusedAndNeverBound(t *testing.T) {
 }
 
 func TestNoConfigOrBookBindingMaySendACredentialToGitHub(t *testing.T) {
-	for _, domain := range []string{"github.com", "api.github.com:443", "*.github.com", "**", "uploads.github.com", "gist.github.com", "github.com.", "models.github.ai", "*.com", "**.com", "*hub.com", "api.*", "*.githubusercontent.com", "*.ai", "*.github.ai:443"} {
+	for _, domain := range []string{"github.com", "api.github.com:443", "*.github.com", "**", "uploads.github.com", "gist.github.com", "github.com.", "models.github.ai", "*.com", "**.com", "*hub.com", "api.*", "*.githubusercontent.com", "*.ai", "*.github.ai:443", "githu?.com", "git[h]ub.com", "{github,x}.com"} {
 		home := filepath.Join(t.TempDir(), "home")
 		testutil.WriteFile(t, filepath.Join(home, "config.toml"), "[bindings.gh2]\napiKey = { domains = [\""+domain+"\"] }\n")
 		_, err := LoadSettings(home)
@@ -870,6 +870,14 @@ func TestWildcardBindingsThatCannotMatchAGitHubHostAreAllowed(t *testing.T) {
 	for _, domain := range []string{"*.amazonaws.com", "*.githubcopilot.com", "api.*.example.org", "copilot.github.com"} {
 		if ReachesGitHub(domain) {
 			t.Errorf("%s was treated as reaching GitHub", domain)
+		}
+	}
+}
+
+func TestBindingDomainsWithGlobCharactersOtherThanAStarAreTreatedAsReachingGitHub(t *testing.T) {
+	for _, domain := range []string{"githu?.com", "git[h]ub.com", "{github,x}.com", `github\.com`, "example.org?"} {
+		if !ReachesGitHub(domain) {
+			t.Errorf("%s was not treated as reaching GitHub", domain)
 		}
 	}
 }
