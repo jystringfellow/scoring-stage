@@ -49,12 +49,19 @@ stage broker start|stop|status       # the AWS broker (up starts it when a sandb
 stage broker serve                   # run the broker in the foreground
 ```
 
-`stage ship` shows the commits and a diffstat and asks before pushing (`--yes` skips the question). It refuses
-changes to CI and workflow files (`.github/`, Azure Pipelines, GitLab, Jenkins, CircleCI, Buildkite), `.gitmodules`
-and `.scoring-stage/` unless you pass `--allow-protected-paths`: CI runs a pushed branch's workflow files with the
-repository's secrets, and `.scoring-stage/` widens future sandboxes. It warns about commits without a
-`Co-authored-by` trailer, since commits carry your git identity. Git on the host runs with hooks and fsmonitor
-off, so nothing in the scratch clone's `.git` runs on your machine.
+`stage ship` shows the commits and a diffstat, with control characters escaped, and asks before pushing (`--yes`
+skips the question). It refuses changes to CI and workflow files (`.github/`, `azure-pipelines*.yml`,
+`.azure-pipelines/`, `.pipelines/`, GitLab, Jenkins, CircleCI, Buildkite), files that run code when someone opens or
+checks out the branch (`.devcontainer/`, `.vscode/`, `.husky/`, pre-commit and lefthook configs, `.envrc`, mise and
+asdf tool files), `.gitmodules` and `.scoring-stage/`, unless you pass `--allow-protected-paths`: CI runs a pushed
+branch's workflow files with the repository's secrets, and `.scoring-stage/` widens future sandboxes. Azure
+Pipelines can read YAML from any path a pipeline names, so the file check is a heuristic there; use branch policies
+so `agent/*` branches cannot trigger pipelines that hold secrets. `ship` warns about commits without a
+`Co-authored-by` trailer, since commits carry your git identity.
+
+Git on the host runs with hooks and fsmonitor off. `stage up` records a hash of the scratch clone's git config
+(`.git/config`, `.git/info/` and related files) after sbx creates the sandbox, and `ship` refuses to run git there
+if it changed. sbx mounts the scratch clone into the sandbox read-only; `tests/acceptance.sh` checks that.
 
 `stage up` clones the repository to `~/.scoring-stage/tasks/<slug>/src`, writes an
 [sbx environment file](https://docs.docker.com/ai/sandboxes/configuration/environment-files/) next to it and runs

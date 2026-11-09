@@ -2,11 +2,15 @@ package source
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/jystringfellow/scoring-stage/internal/sbx"
@@ -105,4 +109,42 @@ func Prepare(repo, scratch, github, base string) (string, string, error) {
 	}
 	head, err := Git(scratch, "rev-parse", "HEAD")
 	return base, head, err
+}
+
+// ConfigFingerprint hashes the parts of a clone's .git that tell git what to
+// run or where to connect, so ship can refuse a clone whose config changed.
+func ConfigFingerprint(repo string) (string, error) {
+	gitDir := filepath.Join(repo, ".git")
+	hash := sha256.New()
+	var files []string
+	for _, name := range []string{"config", "config.worktree", "commondir"} {
+		files = append(files, filepath.Join(gitDir, name))
+	}
+	err := filepath.WalkDir(filepath.Join(gitDir, "info"), func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	sort.Strings(files[3:])
+	for _, path := range files {
+		relative, _ := filepath.Rel(gitDir, path)
+		content, err := os.ReadFile(path)
+		switch {
+		case os.IsNotExist(err):
+			fmt.Fprintf(hash, "%s\x00absent\x00", relative)
+		case err != nil:
+			return "", err
+		default:
+			fmt.Fprintf(hash, "%s\x00%d\x00", relative, len(content))
+			hash.Write(content)
+		}
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }

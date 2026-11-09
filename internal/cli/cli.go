@@ -68,6 +68,7 @@ type Task struct {
 	GitHubRepo string   `json:"github_repo"`
 	SourceRepo string   `json:"source_repo"`
 	Agents     []string `json:"agents,omitempty"`
+	GitConfig  string   `json:"git_config,omitempty"`
 }
 
 const usage = `usage: stage <command> [options]
@@ -544,6 +545,12 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	if err := sbx.Run("env", "create", "--force", "--no-input", directory); err != nil {
 		return 0, errorf("%s; run `stage down %s` to clean up", err, slug)
 	}
+	if task.GitConfig, err = source.ConfigFingerprint(task.RepoDir); err != nil {
+		return 0, err
+	}
+	if err := writeTask(task, directory); err != nil {
+		return 0, err
+	}
 	a.restoreLogins(settings, &task)
 	a.say("%s is up: %s at %s", sandbox, github, task.RepoDir)
 	var handles []string
@@ -675,6 +682,12 @@ func (a *App) cmdShip(args []string, home string) (int, error) {
 		return 0, err
 	}
 	repo := task.RepoDir
+	if err := checkGitConfig(task); err != nil {
+		return 0, err
+	}
+	if task.GitConfig == "" {
+		a.warn("task %s was created before stage recorded its git config; it cannot check that the scratch clone's config is unchanged", slug)
+	}
 	remote := "sandbox-" + task.Sandbox
 	if _, err := source.Git(repo, "remote", "get-url", remote); err != nil {
 		return 0, errorf("no %s remote in %s; is %s running?", remote, repo, task.Sandbox)
@@ -727,6 +740,8 @@ func (a *App) cmdShip(args []string, home string) (int, error) {
 var protectedPaths = []string{
 	".github/", ".azure-pipelines/", ".pipelines/", ".circleci/", ".buildkite/", ".gitlab-ci.yml", "Jenkinsfile",
 	".scoring-stage/", ".gitmodules",
+	".devcontainer/", ".vscode/", ".husky/", ".pre-commit-config.yaml", "lefthook.yml", ".lefthook.yml", ".envrc",
+	".mise.toml", "mise.toml", ".tool-versions",
 }
 
 func isProtected(path string) bool {
@@ -762,11 +777,11 @@ func (a *App) reviewShipment(repo, sha, branch, github string, yes, allowProtect
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(a.Stdout, "stage: shipping to %s %s:\n%s\n%s\n", github, branch, indent(commits), indent(stat))
+	fmt.Fprintf(a.Stdout, "stage: shipping to %s %s:\n%s\n%s\n", github, printable(branch), indent(printable(commits)), indent(printable(stat)))
 	var protected []string
 	for _, name := range strings.Split(names, "\x00") {
 		if name != "" && isProtected(name) {
-			protected = append(protected, name)
+			protected = append(protected, printable(name))
 		}
 	}
 	if len(protected) > 0 {
@@ -788,6 +803,38 @@ func (a *App) reviewShipment(repo, sha, branch, github string, yes, allowProtect
 		return nil
 	}
 	return errorf("not shipped; rerun with --yes to push without asking")
+}
+
+func checkGitConfig(task *Task) error {
+	if task.GitConfig == "" {
+		return nil
+	}
+	current, err := source.ConfigFingerprint(task.RepoDir)
+	if err != nil {
+		return err
+	}
+	if current != task.GitConfig {
+		return errorf("the git config in %s changed after stage up created the sandbox; refusing to run git there. "+
+			"Inspect %s and recreate the task", task.RepoDir, filepath.Join(task.RepoDir, ".git"))
+	}
+	return nil
+}
+
+// printable escapes control characters so text from a sandbox cannot move
+// the cursor or rewrite the terminal while the user reviews it.
+func printable(text string) string {
+	var out strings.Builder
+	for _, r := range text {
+		switch {
+		case r == '\n':
+			out.WriteRune(r)
+		case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f:
+			fmt.Fprintf(&out, "\\x%02x", r)
+		default:
+			out.WriteRune(r)
+		}
+	}
+	return out.String()
 }
 
 func indent(text string) string {

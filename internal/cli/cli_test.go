@@ -10,6 +10,7 @@ import (
 
 	"github.com/jystringfellow/scoring-stage/internal/config"
 	"github.com/jystringfellow/scoring-stage/internal/kits"
+	"github.com/jystringfellow/scoring-stage/internal/source"
 	"github.com/jystringfellow/scoring-stage/internal/testutil"
 )
 
@@ -298,7 +299,24 @@ func shippedTask(t *testing.T) (*harness, string) {
 	testutil.RunGit(t, box, "add", ".")
 	testutil.RunGit(t, box, "commit", "-q", "-m", "Fix the login redirect")
 	testutil.RunGit(t, filepath.Join(h.task("fix"), "src"), "remote", "add", "sandbox-stage-fix", box)
+	h.pinGitConfig("fix")
 	return h, box
+}
+
+// pinGitConfig records the scratch clone's config as sbx leaves it, with the
+// sandbox remote that the fake sbx does not add itself.
+func (h *harness) pinGitConfig(slug string) {
+	h.t.Helper()
+	task, err := loadTask(h.home, slug)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	if task.GitConfig, err = source.ConfigFingerprint(task.RepoDir); err != nil {
+		h.t.Fatal(err)
+	}
+	if err := writeTask(*task, h.task(slug)); err != nil {
+		h.t.Fatal(err)
+	}
 }
 
 func TestShipPushesTheSandboxHeadToAnAgentBranch(t *testing.T) {
@@ -590,7 +608,7 @@ func TestShipShowsWhatItWillPushAndWaitsForAYes(t *testing.T) {
 }
 
 func TestShipRefusesProtectedPathsUnlessAllowed(t *testing.T) {
-	for _, path := range []string{".github/workflows/ci.yml", "azure-pipelines.yml", "build/azure-pipelines-pr.yaml", ".scoring-stage/config.toml", "Jenkinsfile"} {
+	for _, path := range []string{".github/workflows/ci.yml", "azure-pipelines.yml", "build/azure-pipelines-pr.yaml", ".scoring-stage/config.toml", "Jenkinsfile", ".vscode/tasks.json", ".devcontainer/devcontainer.json", ".envrc"} {
 		h, box := shippedTask(t)
 		boxCommit(t, box, path, "Touch "+path)
 		h.expect(1, "ship", "fix", "--yes")
@@ -627,8 +645,46 @@ func TestHostGitIgnoresHooksAndFsmonitorInTheScratchClone(t *testing.T) {
 		t.Fatal(err)
 	}
 	testutil.RunGit(t, scratch, "config", "core.fsmonitor", "touch "+marker+"; false")
+	h.pinGitConfig("fix")
 	h.expect(0, "ship", "fix", "--yes")
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatal("host git ran a command from the scratch clone's config")
+	}
+}
+
+func TestShipRefusesAScratchCloneWhoseGitConfigChanged(t *testing.T) {
+	h, _ := shippedTask(t)
+	scratch := filepath.Join(h.task("fix"), "src")
+	testutil.RunGit(t, scratch, "config", "url.ssh://evil/.insteadOf", "https://github.com/")
+	h.expect(1, "ship", "fix", "--yes")
+	h.expectStderr("the git config in " + scratch + " changed after stage up")
+	if out := testutil.RunGit(t, h.remote.Bare, "branch", "--list", "agent/*"); out != "" {
+		t.Fatalf("pushed from a changed clone: %s", out)
+	}
+}
+
+func TestUpRecordsTheScratchClonesGitConfig(t *testing.T) {
+	h := setup(t)
+	h.expect(0, "up", h.remote.Checkout, "fix")
+	task, err := loadTask(h.home, "fix")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := source.ConfigFingerprint(task.RepoDir)
+	if task.GitConfig == "" || task.GitConfig != want {
+		t.Fatalf("git_config %q, want %q", task.GitConfig, want)
+	}
+}
+
+func TestTheShipSummaryEscapesTerminalControlCharacters(t *testing.T) {
+	h, box := shippedTask(t)
+	boxCommit(t, box, "two.txt", "Harmless\x1b[2A\x1b]52;c;ZXZpbA==\x07 subject")
+	h.expect(0, "ship", "fix", "--yes")
+	out := h.stdout.String()
+	if strings.ContainsAny(out, "\x1b\x07") {
+		t.Fatalf("summary carries control characters: %q", out)
+	}
+	if !strings.Contains(out, `Harmless\x1b[2A\x1b]52;c;ZXZpbA==\x07 subject`) {
+		t.Errorf("summary %q lacks the escaped subject", out)
 	}
 }
