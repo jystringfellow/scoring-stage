@@ -375,13 +375,16 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 	} else {
 		a.warn("gh is missing or not logged in; Copilot will be unauthenticated")
 	}
-	if info, err := os.Stat(settings.ReadonlyToken()); err == nil && info.Mode().IsRegular() {
+	switch tokenErr := settings.CheckGitHubToken(); {
+	case settings.GitHubAccess() == config.GitHubNone:
+		a.say("github: none (github = %q in config.toml; sandboxes get no GitHub credential)", config.GitHubNone)
+	case tokenErr != nil:
+		a.warn("%s", tokenErr)
+	default:
 		if err := os.Chmod(settings.ReadonlyToken(), 0o600); err != nil {
 			return 0, err
 		}
-		a.say("github read-only token: %s", settings.ReadonlyToken())
-	} else {
-		a.say("github read-only token: none at %s (boxes use the global sbx github secret, if any)", settings.ReadonlyToken())
+		a.say("github read-only token: %s (fine-grained; keep it limited to your repositories, Contents and Metadata: read)", settings.ReadonlyToken())
 	}
 	composition, err := config.Compose(settings, config.Selection{Gh: gh})
 	if err != nil {
@@ -434,6 +437,9 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	}
 	settings, err := config.LoadSettings(home)
 	if err != nil {
+		return 0, err
+	}
+	if err := settings.CheckGitHubToken(); err != nil {
 		return 0, err
 	}
 

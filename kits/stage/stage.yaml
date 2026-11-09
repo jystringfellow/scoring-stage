@@ -3,9 +3,10 @@ schemaVersion: "3"
 kind: mixin
 displayName: scoring-stage
 description: >-
-  What every scoring-stage sandbox gets: git pushes refused at the proxy so
-  work leaves only through `stage ship` on the host, the user's git author
-  identity, and guidance telling the agent how the sandbox behaves.
+  What every scoring-stage sandbox gets: git pushes and GitHub REST writes
+  refused at the proxy so work leaves only through `stage ship` on the host,
+  the user's git author identity, and guidance telling the agent how the
+  sandbox behaves.
 
 capabilities:
   - type: com.docker.sandbox/network-policy@2
@@ -15,6 +16,25 @@ capabilities:
           - hosts: ["**:443", "**:80"]
             methods: [POST]
             paths: ["/**/git-receive-pack"]
+          - hosts: ["api.github.com:443"]
+            methods: [PUT, PATCH, DELETE]
+            paths: ["/**"]
+          - hosts: ["api.github.com:443"]
+            methods: [POST]
+            paths:
+              - "/repos/**"
+              - "/user"
+              - "/user/**"
+              - "/orgs/**"
+              - "/gists"
+              - "/gists/**"
+              - "/teams/**"
+              - "/projects/**"
+              - "/enterprises/**"
+              - "/app/**"
+              - "/applications/**"
+              - "/authorizations"
+              - "/authorizations/**"
 
   - type: com.docker.sandbox/git-identity@1
     optional: true
@@ -29,8 +49,9 @@ capabilities:
         You are running in a scoring-stage sandbox with permission prompts off.
         The sandbox is the boundary, so work freely inside it, and keep within these rules:
 
-        - Commit your work locally. `git push` is refused by the sandbox proxy; the user
-          ships your commits from the host with `stage ship`.
+        - Commit your work locally. `git push` and GitHub API writes (comments, issues,
+          pull requests, merges) are refused by the sandbox proxy; the user ships your
+          commits from the host with `stage ship`.
         - Network egress is deny-all apart from the hosts the sandbox's kits allow. A
           request refused by the sandbox comes back as HTTP 403 from the proxy. Do not
           work around a refusal; report the host and why you need it.

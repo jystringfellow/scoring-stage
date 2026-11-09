@@ -30,6 +30,7 @@ func setup(t *testing.T) *harness {
 	t.Setenv("STAGE_HOME", given)
 	h.sbx = testutil.NewFakeSbx(t)
 	h.remote = testutil.GitHubRemote(t)
+	testutil.WriteFile(t, filepath.Join(given, "secrets", "github-readonly-token"), "github_pat_readonly\n")
 	return h
 }
 
@@ -379,6 +380,7 @@ func TestTheRecordedRepoDirIsThePathSbxIsGivenEvenThroughASymlinkedHome(t *testi
 		t.Fatal(err)
 	}
 	t.Setenv("STAGE_HOME", filepath.Join(link, "home"))
+	testutil.WriteFile(t, filepath.Join(real, "home", "secrets", "github-readonly-token"), "github_pat_readonly\n")
 	h.expect(0, "up", h.remote.Checkout, "fix")
 	var task Task
 	json.Unmarshal([]byte(testutil.ReadFile(t, filepath.Join(real, "home", "tasks", "fix", "task.json"))), &task)
@@ -533,5 +535,36 @@ func TestTheTaskRecordsItsAgents(t *testing.T) {
 	json.Unmarshal([]byte(testutil.ReadFile(t, filepath.Join(h.task("fix"), "task.json"))), &task)
 	if strings.Join(task.Agents, " ") != "agy claude" {
 		t.Fatalf("agents = %v", task.Agents)
+	}
+}
+
+func TestUpRefusesToStartWithoutAReadOnlyGitHubToken(t *testing.T) {
+	h := setup(t)
+	if err := os.Remove(filepath.Join(h.home, "secrets", "github-readonly-token")); err != nil {
+		t.Fatal(err)
+	}
+	h.expect(1, "up", h.remote.Checkout, "fix")
+	h.expectStderr("no GitHub token at " + filepath.Join(h.home, "secrets", "github-readonly-token"))
+	if h.anyCall("env create") {
+		t.Error("created a sandbox without a GitHub token")
+	}
+}
+
+func TestUpRefusesAGitHubTokenThatCanWrite(t *testing.T) {
+	h := setup(t)
+	testutil.WriteFile(t, filepath.Join(h.home, "secrets", "github-readonly-token"), "gho_fromghauth\n")
+	h.expect(1, "up", h.remote.Checkout, "fix")
+	h.expectStderr("gh CLI login token (gho_)")
+}
+
+func TestUpWithGitHubNoneGivesTheSandboxNoGitHubCredential(t *testing.T) {
+	h := setup(t)
+	if err := os.Remove(filepath.Join(h.home, "secrets", "github-readonly-token")); err != nil {
+		t.Fatal(err)
+	}
+	testutil.WriteFile(t, filepath.Join(h.home, "config.toml"), "github = \"none\"\n")
+	h.expect(0, "up", h.remote.Checkout, "fix")
+	if env := testutil.ReadFile(t, filepath.Join(h.task("fix"), "sbxenv.yaml")); strings.Contains(env, "github") {
+		t.Errorf("env mentions github:\n%s", env)
 	}
 }
