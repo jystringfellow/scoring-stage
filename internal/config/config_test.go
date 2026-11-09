@@ -176,6 +176,7 @@ func TestTheGitHubSettingIsATableWithAKnownMode(t *testing.T) {
 		"github = \"readonly-token\"\n": `replace github = "readonly-token" with [github] mode = "fine-grained"`,
 		"github = \"none\"\n":           `[github] mode = "none"`,
 		"[github]\nmode = \"app\"\n":    `mode must be one of "fine-grained", "gh", "none"`,
+		"github = \"foo\"\n":            `(modes: "fine-grained", "gh", "none")`,
 		"[github]\ntoken = \"x\"\n":     "[github]: unknown keys token",
 	} {
 		home := filepath.Join(t.TempDir(), "home")
@@ -212,9 +213,10 @@ func TestOnlyAFineGrainedTokenPassesTheGitHubCheck(t *testing.T) {
 func TestAnOwnerNameCannotLeaveTheTokenDirectory(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
 	testutil.WriteFile(t, filepath.Join(home, "config.toml"), fineGrained)
-	for _, owner := range []string{"", "..", "../secrets", "a/b", "-acme"} {
+	for _, owner := range []string{"", "..", "../secrets", "a/b", "-acme", "acme_"} {
 		expectError(t, load(t, home).CheckGitHub(owner, ""), "is not a GitHub owner name")
 	}
+	expectError(t, load(t, home).CheckGitHub("jdoe_acme", ""), "no GitHub token for jdoe_acme")
 }
 
 func writeToken(t *testing.T, path, token string) string {

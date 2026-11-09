@@ -765,6 +765,11 @@ func TestSetupSavesTheGitHubModeOnceAndReportsAMissingChoice(t *testing.T) {
 	h.expectStderr("already sets github; edit it there")
 	h.expect(1, "setup", "--github", "app")
 	h.expectStderr("--github must be one of fine-grained, gh, none")
+	writeToken(t, filepath.Join(h.home, "secrets", "github", "Globex.token"), "github_pat_globex\n")
+	h.expect(0, "setup")
+	if !strings.Contains(h.stdout.String(), "github token for globex: fine-grained") {
+		t.Errorf("setup did not find Globex.token under its lowercased owner: %s\n%s", h.stdout.String(), h.stderr.String())
+	}
 }
 
 func TestUpGivesTheSandboxOnlyTheTokenForItsRepositorysOwner(t *testing.T) {
@@ -824,13 +829,34 @@ func TestUpInGhModeUsesAPerSandboxGhSecretAndWarnsThatItCanWrite(t *testing.T) {
 	h.gh = gh
 	testutil.WriteFile(t, filepath.Join(h.home, "config.toml"), "[github]\nmode = \"gh\"\n")
 	h.expect(0, "up", h.remote.Checkout, "fix")
-	h.expectStderr("GraphQL writes (gh pr create, gh pr merge, gh issue comment) go through as you")
+	h.expectStderr("commit to and move or delete branches, open and merge pull requests")
 	env := testutil.ReadFile(t, filepath.Join(h.task("fix"), "sbxenv.yaml"))
 	if !strings.Contains(env, gh+" auth token") || !strings.Contains(env, "api.github.com") {
 		t.Errorf("env has no gh secret and binding:\n%s", env)
 	}
 	h.expect(0, "setup")
-	h.expectStderr("GraphQL writes")
+	h.expectStderr("The proxy refuses only git push and REST writes")
+}
+
+func TestManagedSettingsRefuseGhMode(t *testing.T) {
+	h := setup(t)
+	h.gh = fakeGh(t, 0)
+	testutil.WriteFile(t, h.managed, "repo_kits = \"ask\"\n")
+	testutil.WriteFile(t, filepath.Join(h.home, "config.toml"), "[github]\nmode = \"gh\"\n")
+	h.expect(1, "up", h.remote.Checkout, "fix")
+	h.expectStderr(`[github] mode = "gh" is refused while managed settings are in place`)
+	if h.anyCall("env create") {
+		t.Error("created a gh-mode sandbox under managed settings")
+	}
+}
+
+func TestSetupRejectsABadGitHubModeBeforeSavingAgents(t *testing.T) {
+	h := setup(t)
+	testutil.WriteFile(t, filepath.Join(h.home, "config.toml"), "")
+	h.expect(1, "setup", "--agent", "codex", "--github", "app")
+	if got := testutil.ReadFile(t, filepath.Join(h.home, "config.toml")); got != "" {
+		t.Fatalf("config.toml = %q", got)
+	}
 }
 
 func TestUpInGhModeRefusesWithoutAGhLogin(t *testing.T) {

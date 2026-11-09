@@ -21,7 +21,7 @@ const (
 var (
 	GitHubModes = []string{GitHubFineGrained, GitHubGh, GitHubNone}
 	githubKeys  = []string{"mode"}
-	githubOwner = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$`)
+	githubOwner = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?$`)
 )
 
 const gitHubTokenSuffix = ".token"
@@ -31,7 +31,10 @@ func decodeGitHub(value any, path string) (string, error) {
 	case nil:
 		return "", nil
 	case string:
-		return "", errorf("%s: github is a table now; replace github = %q with [github] mode = %q", path, typed, migratedMode(typed))
+		if replacement, known := map[string]string{"readonly-token": GitHubFineGrained, GitHubNone: GitHubNone}[typed]; known {
+			return "", errorf("%s: github is a table now; replace github = %q with [github] mode = %q", path, typed, replacement)
+		}
+		return "", errorf("%s: github must be a table such as [github] mode = %q (modes: %s)", path, GitHubFineGrained, quotedList(GitHubModes))
 	case map[string]any:
 		if err := checkKeys(typed, githubKeys, path+" [github]"); err != nil {
 			return "", err
@@ -48,13 +51,6 @@ func decodeGitHub(value any, path string) (string, error) {
 	default:
 		return "", errorf("%s: github must be a table such as [github] mode = %q", path, GitHubFineGrained)
 	}
-}
-
-func migratedMode(old string) string {
-	if old == GitHubNone {
-		return GitHubNone
-	}
-	return GitHubFineGrained
 }
 
 func quotedList(values []string) string {
@@ -90,6 +86,10 @@ func (s *Settings) CheckGitHub(owner, gh string) error {
 	case GitHubNone:
 		return nil
 	case GitHubGh:
+		if len(s.Managed.orUnmanaged().Paths) > 0 {
+			return errorf("[github] mode = %q is refused while managed settings are in place (%s); use %q or %q",
+				GitHubGh, s.Managed.where(), GitHubFineGrained, GitHubNone)
+		}
 		if gh == "" {
 			return errorf("[github] mode = %q needs the gh CLI on the host, logged in with `gh auth login`", GitHubGh)
 		}
@@ -145,7 +145,7 @@ func (s *Settings) GitHubTokenOwners() ([]string, error) {
 	var owners []string
 	for _, entry := range entries {
 		if owner, ok := strings.CutSuffix(entry.Name(), gitHubTokenSuffix); ok && !entry.IsDir() {
-			owners = append(owners, owner)
+			owners = append(owners, strings.ToLower(owner))
 		}
 	}
 	sort.Strings(owners)

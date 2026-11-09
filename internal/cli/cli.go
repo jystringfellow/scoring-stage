@@ -362,6 +362,9 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 			"  `stage setup --yes` runs `sbx policy reset --force` (deletes ALL local policies and stops\n"+
 			"  running sandboxes) and then `sbx policy init deny-all`.\n")
 	}
+	if *githubMode != "" && !slices.Contains(config.GitHubModes, *githubMode) {
+		return 0, errorf("--github must be one of %s", strings.Join(config.GitHubModes, ", "))
+	}
 	if len(agentFlags) > 0 {
 		if err := config.SaveAgents(home, agentFlags); err != nil {
 			return 0, err
@@ -619,9 +622,9 @@ func (a *App) checkRepoApprovals(home string, composition *config.Composition, a
 	return nil
 }
 
-const ghModeWarning = "[github] mode = \"gh\": sandboxes use your gh login, so they can read and write everything it can. " +
-	"The proxy refuses git push and GitHub REST writes, but GraphQL writes (gh pr create, gh pr merge, gh issue comment) " +
-	"go through as you. Use mode = \"fine-grained\" to keep sandboxes read-only"
+const ghModeWarning = "[github] mode = \"gh\": sandboxes use your gh login. GraphQL lets them do anything that login can: " +
+	"commit to and move or delete branches, open and merge pull requests, comment, change settings. The proxy refuses only " +
+	"git push and REST writes. Use mode = \"fine-grained\" to keep sandboxes read-only"
 
 func (a *App) checkGitHubAccess(settings *config.Settings, owner, gh string) error {
 	if err := settings.CheckGitHub(owner, gh); err != nil {

@@ -93,9 +93,11 @@ clone, so ship anything you want to keep first.
    single `~/.scoring-stage/secrets/github-readonly-token` file is no longer read; move it to
    `secrets/github/<owner>.token` for the owner it was created for.
 
-   **gh.** stage warns on `stage setup` and every `stage up` in this mode. The proxy still refuses `git push` and
-   GitHub REST writes, but GraphQL writes (`gh pr create`, `gh pr merge`, `gh issue comment`) go through as you,
-   to every repository your gh login can write to.
+   **gh.** stage warns on `stage setup` and every `stage up` in this mode. GraphQL lets a sandbox do anything your gh
+   login can, in every repository it can write to: commit to and move or delete branches (`createCommitOnBranch`,
+   `updateRef`, `deleteRef`), open and merge pull requests, comment and change settings. In effect that is a push;
+   the proxy refuses only `git push` and REST writes. stage refuses gh mode whenever
+   [managed settings](#managed-settings) are in place.
 
    `stage up` also refuses while sbx has a global `github` secret (`sbx secret ls --global`), because any sandbox
    with a `github` binding, including one saved by an earlier sandbox, can fall back to it. Remove it with
