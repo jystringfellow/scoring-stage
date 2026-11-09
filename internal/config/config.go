@@ -808,12 +808,26 @@ func ReachesGitHub(domain string) bool {
 	if host == "copilot.github.com" {
 		return false
 	}
-	for _, apex := range []string{"github.com", "github.ai", "githubusercontent.com"} {
+	apexes := []string{"github.com", "github.ai", "githubusercontent.com"}
+	for _, apex := range apexes {
 		if host == apex || strings.HasSuffix(host, "."+apex) {
 			return true
 		}
 	}
-	return strings.Contains(host, "*") && (strings.HasSuffix(host, "github.com") || strings.HasSuffix(host, "github.ai") || strings.HasSuffix(host, "*"))
+	if strings.ContainsAny(host, `?[]{}\`) {
+		return true
+	}
+	star := strings.LastIndex(host, "*")
+	if star < 0 {
+		return false
+	}
+	literalTail := host[star+1:]
+	for _, apex := range apexes {
+		if strings.HasSuffix(apex, literalTail) || strings.HasSuffix("sub."+apex, literalTail) {
+			return true
+		}
+	}
+	return false
 }
 
 func bookSecret(spec any, bookPath, owner string) (map[string]any, error) {
