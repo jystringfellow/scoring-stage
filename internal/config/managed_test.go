@@ -283,3 +283,36 @@ func TestRepeatedAllowedGitHubModesCountOnce(t *testing.T) {
 		t.Errorf("allowed %v, default %q", managed.AllowedGitHubModes(), managed.DefaultGitHubMode())
 	}
 }
+
+func TestAManagedGitHubAppClientIDIsUsedAndAUserCannotPointElsewhere(t *testing.T) {
+	managedFiles(t, "[github]\nallowed_modes = [\"app\"]\napp_client_id = \"Iv23pinned\"\n")
+	home := filepath.Join(t.TempDir(), "home")
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "[github]\nmode = \"app\"\n")
+	settings := load(t, home)
+	if got := settings.GitHubAppClientID(); got != "Iv23pinned" {
+		t.Errorf("client ID %q, want the pinned one", got)
+	}
+	if !slices.ContainsFunc(settings.Managed.Summary(), func(line string) bool { return strings.Contains(line, "GitHub App client ID (pinned): Iv23pinned") }) {
+		t.Errorf("summary %v does not show the pin", settings.Managed.Summary())
+	}
+
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "[github]\nmode = \"app\"\napp_client_id = \"Iv23pinned\"\n")
+	load(t, home)
+
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "[github]\nmode = \"app\"\napp_client_id = \"Iv23other\"\n")
+	_, err := LoadSettings(home)
+	expectError(t, err, "app_client_id Iv23other differs from the GitHub App Iv23pinned pinned by")
+}
+
+func TestManagedFilesMustAgreeOnTheGitHubAppClientID(t *testing.T) {
+	managedFiles(t, "[github]\napp_client_id = \"Iv23first\"\n", "[github]\napp_client_id = \"Iv23first\"\n")
+	if _, err := LoadManaged(); err != nil {
+		t.Fatal(err)
+	}
+	managedFiles(t, "[github]\napp_client_id = \"Iv23first\"\n", "[github]\napp_client_id = \"Iv23second\"\n")
+	_, err := LoadManaged()
+	expectError(t, err, "pin different GitHub App client IDs (Iv23first, Iv23second)")
+	managedFiles(t, "[github]\napp_client_id = \"not a client id\"\n")
+	_, err = LoadManaged()
+	expectError(t, err, "app_client_id must be a GitHub App's Client ID")
+}

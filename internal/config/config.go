@@ -204,6 +204,9 @@ func LoadSettings(home string) (*Settings, error) {
 	if settings.Managed, err = LoadManaged(); err != nil {
 		return nil, err
 	}
+	if err := settings.checkPinnedGitHubApp(path); err != nil {
+		return nil, err
+	}
 	for _, agent := range settings.copyLogins {
 		if !contains(copyableAgents(), agent) {
 			return nil, errorf("%s: copy_logins: %s cannot be copied (copyable: %s); claude, codex and copilot sign in through the proxy", path, agent, strings.Join(copyableAgents(), ", "))

@@ -141,7 +141,7 @@ clone, so ship anything you want to keep first.
 
    Under [managed settings](#managed-settings), app mode works only when `[github] allowed_modes` lists `"app"`;
    otherwise `stage up`, `stage github login` and `stage github token` refuse it, so sandboxes created earlier stop
-   getting new tokens.
+   getting new tokens. Managed settings can also pin the app with `[github] app_client_id`.
 
    Login uses GitHub's device flow with the Client ID only; there is no client secret. The access token (`ghu_`,
    about 8 hours) and refresh token (`ghr_`, about 6 months) are saved with their expiry times in
@@ -349,6 +349,7 @@ denied_profiles = ["*prod*", "*admin*"]
 
 [github]
 allowed_modes = ["fine-grained", "none"] # GitHub modes users may choose; [] allows none
+app_client_id = "Iv23li..."              # the only GitHub App app mode may use
 ```
 
 `[github] allowed_modes` limits the modes in `[github] mode`, and `stage setup --github` refuses any other mode
@@ -357,6 +358,12 @@ set it decide. When managed settings are in place but none sets `allowed_modes`,
 allowed: an administrator has to list any other mode, such as `"gh"`, to allow it. When exactly one mode is
 allowed and the user has not chosen one, stage uses it without asking. An empty list allows no mode, so `stage up`
 refuses every sandbox.
+
+`[github] app_client_id` pins the GitHub App that app mode uses. Users then need no `app_client_id` of their own; one
+that differs from the pin is an error, and a saved login for any other app is refused, so `stage github token` stops
+handing its tokens to sandboxes. Managed files that pin different apps are an error. Without a pin, users under
+managed settings can point app mode at any app, and only stage's read-only installation check stands between them
+and an app that can write.
 
 `stage setup` shows the managed settings in effect and warns about a managed file or directory that is not owned by
 root or that others can write. A managed file stage cannot read stops stage rather than being skipped. They only

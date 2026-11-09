@@ -35,7 +35,21 @@ func decodeGitHubAppClientID(value any, path string) (string, error) {
 	return text, nil
 }
 
-func (s *Settings) GitHubAppClientID() string { return s.githubApp }
+func (s *Settings) GitHubAppClientID() string {
+	if pinned := s.Managed.GitHubAppClientID(); pinned != "" {
+		return pinned
+	}
+	return s.githubApp
+}
+
+func (s *Settings) checkPinnedGitHubApp(path string) error {
+	pinned := s.Managed.GitHubAppClientID()
+	if pinned == "" || s.githubApp == "" || s.githubApp == pinned {
+		return nil
+	}
+	return errorf("%s [github]: app_client_id %s differs from the GitHub App %s pinned by %s; remove app_client_id or set it to %s",
+		path, s.githubApp, pinned, s.Managed.appClientIDFile, pinned)
+}
 
 func (s *Settings) GitHubAppStore() github.Store {
 	return github.Store{Path: filepath.Join(s.GitHubTokenDir(), "app.json")}

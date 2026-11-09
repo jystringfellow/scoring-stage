@@ -20,7 +20,7 @@ const (
 
 var managedKeys = []string{"allowed_agents", "denied_agents", "aws", "github", "repo_kits", "copy_logins", "allow_global_policy"}
 var managedAWSKeys = []string{"allowed_profiles", "denied_profiles"}
-var managedGitHubKeys = []string{"allowed_modes"}
+var managedGitHubKeys = []string{"allowed_modes", "app_client_id"}
 var managedDefaultGitHubModes = []string{GitHubFineGrained, GitHubNone}
 
 // ManagedPaths lists where an administrator's managed settings may live, most specific first.
@@ -51,6 +51,8 @@ type Managed struct {
 	allowGlobalPolicy bool
 	gitHubModes       []string
 	gitHubModesSet    bool
+	appClientID       string
+	appClientIDFile   string
 }
 
 func fileExists(path string) bool {
@@ -182,6 +184,16 @@ func (m *Managed) loadGitHub(value any, file string) error {
 	}
 	if err := checkKeys(table, managedGitHubKeys, where); err != nil {
 		return err
+	}
+	clientID, err := decodeGitHubAppClientID(table, file)
+	if err != nil {
+		return err
+	}
+	if clientID != "" {
+		if m.appClientID != "" && m.appClientID != clientID {
+			return errorf("%s and %s pin different GitHub App client IDs (%s, %s)", m.appClientIDFile, file, m.appClientID, clientID)
+		}
+		m.appClientID, m.appClientIDFile = clientID, file
 	}
 	if table["allowed_modes"] == nil {
 		return nil
@@ -368,6 +380,9 @@ func (m *Managed) Summary() []string {
 		lines = append(lines, "  copyable logins: "+strings.Join(m.copyLogins, ", "))
 	}
 	lines = append(lines, "  allowed GitHub modes: "+m.gitHubModesSummary())
+	if m.appClientID != "" {
+		lines = append(lines, "  GitHub App client ID (pinned): "+m.appClientID)
+	}
 	if !m.allowGlobalPolicy {
 		lines = append(lines, "  --allow-global-policy: refused")
 	}
@@ -400,3 +415,5 @@ func (m *Managed) Warnings() []string {
 	}
 	return warnings
 }
+
+func (m *Managed) GitHubAppClientID() string { return m.orUnmanaged().appClientID }
