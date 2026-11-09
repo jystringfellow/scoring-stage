@@ -85,6 +85,28 @@ func TestManagedSettingsRefuseAppModeUntilAllowedModesListsIt(t *testing.T) {
 	h.expect(0, "up", h.remote.Checkout, "fix")
 }
 
+func TestAPinnedGitHubAppIsUsedWithoutAUserClientIDAndOtherAppsLoginsAreRefused(t *testing.T) {
+	h := appSetup(t)
+	testutil.WriteFile(t, h.managed, "[github]\nallowed_modes = [\"app\"]\napp_client_id = \"Iv23test\"\n")
+	testutil.WriteFile(t, filepath.Join(h.home, "config.toml"), "[github]\nmode = \"app\"\n")
+	h.expect(0, "github", "login")
+	h.expect(0, "up", h.remote.Checkout, "fix")
+
+	testutil.WriteFile(t, h.managed, "[github]\nallowed_modes = [\"app\"]\napp_client_id = \"Iv23other\"\n")
+	h.expect(1, "github", "token")
+	h.expectStderr("holds a login for GitHub App client ID Iv23test, but [github] app_client_id is Iv23other")
+	if h.stdout.String() != "" {
+		t.Errorf("printed a token for an app the managed settings do not pin: %q", h.stdout.String())
+	}
+	h.expect(1, "up", h.remote.Checkout, "other")
+
+	testutil.WriteFile(t, h.managed, "[github]\nallowed_modes = [\"app\"]\napp_client_id = \"Iv23test\"\n")
+	testutil.WriteFile(t, filepath.Join(h.home, "config.toml"), "[github]\nmode = \"app\"\napp_client_id = \"Iv23other\"\n")
+	h.expect(0, "up", h.remote.Checkout, "third")
+	h.expectStderr("app_client_id Iv23other is ignored")
+	h.expect(0, "down", "fix")
+}
+
 func TestGitHubCommandsNeedAppMode(t *testing.T) {
 	h := setup(t)
 	h.expect(1, "github", "login")
