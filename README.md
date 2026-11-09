@@ -37,13 +37,15 @@ asset="stage_${version}_$(uname -s | tr A-Z a-z)_$(uname -m | sed 's/x86_64/amd6
 base="https://github.com/jystringfellow/scoring-stage/releases/download/$version"
 curl -fsSLO "$base/$asset.tar.gz" -O "$base/SHA256SUMS"
 grep " $asset.tar.gz\$" SHA256SUMS | shasum -a 256 -c -    # or sha256sum -c -
-gh attestation verify "$asset.tar.gz" --repo jystringfellow/scoring-stage
+gh attestation verify "$asset.tar.gz" --repo jystringfellow/scoring-stage \
+  --signer-workflow jystringfellow/scoring-stage/.github/workflows/release.yml --source-ref "refs/tags/$version"
 tar -xzf "$asset.tar.gz" && install -m 755 "$asset/stage" ~/.local/bin/stage
 ```
 
 Each archive has a [build provenance attestation](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations)
-from the release workflow; `gh attestation verify` checks that a GitHub Actions workflow in this repository
-built the archive, and prints the workflow and commit it was built from.
+from the release workflow. With these flags, `gh attestation verify` checks that `release.yml` in this repository
+built the archive from the tag you asked for, and prints the commit it was built from. `SHA256SUMS` catches a
+corrupted download, not a tampered one; the attestation is the provenance check.
 
 **With Go** (1.26 or later):
 
@@ -410,9 +412,16 @@ tests/acceptance.sh <slug> [granted] [other] # checks a live sandbox made with s
 ### Releasing
 
 Push a `vX.Y.Z` tag on `main` (`git tag v0.1.0 && git push origin v0.1.0`). The release workflow
-(`.github/workflows/release.yml`) runs the tests, builds the four archives with the tag as `stage version`, attests
-them, writes `SHA256SUMS` and creates the GitHub release with generated notes. A tag with a hyphen, such as
-`v0.1.0-rc.1`, makes a prerelease.
+(`.github/workflows/release.yml`) rejects a tag that is not `vX.Y.Z` with an optional `-suffix`, and a tagged
+commit that is not on `main`. A build job with read-only permissions then runs the tests, builds the four archives
+with the tag as `stage version` and writes `SHA256SUMS`. A separate release job attests the archives and creates
+the GitHub release with generated notes. A tag with a hyphen, such as `v0.1.0-rc.1`, makes a prerelease. The
+workflow has not yet run on a real tag.
+
+The tag and `main` checks catch mistakes, not a malicious writer: a tag push runs `release.yml` as it exists at
+the tagged commit, so anyone who can push a tag can also change the checks. The real controls are branch
+protection on `main` and a tag ruleset that limits creating, updating and deleting `v*` tags to admins.
+`SHA256SUMS` detects corruption, not tampering.
 
 ## License
 
