@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -221,7 +222,7 @@ func TestManagedSettingsWithoutAllowedModesRefuseOnlyGhMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expectError(t, managed.CheckGitHubMode(GitHubGh), `allowed_modes lists "gh"`)
+	expectError(t, managed.CheckGitHubMode(GitHubGh), `only when [github] allowed_modes lists it`)
 	if managed.CheckGitHubMode(GitHubFineGrained) != nil || managed.CheckGitHubMode(GitHubNone) != nil || managed.DefaultGitHubMode() != "" {
 		t.Error("managed settings without allowed_modes refused more than gh mode, or chose a default")
 	}
@@ -249,5 +250,36 @@ func TestAnEmptyManagedGitHubModeListAllowsNoMode(t *testing.T) {
 	}
 	if summary := strings.Join(managed.Summary(), "\n"); !strings.Contains(summary, "allowed GitHub modes: no mode") {
 		t.Errorf("summary %q", summary)
+	}
+}
+
+func TestANewGitHubModeIsRefusedUnderManagedSettingsUntilListed(t *testing.T) {
+	original := GitHubModes
+	GitHubModes = append(slices.Clone(GitHubModes), "future")
+	t.Cleanup(func() { GitHubModes = original })
+	managedFiles(t, "repo_kits = \"ask\"\n")
+	managed, err := LoadManaged()
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectError(t, managed.CheckGitHubMode("future"), `GitHub mode "future" is not allowed by`)
+
+	managedFiles(t, "[github]\nallowed_modes = [\"future\", \"none\"]\n")
+	if managed, err = LoadManaged(); err != nil {
+		t.Fatal(err)
+	}
+	if err := managed.CheckGitHubMode("future"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRepeatedAllowedGitHubModesCountOnce(t *testing.T) {
+	managedFiles(t, "[github]\nallowed_modes = [\"none\", \"none\"]\n")
+	managed, err := LoadManaged()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(managed.AllowedGitHubModes(), []string{GitHubNone}) || managed.DefaultGitHubMode() != GitHubNone {
+		t.Errorf("allowed %v, default %q", managed.AllowedGitHubModes(), managed.DefaultGitHubMode())
 	}
 }

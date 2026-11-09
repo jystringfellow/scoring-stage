@@ -844,13 +844,13 @@ func TestManagedSettingsRefuseGhModeUntilAllowedModesListsIt(t *testing.T) {
 	testutil.WriteFile(t, h.managed, "repo_kits = \"ask\"\n")
 	testutil.WriteFile(t, filepath.Join(h.home, "config.toml"), "[github]\nmode = \"gh\"\n")
 	h.expect(1, "up", h.remote.Checkout, "fix")
-	h.expectStderr(`GitHub mode "gh" is not allowed by ` + h.managed + `: managed settings allow it only when [github] allowed_modes lists "gh"`)
+	h.expectStderr(`GitHub mode "gh" is not allowed by ` + h.managed + `: managed settings allow a mode outside "fine-grained", "none" only when [github] allowed_modes lists it`)
 	if h.anyCall("env create") {
 		t.Error("created a gh-mode sandbox under managed settings")
 	}
 	h.expect(0, "setup")
 	h.expectStderr("stage up will refuse")
-	if !strings.Contains(h.stdout.String(), "allowed GitHub modes: fine-grained, none (gh needs [github] allowed_modes)") {
+	if !strings.Contains(h.stdout.String(), "allowed GitHub modes: fine-grained, none (any mode outside fine-grained and none needs listing in [github] allowed_modes)") {
 		t.Errorf("setup output lacks the allowed GitHub modes:\n%s", h.stdout.String())
 	}
 	testutil.WriteFile(t, h.managed, "[github]\nallowed_modes = [\"gh\", \"none\"]\n")

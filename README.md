@@ -282,9 +282,11 @@ allowed_modes = ["fine-grained", "none"] # GitHub modes users may choose; [] all
 ```
 
 `[github] allowed_modes` limits the modes in `[github] mode`, and `stage setup --github` refuses any other mode
-before saving anything. When managed settings are in place but none sets `allowed_modes`, every mode except `gh` is
-allowed: an administrator has to list `"gh"` to allow it. When exactly one mode is allowed and the user has not
-chosen one, stage uses it without asking. An empty list allows no mode, so `stage up` refuses every sandbox.
+before saving anything. A managed file without `allowed_modes` adds no constraint, so the lists of the files that do
+set it decide. When managed settings are in place but none sets `allowed_modes`, only `fine-grained` and `none` are
+allowed: an administrator has to list any other mode, such as `"gh"`, to allow it. When exactly one mode is
+allowed and the user has not chosen one, stage uses it without asking. An empty list allows no mode, so `stage up`
+refuses every sandbox.
 
 `stage setup` shows the managed settings in effect and warns about a managed file or directory that is not owned by
 root or that others can write. A managed file stage cannot read stops stage rather than being skipped. They only

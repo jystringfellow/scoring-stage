@@ -21,6 +21,7 @@ const (
 var managedKeys = []string{"allowed_agents", "denied_agents", "aws", "github", "repo_kits", "copy_logins", "allow_global_policy"}
 var managedAWSKeys = []string{"allowed_profiles", "denied_profiles"}
 var managedGitHubKeys = []string{"allowed_modes"}
+var managedDefaultGitHubModes = []string{GitHubFineGrained, GitHubNone}
 
 // ManagedPaths lists where an administrator's managed settings may live, most specific first.
 var ManagedPaths = func() []string {
@@ -189,12 +190,16 @@ func (m *Managed) loadGitHub(value any, file string) error {
 	if err != nil {
 		return err
 	}
+	unique := []string{}
 	for _, mode := range modes {
 		if !contains(GitHubModes, mode) {
 			return errorf("%s: allowed_modes has unknown mode %q; modes are %s", where, mode, quotedList(GitHubModes))
 		}
+		if !contains(unique, mode) {
+			unique = append(unique, mode)
+		}
 	}
-	m.gitHubModes = narrow(m.gitHubModes, modes, m.gitHubModesSet)
+	m.gitHubModes = narrow(m.gitHubModes, unique, m.gitHubModesSet)
 	m.gitHubModesSet = true
 	return nil
 }
@@ -292,7 +297,7 @@ func (m *Managed) AllowedGitHubModes() []string {
 	case m.gitHubModesSet:
 		return append([]string{}, m.gitHubModes...)
 	case len(m.Paths) > 0:
-		return slices.DeleteFunc(slices.Clone(GitHubModes), func(mode string) bool { return mode == GitHubGh })
+		return slices.Clone(managedDefaultGitHubModes)
 	}
 	return slices.Clone(GitHubModes)
 }
@@ -312,9 +317,9 @@ func (m *Managed) CheckGitHubMode(mode string) error {
 		return nil
 	case len(allowed) == 0:
 		return m.noGitHubModeAllowed()
-	case !m.gitHubModesSet && mode == GitHubGh:
-		return errorf("GitHub mode %q is not allowed by %s: managed settings allow it only when [github] allowed_modes lists %q (allowed: %s)",
-			mode, m.where(), GitHubGh, quotedList(allowed))
+	case !m.gitHubModesSet:
+		return errorf("GitHub mode %q is not allowed by %s: managed settings allow a mode outside %s only when [github] allowed_modes lists it (allowed: %s)",
+			mode, m.where(), quotedList(managedDefaultGitHubModes), quotedList(allowed))
 	}
 	return errorf("GitHub mode %q is not allowed by %s (allowed: %s)", mode, m.where(), quotedList(allowed))
 }
@@ -331,7 +336,7 @@ func (m *Managed) gitHubModesSummary() string {
 		summary = "no mode (stage up refuses every sandbox)"
 	}
 	if !m.gitHubModesSet {
-		summary += " (gh needs [github] allowed_modes)"
+		summary += " (any mode outside " + strings.Join(managedDefaultGitHubModes, " and ") + " needs listing in [github] allowed_modes)"
 	}
 	return summary
 }
