@@ -565,8 +565,14 @@ func TestOnlyAgentsWithAnInSandboxLoginCanBeCopied(t *testing.T) {
 	if !settings.CopiesLogin("agy") || settings.CopiesLogin("claude") {
 		t.Fatal("copy_logins not honoured")
 	}
-	if got := settings.SavedLogin("agy"); got != filepath.Join(home, "logins", "agy", "antigravity-oauth-token") {
-		t.Errorf("saved login path %s", got)
+	files := LoginFiles("agy")
+	if len(files) != 2 || !files[0].Required || files[1].Required {
+		t.Fatalf("agy login files = %v", files)
+	}
+	for file, want := range map[LoginFile]string{files[0]: "antigravity-oauth-token", files[1]: "onboarding.json"} {
+		if got := settings.SavedLogin("agy", file); got != filepath.Join(home, "logins", "agy", want) {
+			t.Errorf("saved path for %s = %s", file.Path, got)
+		}
 	}
 	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "copy_logins = [\"claude\"]\n")
 	_, err := LoadSettings(home)

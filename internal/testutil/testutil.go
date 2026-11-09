@@ -77,8 +77,8 @@ const fakeSbx = `#!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_SBX_LOG"
 if [ "$1" = exec ]; then
   case " $* " in
-    *" -i "*) cat > "$FAKE_SBX_STATE/box-file" ;;
-    *" cat "*) [ -s "$FAKE_SBX_STATE/box-file" ] || { echo "cat: No such file or directory" >&2; exit 1; }; cat "$FAKE_SBX_STATE/box-file" ;;
+    *" -i "*) for last; do :; done; mkdir -p "$FAKE_SBX_STATE/box"; cat > "$FAKE_SBX_STATE/box/$(basename "$last")" ;;
+    *" cat "*) for last; do :; done; file="$FAKE_SBX_STATE/box/$(basename "$last")"; [ -s "$file" ] || { echo "cat: No such file or directory" >&2; exit 1; }; cat "$file" ;;
   esac
   exit 0
 fi
@@ -142,7 +142,8 @@ func (f *FakeSbx) SetSandboxes(lines string) {
 	WriteFile(f.t, filepath.Join(f.State, "sandboxes"), lines)
 }
 
-// BoxFile is the one file the fake sandbox holds: exec -i writes it and exec cat reads it.
-func (f *FakeSbx) BoxFile() string {
-	return filepath.Join(f.State, "box-file")
+// BoxFile is the fake sandbox's copy of the in-box file with this base name:
+// exec -i writes it and exec cat reads it.
+func (f *FakeSbx) BoxFile(name string) string {
+	return filepath.Join(f.State, "box", name)
 }

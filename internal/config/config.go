@@ -129,9 +129,9 @@ func (s *Settings) PRFooter() string { return s.prFooter }
 
 func (s *Settings) CopiesLogin(agent string) bool { return contains(s.copyLogins, agent) }
 
-// SavedLogin is the host copy of an agent's in-sandbox sign-in.
-func (s *Settings) SavedLogin(agent string) string {
-	return filepath.Join(s.Home, "logins", agent, filepath.Base(LoginFile(agent)))
+// SavedLogin is the host copy of one of an agent's in-sandbox login files.
+func (s *Settings) SavedLogin(agent string, file LoginFile) string {
+	return filepath.Join(s.Home, "logins", agent, filepath.Base(file.Path))
 }
 
 func (s *Settings) CoreKits() string { return kits.Dir(s.Home) }

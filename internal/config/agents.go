@@ -8,7 +8,14 @@ import (
 type agentSpec struct {
 	kit      string
 	bindings map[string]any
-	login    string
+	login    []LoginFile
+}
+
+// LoginFile is a file an agent keeps inside the sandbox for a sign-in the proxy
+// cannot hold on the host. Optional files are carried when the sandbox has them.
+type LoginFile struct {
+	Path     string
+	Required bool
 }
 
 var CopilotHosts = []string{
@@ -21,7 +28,8 @@ var CopilotHosts = []string{
 
 // agents maps the short agent names to Docker's published mixins and the
 // credential bindings each needs. agy signs in to Google inside the sandbox and
-// keeps the token in login, a file stage can copy between sandboxes.
+// keeps the token, and the record that its first-run setup is done, in files
+// stage can copy between sandboxes.
 var agents = map[string]agentSpec{
 	"claude": {
 		kit:      "docker.io/sbx/claude-mixin:2.1.319",
@@ -36,8 +44,11 @@ var agents = map[string]agentSpec{
 		bindings: map[string]any{"copilot": domains("apiKey", CopilotHosts...)},
 	},
 	"agy": {
-		kit:   "docker.io/sbx/antigravity-mixin:1.0.0",
-		login: "/home/agent/.gemini/antigravity-cli/antigravity-oauth-token",
+		kit: "docker.io/sbx/antigravity-mixin:1.0.0",
+		login: []LoginFile{
+			{Path: "/home/agent/.gemini/antigravity-cli/antigravity-oauth-token", Required: true},
+			{Path: "/home/agent/.gemini/antigravity-cli/cache/onboarding.json"},
+		},
 	},
 }
 
@@ -79,16 +90,14 @@ func repositoryOf(source string) string {
 	return head + last
 }
 
-// LoginFile is where an agent keeps a sign-in inside the sandbox, for agents
-// whose sign-in the proxy cannot hold on the host.
-func LoginFile(agent string) string {
+func LoginFiles(agent string) []LoginFile {
 	return agents[agent].login
 }
 
 func copyableAgents() []string {
 	var names []string
 	for _, name := range AgentNames() {
-		if agents[name].login != "" {
+		if len(agents[name].login) > 0 {
 			names = append(names, name)
 		}
 	}
