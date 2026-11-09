@@ -16,16 +16,19 @@ capabilities:
           - hosts: ["**:443", "**:80"]
             methods: [POST]
             paths: ["/**/git-receive-pack"]
-          - hosts: ["api.github.com:443"]
+          - hosts: ["api.github.com:443", "github.com:443", "uploads.github.com:443"]
             methods: [PUT, PATCH, DELETE]
             paths: ["/**"]
           - hosts: ["api.github.com:443"]
             methods: [POST]
             paths:
               - "/repos/**"
+              - "/repositories/**"
+              - "/hub"
               - "/user"
               - "/user/**"
               - "/orgs/**"
+              - "/organizations/**"
               - "/gists"
               - "/gists/**"
               - "/teams/**"

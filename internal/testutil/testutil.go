@@ -85,6 +85,7 @@ fi
 case "$1 $2" in
   "version "*) echo "sbx version ${FAKE_SBX_VERSION:-v0.51.0} deadbeef" ;;
   "policy ls") cat "$FAKE_SBX_POLICY" ;;
+  "secret ls") cat "$FAKE_SBX_SECRETS" ;;
   "ls -q") cat "$FAKE_SBX_SANDBOXES" ;;
   "ls ") printf 'SANDBOX   STATUS\n'; sed 's/$/   running/' "$FAKE_SBX_SANDBOXES" ;;
 esac
@@ -110,10 +111,12 @@ func NewFakeSbx(t *testing.T) *FakeSbx {
 	WriteFile(t, filepath.Join(state, "calls.log"), "")
 	WriteFile(t, filepath.Join(state, "policy.json"), `{"rules": []}`)
 	WriteFile(t, filepath.Join(state, "sandboxes"), "")
+	WriteFile(t, filepath.Join(state, "secrets.json"), `{"secrets": []}`)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("FAKE_SBX_LOG", filepath.Join(state, "calls.log"))
 	t.Setenv("FAKE_SBX_POLICY", filepath.Join(state, "policy.json"))
 	t.Setenv("FAKE_SBX_SANDBOXES", filepath.Join(state, "sandboxes"))
+	t.Setenv("FAKE_SBX_SECRETS", filepath.Join(state, "secrets.json"))
 	t.Setenv("FAKE_SBX_STATE", state)
 	return &FakeSbx{t: t, State: state}
 }
@@ -136,6 +139,10 @@ func (f *FakeSbx) LastCall() string {
 
 func (f *FakeSbx) SetPolicy(json string) {
 	WriteFile(f.t, filepath.Join(f.State, "policy.json"), json)
+}
+
+func (f *FakeSbx) SetSecrets(json string) {
+	WriteFile(f.t, filepath.Join(f.State, "secrets.json"), json)
 }
 
 func (f *FakeSbx) SetSandboxes(lines string) {

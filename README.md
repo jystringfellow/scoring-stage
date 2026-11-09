@@ -61,15 +61,21 @@ clone, so ship anything you want to keep first.
    you pass `--allow-global-policy`. `stage setup --yes` runs `sbx policy reset --force` and
    `sbx policy init deny-all`; that deletes every local policy and stops running sandboxes.
 2. **GitHub token (required).** `stage up` refuses to start until
-   `~/.scoring-stage/secrets/github-readonly-token` (mode 600) holds a fine-grained personal access token
-   (`github_pat_...`). Limit it to the repositories you work on and give it only Contents: read and Metadata: read
-   (add Pull requests: read if agents should read pull requests). A read-only token can still read every
-   repository it is scoped to, so keep that list short. stage refuses gh login tokens (`gho_`), classic tokens
-   (`ghp_`) and GitHub App tokens, because it cannot tell whether they can write. To give sandboxes no GitHub
-   credential at all, set `github = "none"` in `~/.scoring-stage/config.toml`. Either way sandboxes never fall back
-   to the global sbx `github` secret, and the proxy refuses `git push` and GitHub REST writes (PUT, PATCH, DELETE,
-   and POST to repository, user, organization and gist endpoints). GraphQL writes share `POST /graphql` with reads,
-   so only the token's own permissions stop those.
+   `~/.scoring-stage/secrets/github-readonly-token` (mode 600) holds a single fine-grained personal access token
+   (`github_pat_...`). stage checks only that the token is fine-grained; it cannot see the token's permissions, so
+   making it read-only is up to you. Limit it to the repositories you work on and give it only Contents: read and
+   Metadata: read (add Pull requests: read if agents should read pull requests). A read-only token can still read
+   every repository it is scoped to, so keep that list short. gh login tokens (`gho_`), classic tokens (`ghp_`) and
+   GitHub App tokens are refused. To give sandboxes no GitHub credential at all, set `github = "none"` in
+   `~/.scoring-stage/config.toml`.
+
+   `stage up` also refuses while sbx has a global `github` secret (`sbx secret ls --global`), because any sandbox
+   with a `github` binding, including one saved by an earlier sandbox, can fall back to it. Remove it with
+   `sbx secret rm github -f`. Your config and books cannot bind any credential to GitHub's hosts.
+
+   The proxy refuses `git push`, PUT, PATCH and DELETE to GitHub, and POST to the API's repository, user,
+   organization, gist and webhook-subscription endpoints. GraphQL writes share `POST /graphql` with reads, so only
+   the token's own permissions stop those.
 3. **Agent logins.** See [Agent logins](#agent-logins).
 
 ## What a sandbox gets

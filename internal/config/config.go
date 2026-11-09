@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -141,9 +142,10 @@ func (s *Settings) CheckGitHubToken() error {
 	if s.github == GitHubNone {
 		return nil
 	}
+	info, statErr := os.Stat(s.ReadonlyToken())
 	content, err := os.ReadFile(s.ReadonlyToken())
 	token := strings.TrimSpace(string(content))
-	if err != nil || token == "" {
+	if statErr != nil || err != nil || token == "" {
 		return errorf("no GitHub token at %s. Sandboxes need a fine-grained, read-only token there (mode 600), "+
 			"limited to the repositories you work on, with Contents: read and Metadata: read; or set github = %q in %s "+
 			"to give sandboxes no GitHub credential", s.ReadonlyToken(), GitHubNone, filepath.Join(s.Home, "config.toml"))
@@ -151,15 +153,22 @@ func (s *Settings) CheckGitHubToken() error {
 	if problem := GitHubTokenProblem(token); problem != "" {
 		return errorf("%s %s. Replace it with a fine-grained, read-only token (github_pat_...)", s.ReadonlyToken(), problem)
 	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return errorf("%s is readable by other users (mode %o); run chmod 600 on it", s.ReadonlyToken(), info.Mode().Perm())
+	}
 	return nil
 }
+
+var fineGrainedToken = regexp.MustCompile(`^github_pat_[A-Za-z0-9_]+$`)
 
 // GitHubTokenProblem says why a token cannot be trusted to be read-only, or
 // returns "" for a fine-grained personal access token.
 func GitHubTokenProblem(token string) string {
 	switch {
-	case strings.HasPrefix(token, "github_pat_"):
+	case fineGrainedToken.MatchString(token):
 		return ""
+	case strings.HasPrefix(token, "github_pat_"):
+		return "holds more than a single fine-grained token"
 	case strings.HasPrefix(token, "gho_"):
 		return "holds a gh CLI login token (gho_), which carries your full repository access"
 	case strings.HasPrefix(token, "ghp_"):
@@ -544,7 +553,7 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 			secrets["copilot"] = map[string]any{"command": ShellQuote(selection.Gh) + " auth token"}
 		}
 	}
-	if info, err := os.Stat(settings.ReadonlyToken()); settings.github != GitHubNone && err == nil && info.Mode().IsRegular() && info.Size() > 0 {
+	if settings.github != GitHubNone && settings.CheckGitHubToken() == nil {
 		secrets[GitHubService] = map[string]any{"command": "/bin/cat " + ShellQuote(settings.ReadonlyToken())}
 		bindings[GitHubService] = domains("apiKey", "api.github.com", "github.com")
 	}
@@ -700,7 +709,43 @@ func refuseGitHubService(secrets, bindings map[string]any, where string) error {
 	if secret || binding {
 		return errorf("%s: the %s secret and binding come only from the read-only token file", where, GitHubService)
 	}
+	for _, service := range sortedKeys(bindings) {
+		for _, domain := range bindingDomains(bindings[service]) {
+			if ReachesGitHub(domain) {
+				return errorf("%s: binding %s covers %s; GitHub credentials come only from the read-only token file", where, service, domain)
+			}
+		}
+	}
 	return nil
+}
+
+func bindingDomains(binding any) []string {
+	var found []string
+	kinds, _ := binding.(map[string]any)
+	for _, kind := range kinds {
+		table, _ := kind.(map[string]any)
+		list, _ := asList(table["domains"])
+		for _, domain := range list {
+			if text, ok := domain.(string); ok {
+				found = append(found, text)
+			}
+		}
+	}
+	return found
+}
+
+// ReachesGitHub reports whether a binding domain would send a credential to
+// github.com or its API and upload hosts, directly or through a wildcard.
+func ReachesGitHub(domain string) bool {
+	host := strings.ToLower(domain)
+	if index := strings.LastIndex(host, ":"); index >= 0 {
+		host = host[:index]
+	}
+	switch host {
+	case "github.com", "api.github.com", "uploads.github.com", "codeload.github.com":
+		return true
+	}
+	return strings.Contains(host, "*") && (strings.HasSuffix(host, "github.com") || strings.HasSuffix(host, "*"))
 }
 
 func bookSecret(spec any, bookPath, owner string) (map[string]any, error) {

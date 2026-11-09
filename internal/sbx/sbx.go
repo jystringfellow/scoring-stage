@@ -167,3 +167,29 @@ func Sandboxes() (map[string]bool, error) {
 	}
 	return names, nil
 }
+
+// GlobalSecrets lists the services that have a global sbx secret. Any binding
+// for such a service, saved by an earlier sandbox or not, can fall back to it.
+func GlobalSecrets() ([]string, error) {
+	text, err := Output("secret", "ls", "--global", "--json")
+	if err != nil {
+		return nil, err
+	}
+	var listing struct {
+		Secrets []struct {
+			Scope string `json:"scope"`
+			Type  string `json:"type"`
+			Name  string `json:"name"`
+		} `json:"secrets"`
+	}
+	if err := json.Unmarshal([]byte(text), &listing); err != nil {
+		return nil, &Error{fmt.Sprintf("cannot read sbx secret ls --json: %v", err)}
+	}
+	var services []string
+	for _, secret := range listing.Secrets {
+		if secret.Scope == "global" && secret.Type == "service" {
+			services = append(services, secret.Name)
+		}
+	}
+	return services, nil
+}

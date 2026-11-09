@@ -381,10 +381,10 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 	case tokenErr != nil:
 		a.warn("%s", tokenErr)
 	default:
-		if err := os.Chmod(settings.ReadonlyToken(), 0o600); err != nil {
-			return 0, err
-		}
-		a.say("github read-only token: %s (fine-grained; keep it limited to your repositories, Contents and Metadata: read)", settings.ReadonlyToken())
+		a.say("github token: %s is fine-grained. stage cannot see its permissions: keep it read-only (Contents and Metadata: read) and limited to your repositories", settings.ReadonlyToken())
+	}
+	if err := checkNoGlobalGitHubSecret(); err != nil {
+		a.warn("%s", err)
 	}
 	composition, err := config.Compose(settings, config.Selection{Gh: gh})
 	if err != nil {
@@ -440,6 +440,9 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 		return 0, err
 	}
 	if err := settings.CheckGitHubToken(); err != nil {
+		return 0, err
+	}
+	if err := checkNoGlobalGitHubSecret(); err != nil {
 		return 0, err
 	}
 
@@ -541,6 +544,19 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	}
 	a.say("kits: %s", strings.Join(handles, ", "))
 	return 0, nil
+}
+
+func checkNoGlobalGitHubSecret() error {
+	services, err := sbx.GlobalSecrets()
+	if err != nil {
+		return err
+	}
+	if slices.Contains(services, config.GitHubService) {
+		return errorf("sbx has a global %s secret, usually your full gh token; any sandbox with a %s binding, including one saved "+
+			"by an earlier sandbox, can fall back to it. Remove it with `sbx secret rm %s -f`; sandboxes get GitHub access "+
+			"only from %s", config.GitHubService, config.GitHubService, config.GitHubService, "the read-only token file")
+	}
+	return nil
 }
 
 func writeTask(task Task, directory string) error {
