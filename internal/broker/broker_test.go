@@ -241,15 +241,23 @@ func (s *server) fetch(method, path, authorization string) (int, map[string]any)
 	return recorder.Code, body
 }
 
-func TestLongLivedKeysAreNotServed(t *testing.T) {
-	for _, stdout := range []string{
-		`{"Version": 1, "AccessKeyId": "AKIAUSER", "SecretAccessKey": "s"}`,
-		`{"Version": 1, "AccessKeyId": "AKIAUSER", "SecretAccessKey": "s", "SessionToken": "t"}`,
-		`{"Version": 1, "AccessKeyId": "ASIA", "SecretAccessKey": "s", "Expiration": "2026-11-06T13:00:00+00:00"}`,
+func TestMain(m *testing.M) {
+	now = func() time.Time { return time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC) }
+	os.Exit(m.Run())
+}
+
+func TestOnlyTemporaryCredentialsThatExpireSoonAreServed(t *testing.T) {
+	for stdout, fragment := range map[string]string{
+		`{"Version": 1, "AccessKeyId": "AKIAUSER", "SecretAccessKey": "s"}`:                                                                 "long-lived keys are not served",
+		`{"Version": 1, "AccessKeyId": "AKIAUSER", "SecretAccessKey": "s", "SessionToken": "t", "Expiration": "2026-11-06T13:00:00+00:00"}`: "long-lived keys are not served",
+		`{"Version": 1, "AccessKeyId": "ASIA", "SecretAccessKey": "s", "Expiration": "2026-11-06T13:00:00+00:00"}`:                          "long-lived keys are not served",
+		`{"Version": 1, "AccessKeyId": "ASIA", "SecretAccessKey": "s", "SessionToken": "t", "Expiration": "tomorrow"}`:                      "unreadable Expiration",
+		`{"Version": 1, "AccessKeyId": "ASIA", "SecretAccessKey": "s", "SessionToken": "t", "Expiration": "2026-11-06T11:00:00+00:00"}`:     "have expired",
+		`{"Version": 1, "AccessKeyId": "ASIA", "SecretAccessKey": "s", "SessionToken": "t", "Expiration": "2026-11-07T12:00:00+00:00"}`:     "stay valid for 24h0m0s",
 	} {
 		_, err := NewCredentialSource((&fakeAWS{result: Result{Stdout: stdout}}).run).CredentialProcess("dev", granted)
-		if status(t, err) != 403 || !strings.Contains(err.Error(), "long-lived keys are not served") {
-			t.Errorf("%s: %v", stdout, err)
+		if status(t, err) != 403 || !strings.Contains(err.Error(), fragment) {
+			t.Errorf("%s: %v, want %q", stdout, err, fragment)
 		}
 	}
 }

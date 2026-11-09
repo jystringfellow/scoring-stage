@@ -583,3 +583,9 @@ func TestOnlyAgentsWithAnInSandboxLoginCanBeCopied(t *testing.T) {
 	_, err = LoadRepoConfig(repoDir)
 	expectError(t, err, "a repository cannot set copy_logins")
 }
+
+func TestTheBrokerBindingCoversOnlyTheBrokerPort(t *testing.T) {
+	if got := brokerBinding(); !reflect.DeepEqual(got, map[string]any{"apiKey": map[string]any{"domains": []any{"localhost:9911"}}}) {
+		t.Fatalf("broker binding %v", got)
+	}
+}
