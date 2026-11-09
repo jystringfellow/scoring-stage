@@ -241,7 +241,11 @@ func (s *Settings) gitHubCredential(selection Selection, secrets, bindings map[s
 	default:
 		return
 	}
-	bindings[GitHubService] = domains("apiKey", "api.github.com", "github.com")
+	bindings[GitHubService] = gitHubBinding()
+}
+
+func gitHubBinding() map[string]any {
+	return domains("apiKey", "api.github.com", "github.com")
 }
 
 func SaveGitHubMode(home, mode string) error {

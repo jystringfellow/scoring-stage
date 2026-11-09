@@ -440,6 +440,7 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 	if err := checkNoGlobalGitHubSecret(); err != nil {
 		a.warn("%s", err)
 	}
+	a.auditBindings(settings.StageBindings())
 	composition, err := config.Compose(settings, config.Selection{Gh: gh})
 	if err != nil {
 		return 0, err
@@ -592,6 +593,9 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 		if err := sbx.Run("env", "plan", directory); err != nil {
 			return 0, err
 		}
+		expected := settings.StageBindings()
+		config.AddStageBindings(expected, composition.Bindings, "this sandbox")
+		a.auditBindings(expected)
 		a.say("plan only; env file %s", envPath)
 		return 0, nil
 	}

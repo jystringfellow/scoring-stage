@@ -24,6 +24,7 @@ type harness struct {
 	stdout, stderr bytes.Buffer
 	brokerStarts   []string
 	managed        string
+	credentials    string
 	hostProfiles   []string
 	gh             string
 	github         *fakeGitHub
@@ -39,6 +40,9 @@ func setup(t *testing.T) *harness {
 	given := filepath.Join(t.TempDir(), "stage-home")
 	h := &harness{t: t, home: config.Resolve(given)}
 	t.Setenv("STAGE_HOME", given)
+	sbxConfig := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", sbxConfig)
+	h.credentials = filepath.Join(sbxConfig, "sbx", "credentials.yaml")
 	h.sbx = testutil.NewFakeSbx(t)
 	h.remote = testutil.GitHubRemote(t)
 	h.managed = filepath.Join(t.TempDir(), "managed.toml")

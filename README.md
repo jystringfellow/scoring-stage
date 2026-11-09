@@ -222,6 +222,15 @@ clone, so ship anything you want to keep first.
    app and webhook-subscription endpoints (the list is in [`kits/stage/stage.yaml`](kits/stage/stage.yaml)).
    GraphQL writes share `POST /graphql` with reads, so only the token's own permissions stop those.
 3. **Agent logins.** See [Agent logins](#agent-logins).
+4. **Global credential bindings.** sbx merges every environment's bindings into the machine-wide
+   `~/.config/sbx/credentials.yaml` (`$XDG_CONFIG_HOME/sbx/credentials.yaml` when that is set) and keeps them after
+   the sandbox is gone. A binding authorises a service by name: any kit that declares `credential@1` for a bound
+   service can have its secret injected on any domain the kit names, even under a plain `sbx run`. `stage setup`
+   (and `stage up --plan`) reads that file, never writes it, and lists each bound service as `expected` (stage binds
+   it for your agents, `[github]` mode, the AWS broker or your config and books), `stale` (a stage service with
+   domains stage no longer binds, such as `localhost` beside `localhost:9911`) or `other`, with what to do about it.
+   sbx has no command that withdraws one binding, so edit the file; never pass `--prune-bindings` to `sbx env rm`
+   for a stage sandbox, because it deletes the whole shared service entry machine-wide.
 
 ## What a sandbox gets
 
