@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +24,7 @@ type harness struct {
 	brokerStarts   []string
 	managed        string
 	hostProfiles   []string
+	gh             string
 }
 
 func setup(t *testing.T) *harness {
@@ -36,8 +38,16 @@ func setup(t *testing.T) *harness {
 	original := config.ManagedPaths
 	config.ManagedPaths = func() []string { return []string{h.managed} }
 	t.Cleanup(func() { config.ManagedPaths = original })
-	writeToken(t, filepath.Join(given, "secrets", "github-readonly-token"), "github_pat_readonly\n")
+	writeGitHubSetup(t, given, "")
 	return h
+}
+
+const fineGrainedMode = "[github]\nmode = \"fine-grained\"\n"
+
+func writeGitHubSetup(t *testing.T, home, config string) {
+	t.Helper()
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), config+fineGrainedMode)
+	writeToken(t, filepath.Join(home, "secrets", "github", "acme.token"), "github_pat_readonly\n")
 }
 
 func writeToken(t *testing.T, path, token string) {
@@ -54,7 +64,7 @@ func (h *harness) stage(args ...string) int {
 	app := &App{
 		Stdout:      &h.stdout,
 		Stderr:      &h.stderr,
-		FindGh:      func() string { return "" },
+		FindGh:      func() string { return h.gh },
 		BrokerPID:   func(string) int { return 0 },
 		BrokerStart: func(home string) error { h.brokerStarts = append(h.brokerStarts, home); return nil },
 		IsTerminal:  func() bool { return false },
@@ -411,7 +421,7 @@ func TestTheRecordedRepoDirIsThePathSbxIsGivenEvenThroughASymlinkedHome(t *testi
 		t.Fatal(err)
 	}
 	t.Setenv("STAGE_HOME", filepath.Join(link, "home"))
-	writeToken(t, filepath.Join(real, "home", "secrets", "github-readonly-token"), "github_pat_readonly\n")
+	writeGitHubSetup(t, filepath.Join(real, "home"), "")
 	h.expect(0, "up", h.remote.Checkout, "fix")
 	var task Task
 	json.Unmarshal([]byte(testutil.ReadFile(t, filepath.Join(real, "home", "tasks", "fix", "task.json"))), &task)
@@ -461,7 +471,7 @@ func TestUpRejectsAnUnknownAgent(t *testing.T) {
 func TestSetupSavesAgents(t *testing.T) {
 	h := setup(t)
 	h.expect(0, "setup", "--agent", "claude", "--agent", "codex")
-	if got := testutil.ReadFile(t, filepath.Join(h.home, "config.toml")); got != "agents = [\"claude\", \"codex\"]\n" {
+	if got := testutil.ReadFile(t, filepath.Join(h.home, "config.toml")); got != "agents = [\"claude\", \"codex\"]\n"+fineGrainedMode {
 		t.Fatalf("config.toml = %q", got)
 	}
 	if !strings.Contains(h.stdout.String(), "stage: agents: claude, codex") {
@@ -474,7 +484,7 @@ func TestSetupSavesAgents(t *testing.T) {
 
 func TestCopiedLoginsAreSavedOnTheHostAndCopiedIntoNewSandboxes(t *testing.T) {
 	h := setup(t)
-	testutil.WriteFile(t, filepath.Join(h.home, "config.toml"), "copy_logins = [\"agy\"]\n")
+	writeGitHubSetup(t, h.home, "copy_logins = [\"agy\"]\n")
 	saved := filepath.Join(h.home, "logins", "agy", "antigravity-oauth-token")
 	token := h.sbx.BoxFile("antigravity-oauth-token")
 
@@ -518,7 +528,7 @@ func TestCopiedLoginsAreSavedOnTheHostAndCopiedIntoNewSandboxes(t *testing.T) {
 
 func TestAgysCompletedSetupTravelsWithItsLoginWhenThereIsOne(t *testing.T) {
 	h := setup(t)
-	testutil.WriteFile(t, filepath.Join(h.home, "config.toml"), "copy_logins = [\"agy\"]\n")
+	writeGitHubSetup(t, h.home, "copy_logins = [\"agy\"]\n")
 	savedSetup := filepath.Join(h.home, "logins", "agy", "onboarding.json")
 	setupFile := h.sbx.BoxFile("onboarding.json")
 
@@ -727,35 +737,123 @@ func TestShipRefusesAScratchCloneWhoseConfigIncludesOtherFiles(t *testing.T) {
 	h.expectStderr("includes other files (include.path)")
 }
 
-func TestUpRefusesToStartWithoutAReadOnlyGitHubToken(t *testing.T) {
+func TestUpRefusesUntilAGitHubModeIsChosen(t *testing.T) {
 	h := setup(t)
-	if err := os.Remove(filepath.Join(h.home, "secrets", "github-readonly-token")); err != nil {
+	testutil.WriteFile(t, filepath.Join(h.home, "config.toml"), "")
+	h.expect(1, "up", h.remote.Checkout, "fix")
+	h.expectStderr("choose how sandboxes reach GitHub: run `stage setup --github MODE`")
+	if h.anyCall("env create") {
+		t.Error("created a sandbox before a GitHub mode was chosen")
+	}
+	h.expect(0, "setup", "--github", "none")
+	h.expect(0, "up", h.remote.Checkout, "fix")
+}
+
+func TestSetupSavesTheGitHubModeOnceAndReportsAMissingChoice(t *testing.T) {
+	h := setup(t)
+	testutil.WriteFile(t, filepath.Join(h.home, "config.toml"), "agents = [\"codex\"]")
+	h.expect(0, "setup")
+	h.expectStderr("choose how sandboxes reach GitHub")
+	h.expect(0, "setup", "--github", "fine-grained")
+	if got := testutil.ReadFile(t, filepath.Join(h.home, "config.toml")); got != "agents = [\"codex\"]\n\n"+fineGrainedMode {
+		t.Fatalf("config.toml = %q", got)
+	}
+	if !strings.Contains(h.stdout.String(), "github token for acme: fine-grained") {
+		t.Errorf("setup did not report the acme token: %s", h.stdout.String())
+	}
+	h.expect(1, "setup", "--github", "gh")
+	h.expectStderr("already sets github; edit it there")
+	h.expect(1, "setup", "--github", "app")
+	h.expectStderr("--github must be one of fine-grained, gh, none")
+}
+
+func TestUpGivesTheSandboxOnlyTheTokenForItsRepositorysOwner(t *testing.T) {
+	h := setup(t)
+	writeToken(t, filepath.Join(h.home, "secrets", "github", "globex.token"), "github_pat_globex\n")
+	h.expect(0, "up", h.remote.Checkout, "fix")
+	env := testutil.ReadFile(t, filepath.Join(h.task("fix"), "sbxenv.yaml"))
+	if !strings.Contains(env, filepath.Join(h.home, "secrets", "github", "acme.token")) || strings.Contains(env, "globex") {
+		t.Errorf("env does not hold exactly acme's token:\n%s", env)
+	}
+}
+
+func TestUpRefusesAnOwnerWithoutAToken(t *testing.T) {
+	h := setup(t)
+	if err := os.Rename(filepath.Join(h.home, "secrets", "github", "acme.token"), filepath.Join(h.home, "secrets", "github", "globex.token")); err != nil {
 		t.Fatal(err)
 	}
 	h.expect(1, "up", h.remote.Checkout, "fix")
-	h.expectStderr("no GitHub token at " + filepath.Join(h.home, "secrets", "github-readonly-token"))
+	h.expectStderr("no GitHub token for acme at " + filepath.Join(h.home, "secrets", "github", "acme.token"))
+	h.expectStderr("A fine-grained token covers one owner")
 	if h.anyCall("env create") {
 		t.Error("created a sandbox without a GitHub token")
 	}
 }
 
+func TestUpPointsTheOldSingleTokenFileAtItsNewPlace(t *testing.T) {
+	h := setup(t)
+	if err := os.Remove(filepath.Join(h.home, "secrets", "github", "acme.token")); err != nil {
+		t.Fatal(err)
+	}
+	writeToken(t, filepath.Join(h.home, "secrets", "github-readonly-token"), "github_pat_readonly\n")
+	h.expect(1, "up", h.remote.Checkout, "fix")
+	h.expectStderr("If " + filepath.Join(h.home, "secrets", "github-readonly-token") + " is a token for acme, move it there")
+	h.expect(0, "setup")
+	h.expectStderr("github-readonly-token is no longer used")
+}
+
 func TestUpRefusesAGitHubTokenThatCanWrite(t *testing.T) {
 	h := setup(t)
-	writeToken(t, filepath.Join(h.home, "secrets", "github-readonly-token"), "gho_fromghauth\n")
+	writeToken(t, filepath.Join(h.home, "secrets", "github", "acme.token"), "gho_fromghauth\n")
 	h.expect(1, "up", h.remote.Checkout, "fix")
 	h.expectStderr("gh CLI login token (gho_)")
 }
 
 func TestUpWithGitHubNoneGivesTheSandboxNoGitHubCredential(t *testing.T) {
 	h := setup(t)
-	if err := os.Remove(filepath.Join(h.home, "secrets", "github-readonly-token")); err != nil {
-		t.Fatal(err)
-	}
-	testutil.WriteFile(t, filepath.Join(h.home, "config.toml"), "github = \"none\"\n")
+	testutil.WriteFile(t, filepath.Join(h.home, "config.toml"), "[github]\nmode = \"none\"\n")
 	h.expect(0, "up", h.remote.Checkout, "fix")
 	if env := testutil.ReadFile(t, filepath.Join(h.task("fix"), "sbxenv.yaml")); strings.Contains(env, "github") {
 		t.Errorf("env mentions github:\n%s", env)
 	}
+}
+
+func TestUpInGhModeUsesAPerSandboxGhSecretAndWarnsThatItCanWrite(t *testing.T) {
+	h := setup(t)
+	gh := fakeGh(t, 0)
+	h.gh = gh
+	testutil.WriteFile(t, filepath.Join(h.home, "config.toml"), "[github]\nmode = \"gh\"\n")
+	h.expect(0, "up", h.remote.Checkout, "fix")
+	h.expectStderr("GraphQL writes (gh pr create, gh pr merge, gh issue comment) go through as you")
+	env := testutil.ReadFile(t, filepath.Join(h.task("fix"), "sbxenv.yaml"))
+	if !strings.Contains(env, gh+" auth token") || !strings.Contains(env, "api.github.com") {
+		t.Errorf("env has no gh secret and binding:\n%s", env)
+	}
+	h.expect(0, "setup")
+	h.expectStderr("GraphQL writes")
+}
+
+func TestUpInGhModeRefusesWithoutAGhLogin(t *testing.T) {
+	h := setup(t)
+	testutil.WriteFile(t, filepath.Join(h.home, "config.toml"), "[github]\nmode = \"gh\"\n")
+	h.expect(1, "up", h.remote.Checkout, "fix")
+	h.expectStderr("needs the gh CLI on the host")
+	h.gh = fakeGh(t, 1)
+	h.expect(1, "up", h.remote.Checkout, "fix")
+	h.expectStderr("`gh auth token` fails")
+	if h.anyCall("env create") {
+		t.Error("created a sandbox without a gh login")
+	}
+}
+
+func fakeGh(t *testing.T, exitCode int) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "gh")
+	testutil.WriteFile(t, path, fmt.Sprintf("#!/bin/sh\necho gho_fake\nexit %d\n", exitCode))
+	if err := os.Chmod(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func TestUpRefusesWhileSbxHasAGlobalGitHubSecret(t *testing.T) {
