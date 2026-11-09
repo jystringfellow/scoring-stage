@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -19,6 +20,10 @@ const (
 	DefaultBase      = "docker.io/sbx/shell:1.1.0"
 	DefaultAWSRegion = "us-east-1"
 	BrokerService    = "stage-broker"
+	GitHubService    = "github"
+
+	GitHubReadonlyToken = "readonly-token"
+	GitHubNone          = "none"
 )
 
 func brokerBinding() map[string]any {
@@ -34,7 +39,7 @@ func domains(kind string, hosts ...string) map[string]any {
 }
 
 var (
-	userKeys      = []string{"books", "base", "agents", "copy_logins", "kits", "aws", "secrets", "bindings", "ship"}
+	userKeys      = []string{"books", "base", "agents", "copy_logins", "github", "kits", "aws", "secrets", "bindings", "ship"}
 	bookKeys      = []string{"name", "description", "base", "agents", "kits", "aws", "secrets", "bindings", "repos"}
 	repoMatchKeys = []string{"match", "agents", "kits", "aws"}
 	awsKeys       = []string{"profiles", "region", "default_profile"}
@@ -119,6 +124,7 @@ type Settings struct {
 	bindings   map[string]any
 	prFooter   string
 	copyLogins []string
+	github     string
 }
 
 func (s *Settings) ReadonlyToken() string {
@@ -126,6 +132,53 @@ func (s *Settings) ReadonlyToken() string {
 }
 
 func (s *Settings) PRFooter() string { return s.prFooter }
+
+// GitHubAccess is how sandboxes reach the GitHub API: GitHubReadonlyToken or GitHubNone.
+func (s *Settings) GitHubAccess() string { return s.github }
+
+// CheckGitHubToken refuses to go on unless sandboxes either have no GitHub
+// credential or have one that is a fine-grained token.
+func (s *Settings) CheckGitHubToken() error {
+	if s.github == GitHubNone {
+		return nil
+	}
+	info, statErr := os.Stat(s.ReadonlyToken())
+	content, err := os.ReadFile(s.ReadonlyToken())
+	token := strings.TrimSpace(string(content))
+	if statErr != nil || err != nil || token == "" {
+		return errorf("no GitHub token at %s. Sandboxes need a fine-grained, read-only token there (mode 600), "+
+			"limited to the repositories you work on, with Contents: read and Metadata: read; or set github = %q in %s "+
+			"to give sandboxes no GitHub credential", s.ReadonlyToken(), GitHubNone, filepath.Join(s.Home, "config.toml"))
+	}
+	if problem := GitHubTokenProblem(token); problem != "" {
+		return errorf("%s %s. Replace it with a fine-grained, read-only token (github_pat_...)", s.ReadonlyToken(), problem)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return errorf("%s is readable by other users (mode %o); run chmod 600 on it", s.ReadonlyToken(), info.Mode().Perm())
+	}
+	return nil
+}
+
+var fineGrainedToken = regexp.MustCompile(`^github_pat_[A-Za-z0-9_]+$`)
+
+// GitHubTokenProblem says why a token cannot be trusted to be read-only, or
+// returns "" for a fine-grained personal access token.
+func GitHubTokenProblem(token string) string {
+	switch {
+	case fineGrainedToken.MatchString(token):
+		return ""
+	case strings.HasPrefix(token, "github_pat_"):
+		return "holds more than a single fine-grained token"
+	case strings.HasPrefix(token, "gho_"):
+		return "holds a gh CLI login token (gho_), which carries your full repository access"
+	case strings.HasPrefix(token, "ghp_"):
+		return "holds a classic personal access token (ghp_); a classic token cannot read private repositories without write access"
+	case strings.HasPrefix(token, "ghu_"), strings.HasPrefix(token, "ghs_"), strings.HasPrefix(token, "ghr_"):
+		return "holds a GitHub App token, whose permissions stage cannot check"
+	default:
+		return "does not hold a GitHub fine-grained token"
+	}
+}
 
 func (s *Settings) CopiesLogin(agent string) bool { return contains(s.copyLogins, agent) }
 
@@ -185,6 +238,17 @@ func LoadSettings(home string) (*Settings, error) {
 			}
 			settings.prFooter = text
 		}
+	}
+	settings.github = GitHubReadonlyToken
+	if value, present := data["github"]; present {
+		text, ok := value.(string)
+		if !ok || (text != GitHubReadonlyToken && text != GitHubNone) {
+			return nil, errorf("%s: github must be %q or %q", path, GitHubReadonlyToken, GitHubNone)
+		}
+		settings.github = text
+	}
+	if err := refuseGitHubService(settings.secrets, settings.bindings, path); err != nil {
+		return nil, err
 	}
 	if settings.copyLogins, err = optionalStrings(data, "copy_logins", path); err != nil {
 		return nil, err
@@ -249,6 +313,9 @@ func LoadBook(path string) (*Book, error) {
 	if book.bindings, err = optionalTable(data, "bindings", manifest); err != nil {
 		return nil, err
 	}
+	if err := refuseGitHubService(book.secrets, book.bindings, manifest); err != nil {
+		return nil, err
+	}
 	repos, ok := asList(data["repos"])
 	if data["repos"] != nil && !ok {
 		return nil, errorf("%s: repos must be a list of tables", manifest)
@@ -309,7 +376,7 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 	var agentKits, bookKits, repoKits, userKits []Kit
 	var profiles, agentNames []string
 	secrets := map[string]any{}
-	bindings := map[string]any{"github": domains("apiKey", "api.github.com", "github.com")}
+	bindings := map[string]any{}
 	secretOwner := map[string]string{}
 	bindingOwner := map[string]string{}
 
@@ -486,10 +553,9 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 			secrets["copilot"] = map[string]any{"command": ShellQuote(selection.Gh) + " auth token"}
 		}
 	}
-	if info, err := os.Stat(settings.ReadonlyToken()); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
-		if _, set := secrets["github"]; !set {
-			secrets["github"] = map[string]any{"command": "/bin/cat " + ShellQuote(settings.ReadonlyToken())}
-		}
+	if settings.github != GitHubNone && settings.CheckGitHubToken() == nil {
+		secrets[GitHubService] = map[string]any{"command": "/bin/cat " + ShellQuote(settings.ReadonlyToken())}
+		bindings[GitHubService] = domains("apiKey", "api.github.com", "github.com")
 	}
 	for service, spec := range settings.secrets {
 		secrets[service] = spec
@@ -633,6 +699,70 @@ func parseKit(entry any, baseDir, owner string) (Kit, error) {
 		kit.Source = Resolve(ExpandUser(kit.Source))
 	}
 	return kit, nil
+}
+
+// refuseGitHubService keeps the GitHub credential to the read-only token file,
+// which stage can check, so no config can hand sandboxes a token that writes.
+func refuseGitHubService(secrets, bindings map[string]any, where string) error {
+	_, secret := secrets[GitHubService]
+	_, binding := bindings[GitHubService]
+	if secret || binding {
+		return errorf("%s: the %s secret and binding come only from the read-only token file", where, GitHubService)
+	}
+	for _, service := range sortedKeys(bindings) {
+		domains, err := bindingDomains(bindings[service])
+		if err != nil {
+			return errorf("%s: binding %s: %v", where, service, err)
+		}
+		for _, domain := range domains {
+			if ReachesGitHub(domain) {
+				return errorf("%s: binding %s covers %s; GitHub credentials come only from the read-only token file", where, service, domain)
+			}
+		}
+	}
+	return nil
+}
+
+func bindingDomains(binding any) ([]string, error) {
+	kinds, ok := binding.(map[string]any)
+	if !ok || len(kinds) == 0 {
+		return nil, errorf("a binding is a table such as apiKey = { domains = [...] }")
+	}
+	var found []string
+	for kind, value := range kinds {
+		table, ok := value.(map[string]any)
+		list, listOK := asList(table["domains"])
+		if !ok || !listOK || len(unknownKeys(table, []string{"domains"})) > 0 {
+			return nil, errorf("%s must be { domains = [...] }", kind)
+		}
+		for _, domain := range list {
+			text, ok := domain.(string)
+			if !ok {
+				return nil, errorf("%s domains must be strings", kind)
+			}
+			found = append(found, text)
+		}
+	}
+	return found, nil
+}
+
+// ReachesGitHub reports whether a binding domain would send a credential to a
+// GitHub host other than Copilot's, directly or through a wildcard.
+func ReachesGitHub(domain string) bool {
+	host := strings.ToLower(strings.TrimSpace(domain))
+	if index := strings.LastIndex(host, ":"); index >= 0 {
+		host = host[:index]
+	}
+	host = strings.TrimSuffix(host, ".")
+	if host == "copilot.github.com" {
+		return false
+	}
+	for _, apex := range []string{"github.com", "github.ai", "githubusercontent.com"} {
+		if host == apex || strings.HasSuffix(host, "."+apex) {
+			return true
+		}
+	}
+	return strings.Contains(host, "*") && (strings.HasSuffix(host, "github.com") || strings.HasSuffix(host, "github.ai") || strings.HasSuffix(host, "*"))
 }
 
 func bookSecret(spec any, bookPath, owner string) (map[string]any, error) {

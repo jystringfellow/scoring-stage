@@ -11,7 +11,7 @@ const RepoConfigPath = ".scoring-stage/config.toml"
 
 var (
 	repoKeys     = []string{"agents", "books", "kits"}
-	hostOnlyKeys = []string{"aws", "base", "bindings", "copy_logins", "secrets", "ship"}
+	hostOnlyKeys = []string{"aws", "base", "bindings", "copy_logins", "github", "secrets", "ship"}
 )
 
 // RepoConfig is what a repository asks for. A repository is not trusted with
