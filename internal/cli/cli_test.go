@@ -848,6 +848,9 @@ func TestManagedSettingsRefuseGhMode(t *testing.T) {
 	if h.anyCall("env create") {
 		t.Error("created a gh-mode sandbox under managed settings")
 	}
+	h.expect(0, "setup")
+	h.expectStderr("is refused while managed settings are in place")
+	h.expectStderr("stage up will refuse")
 }
 
 func TestSetupRejectsABadGitHubModeBeforeSavingAgents(t *testing.T) {

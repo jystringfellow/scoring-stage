@@ -407,7 +407,7 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 	} else {
 		a.warn("gh is missing or not logged in; Copilot will be unauthenticated")
 	}
-	if err := a.reportGitHub(settings, ghLoggedIn); err != nil {
+	if err := a.reportGitHub(settings, gh, ghLoggedIn); err != nil {
 		return 0, err
 	}
 	if err := checkNoGlobalGitHubSecret(); err != nil {
@@ -640,14 +640,16 @@ func (a *App) checkGitHubAccess(settings *config.Settings, owner, gh string) err
 	return nil
 }
 
-func (a *App) reportGitHub(settings *config.Settings, ghLoggedIn bool) error {
+func (a *App) reportGitHub(settings *config.Settings, gh string, ghLoggedIn bool) error {
 	switch settings.GitHubMode() {
 	case "":
 		a.warn("%s", settings.CheckGitHub("", ""))
 	case config.GitHubNone:
 		a.say("github: none (sandboxes get no GitHub credential)")
 	case config.GitHubGh:
-		if !ghLoggedIn {
+		if err := settings.CheckGitHub("", gh); err != nil {
+			a.warn("%s; stage up will refuse", err)
+		} else if !ghLoggedIn {
 			a.warn("[github] mode = %q, but gh is missing or not logged in; stage up will refuse", config.GitHubGh)
 		}
 		a.warn("%s", ghModeWarning)
