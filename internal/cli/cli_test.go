@@ -535,3 +535,34 @@ func TestTheTaskRecordsItsAgents(t *testing.T) {
 		t.Fatalf("agents = %v", task.Agents)
 	}
 }
+
+func (h *harness) commitToMain(files map[string]string) {
+	h.t.Helper()
+	for path, content := range files {
+		testutil.WriteFile(h.t, filepath.Join(h.remote.Checkout, path), content)
+	}
+	testutil.RunGit(h.t, h.remote.Checkout, "add", ".")
+	testutil.RunGit(h.t, h.remote.Checkout, "commit", "-q", "-m", "Change the repository")
+	testutil.RunGit(h.t, h.remote.Checkout, "push", "-q", "https://github.com/acme/api.git", "HEAD:main")
+}
+
+func TestARepositoryKitNeedsApprovalUntilItChanges(t *testing.T) {
+	h := setup(t)
+	h.commitToMain(map[string]string{
+		".scoring-stage/config.toml":         "kits = [\"./.scoring-stage/kits/rules\"]\n",
+		".scoring-stage/kits/rules/kit.yaml": "allow: [example.com]\n",
+	})
+	h.expect(1, "up", h.remote.Checkout, "one")
+	h.expectStderr("adds kits you have not approved")
+	h.expectStderr("repository kits not approved")
+	if h.anyCall("env create") {
+		t.Fatal("created a sandbox with an unapproved repository kit")
+	}
+
+	h.expect(0, "up", h.remote.Checkout, "two", "--trust-repo-kits")
+	h.expect(0, "up", h.remote.Checkout, "three")
+
+	h.commitToMain(map[string]string{".scoring-stage/kits/rules/kit.yaml": "allow: [\"**\"]\n"})
+	h.expect(1, "up", h.remote.Checkout, "four")
+	h.expectStderr("adds kits you have not approved")
+}

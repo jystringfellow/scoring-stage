@@ -76,6 +76,7 @@ type Composition struct {
 	Secrets           map[string]any
 	Bindings          map[string]any
 	Books             []string
+	RepoKits          []Kit
 }
 
 func (c *Composition) AllKits() []Kit {
@@ -418,11 +419,25 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 		}
 	}
 	if repo := selection.Repo; repo != nil {
+		for _, entry := range repo.agents {
+			if name, ok := entry.(string); !ok || !looksLikeName(name) {
+				return nil, errorf("%s: agents are named (%s), not given as kits; a repository's own kits go in kits", repo.Path, strings.Join(AgentNames(), ", "))
+			}
+		}
 		if err := addAgents(repo.agents, repo.dir, repo.Path); err != nil {
 			return nil, err
 		}
 		if err := addKits(&repoKits, repo.kits, repo.dir, repo.Path); err != nil {
 			return nil, err
+		}
+		root := Resolve(repo.dir)
+		for _, kit := range repoKits {
+			if !kit.IsLocal() {
+				continue
+			}
+			if relative, err := filepath.Rel(root, kit.Source); err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, "../") {
+				return nil, errorf("%s: kit %s is outside the repository; a repository's local kits live in the repository", repo.Path, kit.Source)
+			}
 		}
 	}
 	cliAgents := make([]any, len(selection.Agents))
@@ -506,6 +521,7 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 		AWSDefaultProfile: defaultProfile,
 		Secrets:           secrets,
 		Bindings:          bindings,
+		RepoKits:          repoKits,
 	}
 	if base != nil {
 		composition.Base = *base

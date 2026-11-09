@@ -502,6 +502,47 @@ func TestARepositoryNamesInstalledBooksAndAddsAgentsAndKits(t *testing.T) {
 	}
 }
 
+func TestARepositorysKitsStayInsideItAndItsAgentsAreNamed(t *testing.T) {
+	for body, message := range map[string]string{
+		"kits = [\"../outside\"]\n":                     "is outside the repository",
+		"kits = [\"./a/../../outside\"]\n":              "is outside the repository",
+		"kits = [\"~/kits/mine\"]\n":                    "is outside the repository",
+		"agents = [\"docker.io/evil/agent-mixin:1\"]\n": "agents are named",
+	} {
+		repoDir := filepath.Join(t.TempDir(), "repo")
+		testutil.WriteFile(t, filepath.Join(repoDir, RepoConfigPath), body)
+		repo, err := LoadRepoConfig(repoDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = Compose(load(t, filepath.Join(t.TempDir(), "home")), Selection{Repo: repo})
+		expectError(t, err, message)
+	}
+}
+
+func TestAKitIsTrustedOnlyWhileItsFilesAndArgumentsAreUnchanged(t *testing.T) {
+	home := t.TempDir()
+	dir := t.TempDir()
+	testutil.WriteFile(t, filepath.Join(dir, "kit.yaml"), "allow: [example.com]\n")
+	local := Kit{Source: Resolve(dir)}
+	published := Kit{Source: "docker.io/org/kit:1", Args: map[string]any{"x": "1"}}
+	untrusted, fingerprints, err := UntrustedKits(home, []Kit{local, published})
+	if err != nil || len(untrusted) != 2 {
+		t.Fatalf("untrusted %v, %v", untrusted, err)
+	}
+	if err := TrustKits(home, untrusted, fingerprints); err != nil {
+		t.Fatal(err)
+	}
+	if untrusted, _, _ := UntrustedKits(home, []Kit{local, published}); len(untrusted) != 0 {
+		t.Fatalf("still untrusted: %v", untrusted)
+	}
+	testutil.WriteFile(t, filepath.Join(dir, "kit.yaml"), "allow: [\"**\"]\n")
+	published.Args = map[string]any{"x": "2"}
+	if untrusted, _, _ := UntrustedKits(home, []Kit{local, published}); len(untrusted) != 2 {
+		t.Fatalf("changed kits still trusted: %v", untrusted)
+	}
+}
+
 func TestARepositoryCannotUseABookThatIsNotInstalled(t *testing.T) {
 	dir := t.TempDir()
 	repoDir := filepath.Join(dir, "repo")

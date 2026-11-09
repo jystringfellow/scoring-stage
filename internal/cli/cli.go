@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,6 +42,7 @@ type exitCode int
 func (e exitCode) Error() string { return "exit status " + strconv.Itoa(int(e)) }
 
 type App struct {
+	Stdin           io.Reader
 	Stdout, Stderr  io.Writer
 	FindGh          func() string
 	BrokerPID       func(home string) int
@@ -50,7 +52,7 @@ type App struct {
 }
 
 func New() *App {
-	app := &App{Stdout: os.Stdout, Stderr: os.Stderr, FindGh: config.FindGh, BrokerPID: brokerPID}
+	app := &App{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, FindGh: config.FindGh, BrokerPID: brokerPID}
 	app.BrokerStart = app.brokerStart
 	app.HostAWSProfiles = hostAWSProfiles
 	app.IsTerminal = func() bool {
@@ -131,6 +133,17 @@ func (a *App) say(format string, args ...any) {
 
 func (a *App) warn(format string, args ...any) {
 	fmt.Fprintf(a.Stderr, "stage: WARNING: "+format+"\n", args...)
+}
+
+// confirm asks a yes-or-no question on the terminal; without one the answer is no.
+func (a *App) confirm(question string) bool {
+	if !a.IsTerminal() || a.Stdin == nil {
+		return false
+	}
+	fmt.Fprintf(a.Stderr, "%s [y/N] ", question)
+	answer, _ := bufio.NewReader(a.Stdin).ReadString('\n')
+	answer = strings.ToLower(strings.TrimSpace(answer))
+	return answer == "y" || answer == "yes"
 }
 
 func sandboxOf(slug string) string { return sandboxPrefix + slug }
@@ -410,6 +423,7 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	cpus := fs.intFlag("cpus", "CPUs for the sandbox")
 	memory := fs.String("memory", "", "memory for the sandbox, such as 16g")
 	allowGlobal := fs.Bool("allow-global-policy", false, "continue even if the global sbx policy has allow rules")
+	trustRepoKits := fs.Bool("trust-repo-kits", false, "approve the kits the repository's config adds, without asking")
 	plan := fs.Bool("plan", false, "write the env file and show sbx's plan without creating")
 	positional, err := fs.parse(args, "repo", "slug")
 	if err != nil {
@@ -487,6 +501,9 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	if err := a.checkRepoKits(settings.Home, composition.RepoKits, *trustRepoKits, *plan); err != nil {
+		return 0, err
+	}
 	if len(composition.Agents) == 0 {
 		a.warn("no agents chosen, so the sandbox has only a shell; use --agent, agents in config.toml or %s", config.RepoConfigPath)
 	}
@@ -535,6 +552,30 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	}
 	a.say("kits: %s", strings.Join(handles, ", "))
 	return 0, nil
+}
+
+func (a *App) checkRepoKits(home string, repoKits []config.Kit, trust, plan bool) error {
+	untrusted, fingerprints, err := config.UntrustedKits(home, repoKits)
+	if err != nil || len(untrusted) == 0 {
+		return err
+	}
+	fmt.Fprintf(a.Stderr, "stage: the repository's %s adds kits you have not approved. A kit can widen the sandbox's\n"+
+		"  network access and run setup commands in it. Review them before approving:\n", config.RepoConfigPath)
+	for _, kit := range untrusted {
+		fmt.Fprintf(a.Stderr, "  - %s\n", kit.Source)
+	}
+	if plan {
+		a.warn("plan only; stage up will ask you to approve these kits")
+		return nil
+	}
+	if !trust && !a.confirm("Approve these kits for this and future sandboxes while they are unchanged?") {
+		return errorf("repository kits not approved; review them and run stage up again with --trust-repo-kits, or answer y")
+	}
+	if err := config.TrustKits(home, untrusted, fingerprints); err != nil {
+		return err
+	}
+	a.say("approved %d repository kit(s); a change to one asks again", len(untrusted))
+	return nil
 }
 
 func writeTask(task Task, directory string) error {
