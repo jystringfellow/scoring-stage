@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/jystringfellow/scoring-stage/internal/testutil"
@@ -111,5 +112,79 @@ func TestWithoutManagedSettingsNothingIsLimited(t *testing.T) {
 	}
 	if managed.CheckAgent("agy", true, "x") != nil || managed.CheckAWSProfile("prod") != nil || !managed.AllowsGlobalPolicy() || managed.RepoKitsDenied() {
 		t.Fatal("unmanaged settings refused something")
+	}
+}
+
+func TestManagedFilesWithNoAgentInCommonAllowNone(t *testing.T) {
+	managedFiles(t, "allowed_agents = [\"claude\"]\n", "allowed_agents = [\"codex\"]\n")
+	settings := load(t, filepath.Join(t.TempDir(), "home"))
+	for _, agent := range []string{"claude", "codex", "agy"} {
+		_, err := Compose(settings, Selection{Agents: []string{agent}})
+		expectError(t, err, "agent "+agent+" is not allowed by")
+	}
+}
+
+func TestAgentPolicyCannotBeSidesteppedByReferenceAliasesOrPlainKits(t *testing.T) {
+	managedFiles(t, "denied_agents = [\"codex\"]\n")
+	for _, config := range []string{
+		"agents = [\"sbx/codex-mixin:0.167.0\"]\n",
+		"agents = [\"index.docker.io/sbx/codex-mixin\"]\n",
+		"agents = [\"registry-1.docker.io/sbx/codex-mixin:1\"]\n",
+		"agents = [\"docker.io/SBX/Codex-Mixin:1\"]\n",
+		"kits = [\"docker.io/sbx/codex-mixin:0.167.0\"]\n",
+	} {
+		home := filepath.Join(t.TempDir(), "home")
+		testutil.WriteFile(t, filepath.Join(home, "config.toml"), config)
+		_, err := Compose(load(t, home), Selection{})
+		if err == nil || !strings.Contains(err.Error(), "agent codex is denied by") {
+			t.Errorf("%s: %v", strings.TrimSpace(config), err)
+		}
+	}
+	home := filepath.Join(t.TempDir(), "home")
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "kits = [\"docker.io/sbx/newagent-mixin:1\"]\n")
+	_, err := Compose(load(t, home), Selection{})
+	expectError(t, err, "is not a known agent")
+}
+
+func TestAnUnreadableManagedFileOrBadPatternRefusesToRun(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "locked")
+	file := testutil.WriteFile(t, filepath.Join(dir, "managed.toml"), "denied_agents = [\"codex\"]\n")
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	original := ManagedPaths
+	ManagedPaths = func() []string { return []string{file} }
+	t.Cleanup(func() { ManagedPaths = original })
+	_, err := LoadManaged()
+	expectError(t, err, "refusing to run unmanaged")
+
+	managedFiles(t, "[aws]\ndenied_profiles = [\"arcus_[prod\"]\n")
+	_, err = LoadManaged()
+	expectError(t, err, "bad pattern")
+}
+
+func TestProfilePatternsIgnoreCase(t *testing.T) {
+	managedFiles(t, "[aws]\ndenied_profiles = [\"*prod*\"]\nallowed_profiles = [\"Arcus*\"]\n")
+	managed, err := LoadManaged()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, profile := range []string{"Arcus_PROD", "arcus-Prod"} {
+		expectError(t, managed.CheckAWSProfile(profile), "is denied by")
+	}
+	if err := managed.CheckAWSProfile("ARCUS_dev"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSetupWarnsAboutManagedFilesOthersCouldWrite(t *testing.T) {
+	managedFiles(t, "repo_kits = \"deny\"\n")
+	managed, err := LoadManaged()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if warnings := strings.Join(managed.Warnings(), "\n"); !strings.Contains(warnings, "is not owned by root") {
+		t.Fatalf("warnings %q", warnings)
 	}
 }

@@ -1,10 +1,15 @@
 package config
 
 import (
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 )
 
 const (
@@ -33,6 +38,7 @@ var ManagedPaths = func() []string {
 type Managed struct {
 	Paths             []string
 	allowedAgents     []string
+	allowedAgentsSet  bool
 	deniedAgents      []string
 	allowedProfiles   [][]string
 	deniedProfiles    []string
@@ -47,11 +53,38 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
+func managedFilePresent(file string) (bool, error) {
+	_, err := os.Stat(file)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return false, nil
+	default:
+		return false, errorf("cannot read managed settings %s: %v; refusing to run unmanaged", file, err)
+	}
+}
+
+func lowerPatterns(patterns []string, where string) ([]string, error) {
+	lowered := make([]string, len(patterns))
+	for i, pattern := range patterns {
+		lowered[i] = strings.ToLower(pattern)
+		if _, err := path.Match(lowered[i], ""); err != nil {
+			return nil, errorf("%s: bad pattern %q: %v", where, pattern, err)
+		}
+	}
+	return lowered, nil
+}
+
 // LoadManaged merges every managed file that exists; each can only narrow the others.
 func LoadManaged() (*Managed, error) {
 	managed := &Managed{repoKits: RepoKitsAsk, allowGlobalPolicy: true}
 	for _, file := range ManagedPaths() {
-		if !fileExists(file) {
+		present, err := managedFilePresent(file)
+		if err != nil {
+			return nil, err
+		}
+		if !present {
 			continue
 		}
 		data, err := readTOML(file)
@@ -67,7 +100,8 @@ func LoadManaged() (*Managed, error) {
 			return nil, err
 		}
 		if data["allowed_agents"] != nil {
-			managed.allowedAgents = narrow(managed.allowedAgents, allowed, len(managed.Paths) > 1 && managed.allowedAgents != nil)
+			managed.allowedAgents = narrow(managed.allowedAgents, allowed, managed.allowedAgentsSet)
+			managed.allowedAgentsSet = true
 		}
 		denied, err := optionalStrings(data, "denied_agents", file)
 		if err != nil {
@@ -86,11 +120,17 @@ func LoadManaged() (*Managed, error) {
 			if err != nil {
 				return nil, err
 			}
+			if allowedProfiles, err = lowerPatterns(allowedProfiles, file+" [aws] allowed_profiles"); err != nil {
+				return nil, err
+			}
 			if table["allowed_profiles"] != nil {
 				managed.allowedProfiles = append(managed.allowedProfiles, allowedProfiles)
 			}
 			deniedProfiles, err := optionalStrings(table, "denied_profiles", file+" [aws]")
 			if err != nil {
+				return nil, err
+			}
+			if deniedProfiles, err = lowerPatterns(deniedProfiles, file+" [aws] denied_profiles"); err != nil {
 				return nil, err
 			}
 			managed.deniedProfiles = append(managed.deniedProfiles, deniedProfiles...)
@@ -127,7 +167,7 @@ func narrow(current, next []string, both bool) []string {
 	if !both {
 		return append([]string{}, next...)
 	}
-	var kept []string
+	kept := []string{}
 	for _, name := range current {
 		if contains(next, name) {
 			kept = append(kept, name)
@@ -153,22 +193,29 @@ func (m *Managed) where() string { return strings.Join(m.Paths, ", ") }
 func (m *Managed) CheckAgent(name string, known bool, source string) error {
 	m = m.orUnmanaged()
 	if !known {
-		if m.allowedAgents != nil {
-			return errorf("agent kit %s is not a known agent, and %s allows only %s", source, m.where(), strings.Join(m.allowedAgents, ", "))
+		if m.HasAgentPolicy() {
+			return errorf("agent kit %s is not a known agent, and %s limits agents", source, m.where())
 		}
 		return nil
 	}
 	if contains(m.deniedAgents, name) {
 		return errorf("agent %s is denied by %s", name, m.where())
 	}
-	if m.allowedAgents != nil && !contains(m.allowedAgents, name) {
+	if m.allowedAgentsSet && !contains(m.allowedAgents, name) {
 		return errorf("agent %s is not allowed by %s (allowed: %s)", name, m.where(), strings.Join(m.allowedAgents, ", "))
 	}
 	return nil
 }
 
+// HasAgentPolicy reports whether the managed settings limit agents at all.
+func (m *Managed) HasAgentPolicy() bool {
+	m = m.orUnmanaged()
+	return m.allowedAgentsSet || len(m.deniedAgents) > 0
+}
+
 func (m *Managed) CheckAWSProfile(profile string) error {
 	m = m.orUnmanaged()
+	profile = strings.ToLower(profile)
 	for _, pattern := range m.deniedProfiles {
 		if matched, _ := path.Match(pattern, profile); matched {
 			return errorf("AWS profile %s is denied by %s (%s)", profile, m.where(), pattern)
@@ -209,8 +256,12 @@ func (m *Managed) Summary() []string {
 		return nil
 	}
 	lines := []string{"managed settings: " + m.where()}
-	if m.allowedAgents != nil {
-		lines = append(lines, "  allowed agents: "+strings.Join(m.allowedAgents, ", "))
+	if m.allowedAgentsSet {
+		allowed := strings.Join(m.allowedAgents, ", ")
+		if allowed == "" {
+			allowed = "none"
+		}
+		lines = append(lines, "  allowed agents: "+allowed)
 	}
 	if len(m.deniedAgents) > 0 {
 		lines = append(lines, "  denied agents: "+strings.Join(m.deniedAgents, ", "))
@@ -229,4 +280,31 @@ func (m *Managed) Summary() []string {
 		lines = append(lines, "  --allow-global-policy: refused")
 	}
 	return lines
+}
+
+// Warnings flags managed files a non-administrator could have written.
+func (m *Managed) Warnings() []string {
+	if m == nil {
+		return nil
+	}
+	var warnings []string
+	for _, file := range m.Paths {
+		if strings.HasPrefix(file, "/mnt/") {
+			warnings = append(warnings, file+": on a Windows drive, so stage cannot check who can write it")
+			continue
+		}
+		for _, target := range []string{file, filepath.Dir(file)} {
+			info, err := os.Stat(target)
+			if err != nil {
+				continue
+			}
+			if info.Mode().Perm()&0o022 != 0 {
+				warnings = append(warnings, fmt.Sprintf("%s is writable by group or others (mode %o)", target, info.Mode().Perm()))
+			}
+			if stat, ok := info.Sys().(*syscall.Stat_t); ok && stat.Uid != 0 {
+				warnings = append(warnings, fmt.Sprintf("%s is not owned by root", target))
+			}
+		}
+	}
+	return warnings
 }

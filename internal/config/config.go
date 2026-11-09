@@ -371,7 +371,7 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 				return errorf("%s: %v", owner, err)
 			}
 			agentKits = append(agentKits, kit)
-			if name, known := agentFor(kit.Source); known && !contains(agentNames, name) {
+			if known && !contains(agentNames, name) {
 				agentNames = append(agentNames, name)
 			}
 		}
@@ -563,6 +563,17 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 	}
 	for _, book := range active {
 		composition.Books = append(composition.Books, book.Name)
+	}
+	for _, kit := range composition.AllKits() {
+		if kit.IsLocal() {
+			continue
+		}
+		name, known := agentFor(kit.Source)
+		if known || looksLikeAgentMixin(kit.Source) {
+			if err := settings.Managed.CheckAgent(name, known, kit.Source); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return composition, nil
 }

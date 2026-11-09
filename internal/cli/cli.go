@@ -373,6 +373,9 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 	for _, line := range settings.Managed.Summary() {
 		a.say("%s", line)
 	}
+	for _, warning := range settings.Managed.Warnings() {
+		a.warn("managed settings: %s", warning)
+	}
 	if agentList := settings.AgentEntries(); len(agentList) > 0 {
 		a.say("agents: %s", strings.Join(agentList, ", "))
 	} else {
