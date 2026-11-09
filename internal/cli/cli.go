@@ -49,12 +49,16 @@ type App struct {
 	BrokerStart     func(home string) error
 	IsTerminal      func() bool
 	HostAWSProfiles func() ([]string, error)
+	ReadSecret      func() ([]byte, error)
+	GitHubAPI       config.GitHubAPI
 }
 
 func New() *App {
 	app := &App{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, FindGh: config.FindGh, BrokerPID: brokerPID}
 	app.BrokerStart = app.brokerStart
 	app.HostAWSProfiles = hostAWSProfiles
+	app.ReadSecret = func() ([]byte, error) { return term.ReadPassword(int(os.Stdin.Fd())) }
+	app.GitHubAPI = config.NewGitHubAPI()
 	app.IsTerminal = func() bool {
 		return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 	}
@@ -78,6 +82,7 @@ Run coding agents in Docker Sandboxes with host-held credentials.
 commands:
   setup [--yes] [--agent NAME]... [--github MODE]
                                    check sbx, the global policy, credentials and books; save your agents
+  token set <owner>                 save a fine-grained GitHub token for a repository owner, read from stdin
   broker start|stop|status|serve    manage the host AWS credential broker
   up <repo> <slug> [options]        create a sandbox for a repository
   shell <slug>                      open a login shell in the repository
@@ -98,6 +103,7 @@ func (a *App) Main(args []string) int {
 	commands := map[string]func([]string, string) (int, error){
 		"setup": a.cmdSetup, "broker": a.cmdBroker, "up": a.cmdUp, "shell": a.cmdShell,
 		"exec": a.cmdExec, "ship": a.cmdShip, "list": a.cmdList, "down": a.cmdDown, "login": a.cmdLogin,
+		"token": a.cmdToken,
 	}
 	name := args[0]
 	if name == "-h" || name == "--help" || name == "help" {
@@ -472,6 +478,9 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	if err := a.checkGitHubAccess(settings, owner, gh); err != nil {
 		return 0, err
 	}
+	if err := a.checkGitHubTokenForRepo(settings, github); err != nil {
+		return 0, err
+	}
 	if err := checkNoGlobalGitHubSecret(); err != nil {
 		return 0, err
 	}
@@ -666,6 +675,7 @@ func (a *App) reportGitHub(settings *config.Settings, gh string, ghLoggedIn bool
 				a.warn("%s", err)
 			} else {
 				a.say("github token for %s: fine-grained. stage cannot see its permissions: keep it read-only (Contents and Metadata: read) and limited to your repositories", owner)
+				a.reportGitHubTokenStatus(settings, owner)
 			}
 		}
 		if _, err := os.Stat(settings.LegacyGitHubToken()); err == nil {
