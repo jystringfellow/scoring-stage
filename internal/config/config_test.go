@@ -158,7 +158,7 @@ func TestAWSProfilesAddTheBrokerKitAndBinding(t *testing.T) {
 	if !brokerKit.Equal(want) {
 		t.Errorf("broker kit = %v", brokerKit)
 	}
-	if got := composition.Bindings[BrokerService]; !reflect.DeepEqual(got, map[string]any{"apiKey": map[string]any{"domains": []any{"localhost"}}}) {
+	if got := composition.Bindings[BrokerService]; !reflect.DeepEqual(got, map[string]any{"apiKey": map[string]any{"domains": []any{"localhost:9911"}}}) {
 		t.Errorf("binding = %v", got)
 	}
 }

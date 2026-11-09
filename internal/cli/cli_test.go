@@ -221,7 +221,7 @@ aws = { profiles = ["dev", "staging"], region = "us-west-2" }
 		t.Errorf("profiles = %q", got)
 	}
 	env := testutil.ReadFile(t, filepath.Join(h.task("fix"), "sbxenv.yaml"))
-	for _, fragment := range []string{`command: "/bin/cat ` + filepath.Join(grants, "fix.token") + `"`, `profiles: "dev staging"`, `region: "us-west-2"`, `"localhost"`} {
+	for _, fragment := range []string{`command: "/bin/cat ` + filepath.Join(grants, "fix.token") + `"`, `profiles: "dev staging"`, `region: "us-west-2"`, `"localhost:9911"`} {
 		if !strings.Contains(env, fragment) {
 			t.Errorf("env lacks %s:\n%s", fragment, env)
 		}

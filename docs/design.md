@@ -55,9 +55,11 @@ The broker listens on `127.0.0.1:9911` on the host and answers `GET /credential-
 `stage-broker` service. The `aws-broker` kit declares it as an inject-only credential, so the proxy adds
 `Authorization: Bearer <token>` to broker requests and the token never enters the sandbox.
 
-sbx names `host.docker.internal` "localhost" when matching policy and credentials. The kit therefore allows
-`localhost` and `localhost:9911` and injects on the domain `localhost`; injecting on `host.docker.internal`
-reaches the broker without the header.
+sbx names `host.docker.internal` "localhost" when matching policy and credentials. The kit allows only
+`localhost:9911` and injects the token only on `localhost:9911` (verified on sbx 0.51.0: the broker answers, other
+host ports are refused with 403); injecting on `host.docker.internal` reaches the broker without the header. The
+broker serves only credentials that expire (a `SessionToken` and an `Expiration`), so an IAM user's long-lived keys
+never reach a sandbox.
 
 ## Verified on sbx 0.51.0
 

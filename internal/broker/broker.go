@@ -102,6 +102,11 @@ func (s *CredentialSource) CredentialProcess(profile string, granted map[string]
 			return nil, &Error{http.StatusBadGateway, profile + ": aws cli returned incomplete credentials"}
 		}
 	}
+	for _, key := range []string{"SessionToken", "Expiration"} {
+		if value, _ := credentials[key].(string); value == "" {
+			return nil, &Error{http.StatusForbidden, profile + ": long-lived keys are not served to sandboxes; use an SSO or assumed-role profile, whose credentials expire"}
+		}
+	}
 	var compact bytes.Buffer
 	if err := json.Compact(&compact, []byte(result.Stdout)); err != nil {
 		return nil, &Error{http.StatusBadGateway, profile + ": aws cli returned invalid JSON"}

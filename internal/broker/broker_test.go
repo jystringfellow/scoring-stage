@@ -241,6 +241,19 @@ func (s *server) fetch(method, path, authorization string) (int, map[string]any)
 	return recorder.Code, body
 }
 
+func TestLongLivedKeysAreNotServed(t *testing.T) {
+	for _, stdout := range []string{
+		`{"Version": 1, "AccessKeyId": "AKIAUSER", "SecretAccessKey": "s"}`,
+		`{"Version": 1, "AccessKeyId": "AKIAUSER", "SecretAccessKey": "s", "SessionToken": "t"}`,
+		`{"Version": 1, "AccessKeyId": "ASIA", "SecretAccessKey": "s", "Expiration": "2026-11-06T13:00:00+00:00"}`,
+	} {
+		_, err := NewCredentialSource((&fakeAWS{result: Result{Stdout: stdout}}).run).CredentialProcess("dev", granted)
+		if status(t, err) != 403 || !strings.Contains(err.Error(), "long-lived keys are not served") {
+			t.Errorf("%s: %v", stdout, err)
+		}
+	}
+}
+
 func TestHTTPRequiresASandboxBearerToken(t *testing.T) {
 	grants := issued(t)
 	s := newServer(grants)
