@@ -219,6 +219,21 @@ func TestAnOwnerNameCannotLeaveTheTokenDirectory(t *testing.T) {
 	expectError(t, load(t, home).CheckGitHub("jdoe_acme", ""), "no GitHub token for jdoe_acme")
 }
 
+func TestATokenFileIsFoundWhateverItsASCIICaseButNotThroughUnicodeFolding(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), fineGrained)
+	settings := load(t, home)
+	dir := settings.GitHubTokenDir()
+	writeToken(t, filepath.Join(dir, "Globex.token"), "github_pat_globex\n")
+	if got := settings.GitHubTokenFile("globex"); testutil.ReadFile(t, got) != "github_pat_globex\n" {
+		t.Errorf("GitHubTokenFile(globex) = %s", got)
+	}
+	writeToken(t, filepath.Join(dir, "Kite.token"), "github_pat_kite\n")
+	if got := settings.GitHubTokenFile("kite"); filepath.Base(got) != "kite.token" {
+		t.Errorf("GitHubTokenFile(kite) followed Unicode folding: %s", got)
+	}
+}
+
 func writeToken(t *testing.T, path, token string) string {
 	t.Helper()
 	testutil.WriteFile(t, path, token)

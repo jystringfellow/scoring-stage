@@ -77,12 +77,25 @@ func (s *Settings) GitHubTokenFile(owner string) string {
 		return file
 	}
 	entries, _ := os.ReadDir(s.GitHubTokenDir())
+	var matches []string
 	for _, entry := range entries {
-		if strings.EqualFold(entry.Name(), name) {
-			return filepath.Join(s.GitHubTokenDir(), entry.Name())
+		if isASCII(entry.Name()) && strings.ToLower(entry.Name()) == name {
+			matches = append(matches, entry.Name())
 		}
 	}
+	if len(matches) == 1 {
+		return filepath.Join(s.GitHubTokenDir(), matches[0])
+	}
 	return file
+}
+
+func isASCII(text string) bool {
+	for i := 0; i < len(text); i++ {
+		if text[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Settings) LegacyGitHubToken() string {
