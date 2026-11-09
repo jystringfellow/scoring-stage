@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -79,7 +80,7 @@ func TestUpInAppModeGivesTheSandboxTheStageTokenCommand(t *testing.T) {
 	h.expect(0, "up", h.remote.Checkout, "fix")
 	env := testutil.ReadFile(t, filepath.Join(h.task("fix"), "sbxenv.yaml"))
 	stage, _ := config.StageExecutable()
-	for _, fragment := range []string{"STAGE_HOME=" + config.ShellQuote(h.home), config.Resolve(stage) + " github token", `refresh: "30m"`, "api.github.com"} {
+	for _, fragment := range []string{"STAGE_HOME=" + config.ShellQuote(h.home), config.ShellQuote(stage) + " github token", `refresh: "30m"`, "api.github.com"} {
 		if !strings.Contains(env, fragment) {
 			t.Errorf("env lacks %q:\n%s", fragment, env)
 		}
@@ -131,4 +132,32 @@ func TestSetupInAppModeReportsTheLoginOrSaysToLogIn(t *testing.T) {
 	delete(h.github.Permissions, "acme")
 	h.expect(0, "setup")
 	h.expectStderr("the GitHub App is not installed on any account")
+}
+
+func TestGitHubTokenRefusesOnceAnInstallationCanWriteWithoutWaitingForARefresh(t *testing.T) {
+	h := appSetup(t)
+	h.expect(0, "github", "login")
+	h.expect(0, "github", "token")
+	h.github.Permissions["acme"]["contents"] = "write"
+	h.expect(1, "github", "token")
+	h.expectStderr("the installation on acme grants contents: write")
+	h.expectStderr("run `stage down` on running sandboxes")
+	if h.stdout.String() != "" || h.github.Refreshes != 0 {
+		t.Errorf("stdout %q after %d refreshes", h.stdout.String(), h.github.Refreshes)
+	}
+	if _, err := os.Stat(h.appLogin()); err == nil {
+		t.Error("kept the login of an app that can write")
+	}
+}
+
+func TestGitHubTokenWarnsAndKeepsTheCurrentTokenWhileGitHubCannotRefreshIt(t *testing.T) {
+	h := appSetup(t)
+	h.expect(0, "github", "login")
+	h.github.RefreshStatus = http.StatusServiceUnavailable
+	h.github.Advance(8*time.Hour - 20*time.Minute)
+	h.expect(0, "github", "token")
+	if h.stdout.String() != "ghu_access1\n" {
+		t.Errorf("stdout %q", h.stdout.String())
+	}
+	h.expectStderr("503 Service Unavailable; using the current token, which expires")
 }

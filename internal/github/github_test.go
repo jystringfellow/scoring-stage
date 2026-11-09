@@ -103,14 +103,13 @@ func TestLoginRefusesAnAppThatCanWriteAndSavesNothing(t *testing.T) {
 	}
 }
 
-func TestTokenReturnsTheStoredTokenWithoutCallingGitHubWhileItIsFresh(t *testing.T) {
+func TestTokenReusesTheStoredTokenWhileItIsFresh(t *testing.T) {
 	f := githubtest.NewFake(t)
 	store := testStore(t)
 	login(t, f, store)
-	f.Handler = http.NotFoundHandler()
-	token, err := f.Client().Token(store, "Iv23test", false)
-	if err != nil || token.Login.AccessToken != "ghu_access1" || token.Refreshed {
-		t.Fatalf("got %+v, %v", token, err)
+	token, err := f.Client().Token(store, "Iv23test")
+	if err != nil || token.Login.AccessToken != "ghu_access1" || token.Refreshed || f.Refreshes != 0 {
+		t.Fatalf("got %+v, %v after %d refreshes", token, err, f.Refreshes)
 	}
 }
 
@@ -119,18 +118,18 @@ func TestTokenRefreshesNearExpiryAndStoresTheRotatedRefreshToken(t *testing.T) {
 	store := testStore(t)
 	login(t, f, store)
 	f.Advance(8*time.Hour - github.RefreshMargin + time.Second)
-	token, err := f.Client().Token(store, "Iv23test", false)
+	token, err := f.Client().Token(store, "Iv23test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !token.Refreshed || !token.Checked || token.Login.AccessToken != "ghu_access2" {
+	if !token.Refreshed || token.Login.AccessToken != "ghu_access2" {
 		t.Errorf("got %+v", token)
 	}
 	saved, _ := store.Read()
 	if saved.RefreshToken != "ghr_refresh2" || !saved.ExpiresAt.Equal(f.Now().Add(8*time.Hour)) {
 		t.Errorf("saved %+v", saved)
 	}
-	again, err := f.Client().Token(store, "Iv23test", false)
+	again, err := f.Client().Token(store, "Iv23test")
 	if err != nil || again.Refreshed || again.Login.AccessToken != "ghu_access2" || f.Refreshes != 1 {
 		t.Errorf("second call %+v, %v after %d refreshes", again, err, f.Refreshes)
 	}
@@ -148,7 +147,7 @@ func TestConcurrentTokenCallsRefreshOnceUnderTheLock(t *testing.T) {
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
-			token, err := f.Client().Token(store, "Iv23test", false)
+			token, err := f.Client().Token(store, "Iv23test")
 			tokens[i], errs[i] = token.Login.AccessToken, err
 		}()
 	}
@@ -168,7 +167,7 @@ func TestTokenAsksForANewLoginOnceTheRefreshTokenExpired(t *testing.T) {
 	store := testStore(t)
 	login(t, f, store)
 	f.Advance(15724800 * time.Second)
-	_, err := f.Client().Token(store, "Iv23test", false)
+	_, err := f.Client().Token(store, "Iv23test")
 	if err == nil || !strings.Contains(err.Error(), "expired; run `stage github login`") || f.Refreshes != 0 {
 		t.Errorf("got %v after %d refreshes", err, f.Refreshes)
 	}
@@ -180,7 +179,7 @@ func TestTokenAsksForANewLoginWhenGitHubRefusesTheRefreshToken(t *testing.T) {
 	login(t, f, store)
 	f.RefreshToken = "ghr_revoked"
 	f.Advance(8 * time.Hour)
-	_, err := f.Client().Token(store, "Iv23test", false)
+	_, err := f.Client().Token(store, "Iv23test")
 	if err == nil || !strings.Contains(err.Error(), "refused the stored refresh token") || !strings.Contains(err.Error(), "stage github login") {
 		t.Errorf("got %v", err)
 	}
@@ -192,7 +191,7 @@ func TestTokenRemovesTheLoginWhenARefreshFindsWritePermissions(t *testing.T) {
 	login(t, f, store)
 	f.Permissions["acme"]["pull_requests"] = "write"
 	f.Advance(8 * time.Hour)
-	_, err := f.Client().Token(store, "Iv23test", false)
+	_, err := f.Client().Token(store, "Iv23test")
 	if err == nil || !strings.Contains(err.Error(), "the installation on acme grants pull_requests: write") {
 		t.Fatalf("got %v", err)
 	}
@@ -201,16 +200,96 @@ func TestTokenRemovesTheLoginWhenARefreshFindsWritePermissions(t *testing.T) {
 	}
 }
 
-func TestTokenChecksPermissionsWhenAsked(t *testing.T) {
+func TestEveryTokenCallRefusesAPermissionThatBecameWritableAndRemovesTheLogin(t *testing.T) {
 	f := githubtest.NewFake(t)
 	store := testStore(t)
 	login(t, f, store)
-	f.Permissions["acme"]["issues"] = "write"
-	if _, err := f.Client().Token(store, "Iv23test", false); err != nil {
-		t.Fatalf("unchecked token: %v", err)
+	if _, err := f.Client().Token(store, "Iv23test"); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := f.Client().Token(store, "Iv23test", true); err == nil || !strings.Contains(err.Error(), "issues: write") {
-		t.Errorf("checked token: %v", err)
+	f.Permissions["acme"]["issues"] = "write"
+	_, err := f.Client().Token(store, "Iv23test")
+	if err == nil || !strings.Contains(err.Error(), "the installation on acme grants issues: write") || f.Refreshes != 0 {
+		t.Fatalf("got %v after %d refreshes", err, f.Refreshes)
+	}
+	for _, fragment := range []string{"stage removed the app login", "stay valid at GitHub until they expire", "run `stage down` on running sandboxes"} {
+		if !strings.Contains(err.Error(), fragment) {
+			t.Errorf("error lacks %q: %v", fragment, err)
+		}
+	}
+	if _, statErr := os.Stat(store.Path); statErr == nil {
+		t.Error("kept the login of an app that can write")
+	}
+}
+
+func TestTokenKeepsTheCurrentTokenWhenGitHubIsDownDuringARefresh(t *testing.T) {
+	f := githubtest.NewFake(t)
+	store := testStore(t)
+	login(t, f, store)
+	f.RefreshStatus = http.StatusBadGateway
+	f.Advance(8*time.Hour - 10*time.Minute)
+	token, err := f.Client().Token(store, "Iv23test")
+	if err != nil || token.Login.AccessToken != "ghu_access1" || token.Refreshed || !strings.Contains(fmt.Sprint(token.RefreshError), "502") {
+		t.Fatalf("got %+v, %v", token, err)
+	}
+	f.Advance(6 * time.Minute)
+	if _, err := f.Client().Token(store, "Iv23test"); err == nil || !strings.Contains(err.Error(), "502") {
+		t.Errorf("with 4 minutes left: %v", err)
+	}
+	f.RefreshStatus = 0
+	token, err = f.Client().Token(store, "Iv23test")
+	if err != nil || token.Login.AccessToken != "ghu_access2" {
+		t.Errorf("after GitHub recovered: %+v, %v", token, err)
+	}
+}
+
+func TestTokenFailsAtOnceWhenGitHubRejectsTheRefreshTokenEvenWithTimeLeft(t *testing.T) {
+	f := githubtest.NewFake(t)
+	store := testStore(t)
+	login(t, f, store)
+	f.RefreshToken = "ghr_revoked"
+	f.Advance(8*time.Hour - 30*time.Minute)
+	if _, err := f.Client().Token(store, "Iv23test"); err == nil || !strings.Contains(err.Error(), "refused the stored refresh token") {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestTheClientDoesNotFollowARedirectWithTheRefreshToken(t *testing.T) {
+	f := githubtest.NewFake(t)
+	store := testStore(t)
+	login(t, f, store)
+	var redirected []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /login/oauth/access_token", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "https://evil.test/collect")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	})
+	mux.HandleFunc("/collect", func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		redirected = append(redirected, r.Form.Encode())
+	})
+	f.Handler = mux
+	f.Advance(8 * time.Hour)
+	_, err := f.Client().Token(store, "Iv23test")
+	if err == nil || !strings.Contains(err.Error(), "does not follow redirects") {
+		t.Errorf("got %v", err)
+	}
+	if len(redirected) > 0 {
+		t.Errorf("re-sent the request to the redirect target: %v", redirected)
+	}
+}
+
+func TestTheStoreMakesAnExistingSecretsDirectoryPrivate(t *testing.T) {
+	store := testStore(t)
+	dir := filepath.Dir(store.Path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Write(github.Login{ClientID: "Iv23test", AccessToken: "ghu_x"}); err != nil {
+		t.Fatal(err)
+	}
+	if info, _ := os.Stat(dir); info.Mode().Perm() != 0o700 {
+		t.Errorf("%s mode %o", dir, info.Mode().Perm())
 	}
 }
 
@@ -218,7 +297,7 @@ func TestTokenRefusesALoginForAnotherClientID(t *testing.T) {
 	f := githubtest.NewFake(t)
 	store := testStore(t)
 	login(t, f, store)
-	_, err := f.Client().Token(store, "Iv23other", false)
+	_, err := f.Client().Token(store, "Iv23other")
 	if err == nil || !strings.Contains(err.Error(), "client ID Iv23test, but [github] app_client_id is Iv23other") {
 		t.Errorf("got %v", err)
 	}
@@ -227,7 +306,7 @@ func TestTokenRefusesALoginForAnotherClientID(t *testing.T) {
 func TestTokenWithoutALoginSaysToLogIn(t *testing.T) {
 	f := githubtest.NewFake(t)
 	store := testStore(t)
-	_, err := f.Client().Token(store, "Iv23test", false)
+	_, err := f.Client().Token(store, "Iv23test")
 	if err == nil || !strings.Contains(err.Error(), "not logged in to the GitHub App") || !strings.Contains(err.Error(), "stage github login") {
 		t.Errorf("got %v", err)
 	}
@@ -244,7 +323,7 @@ func TestAnAppWithoutTokenExpiryNeverRefreshes(t *testing.T) {
 		t.Fatalf("saved %+v", saved)
 	}
 	f.Advance(365 * 24 * time.Hour)
-	token, err := f.Client().Token(store, "Iv23test", false)
+	token, err := f.Client().Token(store, "Iv23test")
 	if err != nil || token.Login.AccessToken != "ghu_forever" || f.Refreshes != 0 {
 		t.Errorf("got %+v, %v", token, err)
 	}

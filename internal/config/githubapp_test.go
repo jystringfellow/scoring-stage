@@ -1,8 +1,10 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,7 +20,7 @@ func fakeStage(t *testing.T) string {
 	original := StageExecutable
 	StageExecutable = func() (string, error) { return path, nil }
 	t.Cleanup(func() { StageExecutable = original })
-	return Resolve(path)
+	return path
 }
 
 func appHome(t *testing.T, config string, login *github.Login) string {
@@ -105,5 +107,43 @@ func TestTheAppLoginIsNotMistakenForAnOwnersToken(t *testing.T) {
 	owners, err := load(t, home).GitHubTokenOwners()
 	if err != nil || !reflect.DeepEqual(owners, []string{"acme"}) {
 		t.Errorf("owners %v, %v", owners, err)
+	}
+}
+
+func TestTheTokenCommandKeepsASymlinkedStagePath(t *testing.T) {
+	dir := t.TempDir()
+	cellar := testutil.WriteFile(t, filepath.Join(dir, "Cellar", "stage", "1.0", "bin", "stage"), "")
+	link := filepath.Join(dir, "bin", "stage")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(cellar, link); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", "/usr/bin:/bin")
+	original := StageExecutable
+	t.Cleanup(func() { StageExecutable = original })
+	settings := load(t, appHome(t, appMode, nil))
+
+	StageExecutable = func() (string, error) { return link, nil }
+	command, err := settings.GitHubAppTokenCommand()
+	if err != nil || !strings.HasSuffix(command, " "+ShellQuote(link)+" github token") {
+		t.Errorf("from the link: %q, %v", command, err)
+	}
+
+	if err := os.Chmod(cellar, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", filepath.Join(dir, "bin")+":/usr/bin:/bin")
+	StageExecutable = func() (string, error) { return cellar, nil }
+	command, err = settings.GitHubAppTokenCommand()
+	if err != nil || !strings.HasSuffix(command, " "+ShellQuote(link)+" github token") {
+		t.Errorf("from the Cellar with stage on PATH: %q, %v", command, err)
+	}
+
+	t.Setenv("PATH", "/usr/bin:/bin")
+	command, err = settings.GitHubAppTokenCommand()
+	if err != nil || !strings.HasSuffix(command, " "+ShellQuote(cellar)+" github token") {
+		t.Errorf("from the Cellar without stage on PATH: %q, %v", command, err)
 	}
 }

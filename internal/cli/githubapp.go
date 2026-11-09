@@ -24,9 +24,12 @@ func (a *App) cmdGitHub(args []string, home string) (int, error) {
 	case "login":
 		return 0, a.gitHubAppLogin(settings)
 	case "token":
-		token, err := a.gitHubAppToken(settings, false)
+		token, err := a.gitHubAppToken(settings)
 		if err != nil {
 			return 0, err
+		}
+		if token.RefreshError != nil {
+			a.warn("%s; using the current token, which expires %s", token.RefreshError, token.Login.ExpiresAt.Local().Format(time.RFC3339))
 		}
 		fmt.Fprintln(a.Stdout, token.Login.AccessToken)
 		return 0, nil
@@ -60,16 +63,16 @@ func (a *App) gitHubAppLogin(settings *config.Settings) error {
 	return nil
 }
 
-func (a *App) gitHubAppToken(settings *config.Settings, check bool) (github.Token, error) {
+func (a *App) gitHubAppToken(settings *config.Settings) (github.Token, error) {
 	clientID, err := a.gitHubAppClientID(settings)
 	if err != nil {
 		return github.Token{}, err
 	}
-	return a.GitHub.Token(settings.GitHubAppStore(), clientID, check)
+	return a.GitHub.Token(settings.GitHubAppStore(), clientID)
 }
 
 func (a *App) checkGitHubApp(settings *config.Settings) error {
-	token, err := a.gitHubAppToken(settings, true)
+	token, err := a.gitHubAppToken(settings)
 	if err != nil {
 		return err
 	}
@@ -84,7 +87,7 @@ func (a *App) reportGitHubApp(settings *config.Settings) {
 		a.warn("%s; stage up will refuse", err)
 		return
 	}
-	token, err := a.gitHubAppToken(settings, true)
+	token, err := a.gitHubAppToken(settings)
 	if err != nil {
 		a.warn("%s; stage up will refuse", err)
 		return

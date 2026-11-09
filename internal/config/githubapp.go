@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"time"
@@ -66,15 +67,26 @@ func (s *Settings) GitHubAppTokenCommand() (string, error) {
 	if err != nil {
 		return "", errorf("cannot find the stage binary for the GitHub App token command: %v", err)
 	}
-	resolved, err := filepath.EvalSymlinks(executable)
-	if err != nil {
-		return "", errorf("cannot resolve the stage binary %s: %v", executable, err)
-	}
-	absolute, err := filepath.Abs(resolved)
+	absolute, err := filepath.Abs(executable)
 	if err != nil {
 		return "", err
 	}
+	if onPath, err := exec.LookPath("stage"); err == nil {
+		onPath, _ = filepath.Abs(onPath)
+		if sameFile(onPath, absolute) {
+			absolute = onPath
+		}
+	}
 	return "/usr/bin/env STAGE_HOME=" + ShellQuote(s.Home) + " " + ShellQuote(absolute) + " github token", nil
+}
+
+func sameFile(a, b string) bool {
+	first, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	second, err := os.Stat(b)
+	return err == nil && os.SameFile(first, second)
 }
 
 func (s *Settings) gitHubAppSecret() (map[string]any, error) {

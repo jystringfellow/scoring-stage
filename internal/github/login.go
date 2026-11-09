@@ -51,9 +51,17 @@ func (s Store) Read() (Login, error) {
 	return login, nil
 }
 
-func (s Store) Write(login Login) error {
+func (s Store) privateDir() (string, error) {
 	dir := filepath.Dir(s.Path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	return dir, os.Chmod(dir, 0o700)
+}
+
+func (s Store) Write(login Login) error {
+	dir, err := s.privateDir()
+	if err != nil {
 		return err
 	}
 	content, err := json.MarshalIndent(login, "", "  ")
@@ -80,7 +88,7 @@ func (s Store) Remove() error {
 }
 
 func (s Store) Lock() (func(), error) {
-	if err := os.MkdirAll(filepath.Dir(s.Path), 0o700); err != nil {
+	if _, err := s.privateDir(); err != nil {
 		return nil, err
 	}
 	file, err := os.OpenFile(s.lockPath(), os.O_RDWR|os.O_CREATE, 0o600)
@@ -102,11 +110,13 @@ const RefreshMargin = 40 * time.Minute
 type Token struct {
 	Login         Login
 	Installations []Installation
-	Checked       bool
 	Refreshed     bool
+	RefreshError  error
 }
 
-func (c *Client) Token(store Store, clientID string, check bool) (Token, error) {
+const usableWhileGitHubIsDown = 5 * time.Minute
+
+func (c *Client) Token(store Store, clientID string) (Token, error) {
 	unlock, err := store.Lock()
 	if err != nil {
 		return Token{}, err
@@ -127,26 +137,28 @@ func (c *Client) Token(store Store, clientID string, check bool) (Token, error) 
 			return Token{}, errorf("the GitHub App login in %s expired; %s", store.Path, relogin)
 		}
 		refreshed, err := c.Refresh(login)
-		if err != nil {
+		switch {
+		case err == nil:
+			if err := store.Write(refreshed); err != nil {
+				return Token{}, err
+			}
+			result.Login, result.Refreshed = refreshed, true
+		case IsTransient(err) && now.Add(usableWhileGitHubIsDown).Before(login.ExpiresAt):
+			result.RefreshError = err
+		default:
 			return Token{}, err
 		}
-		if err := store.Write(refreshed); err != nil {
-			return Token{}, err
-		}
-		result.Login, result.Refreshed = refreshed, true
-		check = true
-	}
-	if !check {
-		return result, nil
 	}
 	installations, err := c.Installations(result.Login.AccessToken)
 	if err != nil {
 		return Token{}, err
 	}
 	if err := CheckReadOnly(installations); err != nil {
-		return Token{}, errors.Join(err, store.Remove())
+		return Token{}, errors.Join(err, store.Remove(), errorf("stage removed the app login. Tokens already handed to "+
+			"running sandboxes stay valid at GitHub until they expire (about 8 hours, never if the app's tokens do not expire), "+
+			"and sbx may keep serving one it cached; run `stage down` on running sandboxes"))
 	}
-	result.Installations, result.Checked = installations, true
+	result.Installations = installations
 	return result, nil
 }
 
@@ -175,5 +187,5 @@ func (c *Client) Login(store Store, clientID string, prompt func(DeviceCode)) (T
 	if err := store.Write(login); err != nil {
 		return Token{}, err
 	}
-	return Token{Login: login, Installations: installations, Checked: true}, nil
+	return Token{Login: login, Installations: installations}, nil
 }

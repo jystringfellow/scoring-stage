@@ -102,6 +102,11 @@ clone, so ship anything you want to keep first.
 
    - Repository permissions: Contents, Metadata, Pull requests, Issues and Actions set to Read-only, and no
      permission set to Read and write or Admin
+   - Organization permissions: none, or Read-only
+   - Account permissions: none. stage cannot check these: they act on your own account (such as Git SSH keys or
+     email addresses) and do not appear in an installation's permissions. If one is granted, the stage kit's proxy
+     rules still refuse REST writes to `/user/**` and `/gists/**` and every PUT, PATCH and DELETE to GitHub, but
+     GraphQL mutations on your account are not refused
    - Enable Device Flow: on
    - Webhook: off
    - Expire user authorization tokens: on (recommended; stage also works without expiry)
@@ -123,14 +128,21 @@ clone, so ship anything you want to keep first.
    `~/.scoring-stage/secrets/github/app.json` (mode 600). Each sandbox gets a `github` secret whose command is
    `stage github token`, with `refresh: 30m` in its env file: sbx runs it on the host at most every 30 minutes, and
    it refreshes the access token when fewer than 40 minutes remain. The refresh token never enters the sandbox,
-   and concurrent refreshes take a lock so a rotated refresh token is not lost.
+   and concurrent refreshes take a lock so a rotated refresh token is not lost. If GitHub cannot be reached for a
+   refresh and the current token has more than 5 minutes left, `stage github token` warns and returns the current
+   token; a refused refresh token fails at once.
 
-   After login, on every refresh and on every `stage up`, stage lists the app's installations
-   (`GET /user/installations`) and refuses, removing the saved login, if any installation grants a write or admin
-   permission; the error names the account and the permission. `stage setup` and `stage github login` list the
+   On login, on every `stage github token` (so at least every 30 minutes per sandbox) and on every `stage up`,
+   stage lists the app's installations (`GET /user/installations`) and refuses, removing the saved login, if any
+   installation grants a write or admin permission; the error names the account and the permission. stage has no
+   client secret, so it cannot revoke tokens already handed out: they stay valid at GitHub until they expire, and
+   sbx may keep serving a cached one, so run `stage down` on running sandboxes. `stage setup` and `stage github login` list the
    accounts the app is installed on: a sandbox can read what the app and you can both read in all of them, so app
    mode is not limited to one owner per sandbox. If the refresh token expires or is revoked, or `app_client_id`
    changes, run `stage github login` again.
+
+   App mode has been tested only against a simulated GitHub, not yet against a registered app; in particular,
+   whether `/user/installations` reports every permission a user token carries is unverified.
 
    **gh.** stage warns on `stage setup` and every `stage up` in this mode. GraphQL lets a sandbox do anything your gh
    login can, in every repository it can write to: commit to and move or delete branches (`createCommitOnBranch`,

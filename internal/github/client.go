@@ -13,11 +13,19 @@ import (
 	"time"
 )
 
-type Error struct{ msg string }
+type Error struct {
+	msg       string
+	transient bool
+}
 
 func (e *Error) Error() string { return e.msg }
 
-func errorf(format string, args ...any) error { return &Error{fmt.Sprintf(format, args...)} }
+func IsTransient(err error) bool {
+	var githubErr *Error
+	return errors.As(err, &githubErr) && githubErr.transient
+}
+
+func errorf(format string, args ...any) error { return &Error{msg: fmt.Sprintf(format, args...)} }
 
 const relogin = "run `stage github login`"
 
@@ -31,7 +39,12 @@ type Client struct {
 
 func NewClient() *Client {
 	return &Client{
-		HTTP:   &http.Client{Timeout: 30 * time.Second},
+		HTTP: &http.Client{
+			Timeout: 30 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 		WebURL: "https://github.com",
 		APIURL: "https://api.github.com",
 		Now:    time.Now,
@@ -71,12 +84,19 @@ func (c *Client) post(path string, form url.Values, into any) error {
 func (c *Client) do(request *http.Request, into any) error {
 	response, err := c.HTTP.Do(request)
 	if err != nil {
-		return errorf("cannot reach GitHub: %v", err)
+		return &Error{msg: fmt.Sprintf("cannot reach GitHub: %v", err), transient: true}
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
 	if err != nil {
 		return errorf("cannot read GitHub's answer to %s %s: %v", request.Method, request.URL.Path, err)
+	}
+	if response.StatusCode >= 300 && response.StatusCode < 400 {
+		return errorf("GitHub answered %s %s with a redirect (%s) to %q; stage does not follow redirects",
+			request.Method, request.URL.Path, response.Status, response.Header.Get("Location"))
+	}
+	if response.StatusCode >= 500 {
+		return &Error{msg: fmt.Sprintf("GitHub answered %s %s with %s", request.Method, request.URL.Path, response.Status), transient: true}
 	}
 	if response.StatusCode == http.StatusUnauthorized {
 		return errorf("GitHub refused the app token for %s (401 Unauthorized); %s", request.URL.Path, relogin)
@@ -103,7 +123,7 @@ func oauthError(response oauthResponse) error {
 	if response.ErrorDescription != "" {
 		message += " (" + response.ErrorDescription + ")"
 	}
-	return &Error{message}
+	return &Error{msg: message}
 }
 
 func (c *Client) RequestDeviceCode(clientID string) (DeviceCode, error) {

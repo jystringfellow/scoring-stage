@@ -14,18 +14,19 @@ import (
 )
 
 type Fake struct {
-	t            *testing.T
-	mu           sync.Mutex
-	Handler      http.Handler
-	now          time.Time
-	Slept        []time.Duration
-	PollAnswers  []map[string]any
-	Polls        int
-	RefreshToken string
-	Refreshes    int
-	Permissions  map[string]map[string]string
-	AccessTokens map[string]bool
-	issued       int
+	t             *testing.T
+	mu            sync.Mutex
+	Handler       http.Handler
+	now           time.Time
+	Slept         []time.Duration
+	PollAnswers   []map[string]any
+	Polls         int
+	RefreshToken  string
+	Refreshes     int
+	RefreshStatus int
+	Permissions   map[string]map[string]string
+	AccessTokens  map[string]bool
+	issued        int
 }
 
 func NewFake(t *testing.T) *Fake {
@@ -67,6 +68,10 @@ func NewFake(t *testing.T) *Fake {
 			writeJSON(w, f.issue())
 		case "refresh_token":
 			f.Refreshes++
+			if f.RefreshStatus != 0 {
+				w.WriteHeader(f.RefreshStatus)
+				return
+			}
 			if r.FormValue("refresh_token") != f.RefreshToken {
 				writeJSON(w, map[string]any{"error": "bad_refresh_token", "error_description": "The refresh token passed is incorrect or expired."})
 				return
@@ -116,18 +121,17 @@ func writeJSON(w http.ResponseWriter, value any) {
 }
 
 func (f *Fake) Client() *github.Client {
-	return &github.Client{
-		HTTP:   &http.Client{Transport: handlerTransport{f}},
-		WebURL: "https://github.test",
-		APIURL: "https://api.github.test",
-		Now:    f.Now,
-		Sleep: func(d time.Duration) {
-			f.mu.Lock()
-			defer f.mu.Unlock()
-			f.Slept = append(f.Slept, d)
-			f.now = f.now.Add(d)
-		},
+	client := github.NewClient()
+	client.HTTP.Transport = handlerTransport{f}
+	client.WebURL, client.APIURL = "https://github.test", "https://api.github.test"
+	client.Now = f.Now
+	client.Sleep = func(d time.Duration) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.Slept = append(f.Slept, d)
+		f.now = f.now.Add(d)
 	}
+	return client
 }
 
 func (f *Fake) Now() time.Time {
