@@ -373,6 +373,15 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 	if *githubMode != "" && !slices.Contains(config.GitHubModes, *githubMode) {
 		return 0, errorf("--github must be one of %s", strings.Join(config.GitHubModes, ", "))
 	}
+	if *githubMode != "" {
+		managed, err := config.LoadManaged()
+		if err != nil {
+			return 0, err
+		}
+		if err := managed.CheckGitHubMode(*githubMode); err != nil {
+			return 0, errorf("--github: %v", err)
+		}
+	}
 	if len(agentFlags) > 0 {
 		if err := config.SaveAgents(home, agentFlags); err != nil {
 			return 0, err
@@ -652,9 +661,16 @@ func (a *App) checkGitHubAccess(settings *config.Settings, owner, gh string) err
 }
 
 func (a *App) reportGitHub(settings *config.Settings, gh string, ghLoggedIn bool) error {
-	switch settings.GitHubMode() {
-	case "":
+	mode := settings.GitHubMode()
+	if mode == "" {
 		a.warn("%s", settings.CheckGitHub("", ""))
+		return nil
+	}
+	if err := settings.Managed.CheckGitHubMode(mode); err != nil {
+		a.warn("%s; stage up will refuse", err)
+		return nil
+	}
+	switch mode {
 	case config.GitHubNone:
 		a.say("github: none (sandboxes get no GitHub credential)")
 	case config.GitHubGh:

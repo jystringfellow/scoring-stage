@@ -75,7 +75,8 @@ clone, so ship anything you want to keep first.
    you pass `--allow-global-policy`. `stage setup --yes` runs `sbx policy reset --force` and
    `sbx policy init deny-all`; that deletes every local policy and stops running sandboxes.
 2. **GitHub access (required choice).** `stage up` refuses to start until you choose how sandboxes reach GitHub,
-   with `stage setup --github MODE` or `[github] mode` in `~/.scoring-stage/config.toml`. There is no default.
+   with `stage setup --github MODE` or `[github] mode` in `~/.scoring-stage/config.toml`. There is no default,
+   unless [managed settings](#managed-settings) allow exactly one mode.
 
    | Mode | The sandbox gets | Use it when |
    | --- | --- | --- |
@@ -112,8 +113,8 @@ clone, so ship anything you want to keep first.
    **gh.** stage warns on `stage setup` and every `stage up` in this mode. GraphQL lets a sandbox do anything your gh
    login can, in every repository it can write to: commit to and move or delete branches (`createCommitOnBranch`,
    `updateRef`, `deleteRef`), open and merge pull requests, comment and change settings. In effect that is a push;
-   the proxy refuses only `git push` and REST writes. stage refuses gh mode whenever
-   [managed settings](#managed-settings) are in place.
+   the proxy refuses only `git push` and REST writes. Under [managed settings](#managed-settings), gh mode is
+   refused unless `[github] allowed_modes` lists `"gh"`.
 
    `stage up` also refuses while sbx has a global `github` secret (`sbx secret ls --global`), because any sandbox
    with a `github` binding, including one saved by an earlier sandbox, can fall back to it. Remove it with
@@ -291,7 +292,17 @@ allow_global_policy = false              # refuse stage up --allow-global-policy
 [aws]
 allowed_profiles = ["dev-*", "sandbox"]  # glob patterns a granted profile must match
 denied_profiles = ["*prod*", "*admin*"]
+
+[github]
+allowed_modes = ["fine-grained", "none"] # GitHub modes users may choose; [] allows none
 ```
+
+`[github] allowed_modes` limits the modes in `[github] mode`, and `stage setup --github` refuses any other mode
+before saving anything. A managed file without `allowed_modes` adds no constraint, so the lists of the files that do
+set it decide. When managed settings are in place but none sets `allowed_modes`, only `fine-grained` and `none` are
+allowed: an administrator has to list any other mode, such as `"gh"`, to allow it. When exactly one mode is
+allowed and the user has not chosen one, stage uses it without asking. An empty list allows no mode, so `stage up`
+refuses every sandbox.
 
 `stage setup` shows the managed settings in effect and warns about a managed file or directory that is not owned by
 root or that others can write. A managed file stage cannot read stops stage rather than being skipped. They only
