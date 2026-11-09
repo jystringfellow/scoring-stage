@@ -678,13 +678,22 @@ func TestUpRecordsTheScratchClonesGitConfig(t *testing.T) {
 
 func TestTheShipSummaryEscapesTerminalControlCharacters(t *testing.T) {
 	h, box := shippedTask(t)
-	boxCommit(t, box, "two.txt", "Harmless\x1b[2A\x1b]52;c;ZXZpbA==\x07 subject")
+	boxCommit(t, box, "two.txt", "Harmless\x1b[2A\x1b]52;c;ZXZpbA==\x07 subject \u202egnp.exe")
 	h.expect(0, "ship", "fix", "--yes")
 	out := h.stdout.String()
-	if strings.ContainsAny(out, "\x1b\x07") {
+	if strings.ContainsAny(out, "\x1b\x07\u202e") {
 		t.Fatalf("summary carries control characters: %q", out)
 	}
 	if !strings.Contains(out, `Harmless\x1b[2A\x1b]52;c;ZXZpbA==\x07 subject`) {
 		t.Errorf("summary %q lacks the escaped subject", out)
 	}
+}
+
+func TestShipRefusesAScratchCloneWhoseConfigIncludesOtherFiles(t *testing.T) {
+	h, _ := shippedTask(t)
+	scratch := filepath.Join(h.task("fix"), "src")
+	testutil.RunGit(t, scratch, "config", "include.path", "/tmp/elsewhere")
+	h.pinGitConfig("fix")
+	h.expect(1, "ship", "fix", "--yes")
+	h.expectStderr("includes other files (include.path)")
 }
