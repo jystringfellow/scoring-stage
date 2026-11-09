@@ -114,6 +114,7 @@ type Book struct {
 
 type Settings struct {
 	Home       string
+	Managed    *Managed
 	Books      []Book
 	base       any
 	agents     []any
@@ -193,9 +194,15 @@ func LoadSettings(home string) (*Settings, error) {
 	if settings.copyLogins, err = optionalStrings(data, "copy_logins", path); err != nil {
 		return nil, err
 	}
+	if settings.Managed, err = LoadManaged(); err != nil {
+		return nil, err
+	}
 	for _, agent := range settings.copyLogins {
 		if !contains(copyableAgents(), agent) {
 			return nil, errorf("%s: copy_logins: %s cannot be copied (copyable: %s); claude, codex and copilot sign in through the proxy", path, agent, strings.Join(copyableAgents(), ", "))
+		}
+		if err := settings.Managed.CheckCopyLogin(agent); err != nil {
+			return nil, errorf("%s: %v", path, err)
 		}
 	}
 	bookPaths, err := optionalStrings(data, "books", path)
@@ -359,6 +366,10 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 			if containsKit(agentKits, kit) {
 				continue
 			}
+			name, known := agentFor(kit.Source)
+			if err := settings.Managed.CheckAgent(name, known, kit.Source); err != nil {
+				return errorf("%s: %v", owner, err)
+			}
 			agentKits = append(agentKits, kit)
 			if name, known := agentFor(kit.Source); known && !contains(agentNames, name) {
 				agentNames = append(agentNames, name)
@@ -483,6 +494,11 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 	if defaultProfile == "" && len(profiles) == 1 {
 		defaultProfile = profiles[0]
 	}
+	for _, profile := range profiles {
+		if err := settings.Managed.CheckAWSProfile(profile); err != nil {
+			return nil, err
+		}
+	}
 	if defaultProfile != "" && !contains(profiles, defaultProfile) {
 		return nil, errorf("AWS default profile %s is not a granted profile (%s)", defaultProfile, strings.Join(profiles, " "))
 	}
@@ -534,6 +550,10 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 		Bindings:          bindings,
 		RepoKits:          repoKits,
 		RepoBooks:         booksOnlyTheRepoAskedFor(active, selection),
+	}
+	if settings.Managed.RepoKitsDenied() && (len(composition.RepoKits) > 0 || len(composition.RepoBooks) > 0) {
+		return nil, errorf("%s: the repository's kits and books are refused by %s (repo_kits = %q); ask for books with --book",
+			selection.Repo.Path, settings.Managed.where(), RepoKitsDeny)
 	}
 	if base != nil {
 		composition.Base = *base

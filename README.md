@@ -221,6 +221,35 @@ grants a profile from your host AWS config to that one sandbox and makes it the 
 A kit that a book adds for its own service declares a `credential@1` entry for that service; the book's `secrets`
 entry supplies the value for each sandbox, and its `bindings` entry approves it.
 
+## Managed settings
+
+An administrator can limit what every user, book and repository on a machine may choose with a managed settings
+file, much like Claude Code's `managed-settings.json`. stage reads it from:
+
+| Platform | Path |
+| --- | --- |
+| macOS | `/Library/Application Support/scoring-stage/managed.toml` |
+| Linux | `/etc/scoring-stage/managed.toml` |
+| WSL | `/etc/scoring-stage/managed.toml`, and `C:\ProgramData\scoring-stage\managed.toml` (read as `/mnt/c/ProgramData/...`) so Windows device management can supply it |
+
+stage on Windows runs inside WSL. When more than one file exists, each can only narrow the others. Every key is
+optional, and an unknown key is an error:
+
+```toml
+allowed_agents = ["claude", "copilot"]   # only these agents; agents given only as kit references are refused
+denied_agents = ["agy"]
+repo_kits = "deny"                       # "ask" (default) or "deny": refuse kits and books a repository asks for
+copy_logins = []                         # agents whose logins may be copied between sandboxes
+allow_global_policy = false              # refuse stage up --allow-global-policy
+
+[aws]
+allowed_profiles = ["dev-*", "sandbox"]  # glob patterns a granted profile must match
+denied_profiles = ["*prod*", "*admin*"]
+```
+
+`stage setup` shows the managed settings in effect. They only restrict, so they guard against mistakes and record
+policy; a user with administrator rights on the machine can still remove the file.
+
 ## Development
 
 ```

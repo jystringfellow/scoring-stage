@@ -21,6 +21,7 @@ type harness struct {
 	remote         testutil.Remote
 	stdout, stderr bytes.Buffer
 	brokerStarts   []string
+	managed        string
 	hostProfiles   []string
 }
 
@@ -31,6 +32,10 @@ func setup(t *testing.T) *harness {
 	t.Setenv("STAGE_HOME", given)
 	h.sbx = testutil.NewFakeSbx(t)
 	h.remote = testutil.GitHubRemote(t)
+	h.managed = filepath.Join(t.TempDir(), "managed.toml")
+	original := config.ManagedPaths
+	config.ManagedPaths = func() []string { return []string{h.managed} }
+	t.Cleanup(func() { config.ManagedPaths = original })
 	return h
 }
 
@@ -686,5 +691,19 @@ func TestTheShipSummaryEscapesTerminalControlCharacters(t *testing.T) {
 	}
 	if !strings.Contains(out, `Harmless\x1b[2A\x1b]52;c;ZXZpbA==\x07 subject`) {
 		t.Errorf("summary %q lacks the escaped subject", out)
+	}
+}
+
+func TestManagedSettingsCanRefuseTheGlobalPolicyOverrideAndShowInSetup(t *testing.T) {
+	h := setup(t)
+	testutil.WriteFile(t, h.managed, "allow_global_policy = false\nallowed_agents = [\"claude\"]\n")
+	h.sbx.SetPolicy(`{"rules": [{"id": "r1", "scope": "global", "decision": "allow", "resource_type": "network"}]}`)
+	h.expect(1, "up", h.remote.Checkout, "fix", "--allow-global-policy")
+	h.expectStderr("--allow-global-policy is refused by the managed settings (" + h.managed + ")")
+	h.expect(0, "setup")
+	for _, want := range []string{"managed settings: " + h.managed, "allowed agents: claude", "--allow-global-policy: refused"} {
+		if !strings.Contains(h.stdout.String(), want) {
+			t.Errorf("setup output lacks %q:\n%s", want, h.stdout.String())
+		}
 	}
 }

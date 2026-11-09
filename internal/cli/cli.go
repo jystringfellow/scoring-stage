@@ -370,6 +370,9 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	for _, line := range settings.Managed.Summary() {
+		a.say("%s", line)
+	}
 	if agentList := settings.AgentEntries(); len(agentList) > 0 {
 		a.say("agents: %s", strings.Join(agentList, ", "))
 	} else {
@@ -452,6 +455,9 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 		return 0, err
 	}
 
+	if *allowGlobal && !settings.Managed.AllowsGlobalPolicy() {
+		return 0, errorf("--allow-global-policy is refused by the managed settings (%s)", strings.Join(settings.Managed.Paths, ", "))
+	}
 	if !*plan {
 		allows, err := sbx.GlobalAllows()
 		if err != nil {
