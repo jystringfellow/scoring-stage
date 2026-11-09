@@ -202,8 +202,11 @@ each with its own egress and credentials:
 A kit reference works wherever a name does, for another agent or another version of one of these.
 
 The `github` binding (in `fine-grained`, `app` and `gh` modes), an agent's bindings and, with AWS, `stage-broker` are written to sbx's
-`~/.config/sbx/credentials.yaml`. A binding approves a service's credential on named domains, capped by what the
-kits declare. Bindings are shared by every sandbox, so `stage down` leaves them in place.
+`~/.config/sbx/credentials.yaml`. A binding only authorises a service's credential for use; it does not limit
+where the credential goes. Kits decide that: any kit in a sandbox that declares a credential for a service with a
+binding on this machine has the secret injected on the hosts the kit names, whichever config or book made the
+binding. Bindings are shared by every sandbox, so `stage down` leaves them in place and never prunes them; pruning
+one sandbox's bindings removes them for every sandbox.
 
 ## Agent logins
 
@@ -267,7 +270,7 @@ A book is a directory with a `book.toml`:
 ```toml
 name = "backend"
 agents = ["claude"]                                       # agents this book's work needs
-kits = ["./kits/toolchain", "docker.io/sbx/mise:1.0.0"]   # local kits start with ./ or ../
+kits = ["./kits/toolchain", "./kits/mise"]               # local kits only, starting with ./ or ../
 
 [aws]
 profiles = ["dev", "staging"]
@@ -291,9 +294,24 @@ of its `[[repos]]` entries matches the repository; the `[[repos]]` rules are for
 config to. `--book ./dir` also uses a book that is not installed.
 
 A book's `name` matches `^[a-z0-9][a-z0-9._-]*$`, and its `description` has no control characters. A book cannot
-set `base`, and it cannot set a secret or binding for, or ship a local kit that declares a credential for, a
-reserved service: any service an agent binds (`anthropic`, `openai`, `copilot`), `github` or `stage-broker`. Those
-come only from stage and your own config.
+set `base`. It cannot set a secret or binding for a reserved service: any service an agent binds (`anthropic`,
+`openai`, `copilot`), sbx's built-in services (such as `google`, `groq` or `xai`), `github` or `stage-broker`. It may
+bind only services it supplies a `[secrets.<service>]` for. As a further check, its bindings' domains cannot cover a
+reserved service's hosts, but binding domains do not limit where a credential goes, so this is not a boundary.
+
+Kits, not bindings, decide where a credential is injected, so the rules that matter are on kits. Books and
+repository configs may use only local kits: a published kit cannot be inspected, and a kit can send any credential
+sbx holds to any host. That includes agents given as kit references; books and repositories name agents from the
+agent table. Each credential a book's local kit declares must be one the book supplies in `[secrets.*]` and not a
+reserved service. A repository's local kits may declare no credentials at all, since a repository supplies none.
+Service names are compared in lower case without surrounding spaces, and names with control or invisible characters
+are refused. Kits that extend another kit (`extends:`), or have capabilities stage does not recognise, are refused.
+
+**This fence is not a boundary against a malicious book.** It stops a book from silently rebinding the credentials
+stage sets up, and it guards against mistakes. A book's secret commands still run on your machine with all your
+access: `[secrets.feed] command = "gh auth token"`, with the book's own kit injecting `feed` on a host the book
+controls, sends your GitHub token there. Turn on only books from protected repositories whose changes are reviewed.
+That review is the real control. See [Limitations](#limitations).
 
 A repository's `.scoring-stage/config.toml`, read from the branch the sandbox starts from:
 
@@ -305,8 +323,8 @@ kits = ["./.scoring-stage/kits/rules"]  # inside the repository; approved by you
 
 A repository is not trusted with anything that acts on the host. It can add agents by name, installed books by
 name, and its own kits, but it cannot set secrets, bindings, AWS profiles, GitHub access or the base. A book it asks
-for that you have not installed is an error. A repository's kit is either a `./` path inside the repository, with no
-symbolic links, or a published kit pinned by digest (`registry/name@sha256:...`).
+for that you have not installed is an error. A repository's kit is a `./` path inside the repository, with no
+symbolic links; published kits are refused.
 
 Kits and books can widen a sandbox's network access, send credentials and run commands, so `stage up` uses the
 kits a repository adds, and the installed books it turns on, only after you approve them. It lists each one with
@@ -324,8 +342,9 @@ is granted and nothing names one, so the `aws` CLI and SDKs work without `AWS_PR
 the granted profiles; set `default_profile` in your `[aws]` table to choose another. `stage up --aws-profile NAME`
 grants a profile from your host AWS config to that one sandbox and makes it the default, over books and your config.
 
-A kit that a book adds for its own service declares a `credential@1` entry for that service; the book's `secrets`
-entry supplies the value for each sandbox, and its `bindings` entry approves it.
+A kit that a book adds for its own service declares a `credential@1` entry for that service and names the hosts it is
+injected on; the book's `secrets` entry supplies the value for each sandbox, and its `bindings` entry authorises the
+service.
 
 ## Managed settings
 
@@ -380,6 +399,22 @@ Agent policy covers the agents stage puts in a sandbox: agents named anywhere, a
 (`sbx/*-mixin` on any registry or mirror) wherever they appear, including as plain kits. It cannot
 stop a kit's setup commands from installing an agent CLI by other means; what stops that agent from working is the
 sandbox's egress to its vendor.
+
+## Limitations
+
+- **Books run code on your host.** A book's secret commands run on your machine as you, before the sandbox exists.
+  The checks on books stop them from rebinding stage's credentials (agent, sbx built-in, GitHub and broker) and catch
+  mistakes. They cannot stop a book whose secret runs a command such as `gh auth token` and whose own kit injects
+  the result on a host the book controls. Turn on only books from protected repositories whose changes are reviewed.
+- **Any kit can send any bound credential anywhere.** A kit that declares a credential for a service with a global
+  sbx binding gets that secret injected on whatever hosts the kit names. That holds for published kits you add to
+  your own config and for Docker's agent mixins that stage pins in its agent table, which are trusted by design.
+  Add only kits you trust as much as stage itself. Books and repository configs may use only local kits, which stage
+  checks.
+- **`[bindings]` domains do not limit where a credential is injected.** A binding authorises a service; kits decide
+  the hosts. Treat the domains as documentation, not as a boundary.
+- **Do not run `sbx env rm --prune-bindings` on stage sandboxes.** Bindings are shared, and pruning one sandbox's
+  bindings removes the service's binding for the whole machine. `stage down` never passes it.
 
 ## Development
 
