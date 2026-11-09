@@ -443,6 +443,12 @@ asks sbx, git and GitHub to do, not what they then do.
   `git push` and an unlisted host are refused. Its secret checks from that run do not count; they could pass
   without looking at anything.
 
+### Checked live on GitHub
+
+- The tag-driven release workflow, on a `v0.0.0-rc.1` prerelease from `main`: both jobs ran, the archive matched
+  `SHA256SUMS`, `stage version` printed the tag, and the `gh attestation verify` command under Install passed with
+  `--signer-workflow` and `--source-ref`, while the same command with another tag's `--source-ref` failed.
+
 ### Written but not yet run live
 
 - The current `tests/acceptance.sh` as a whole. Beyond the checks above, it checks that the sandbox's writes to its
@@ -462,7 +468,6 @@ asks sbx, git and GitHub to do, not what they then do.
 - `app` mode end to end: a registered GitHub App, `stage github login`, the installation check and sbx refreshing
   the secret.
 - `stage ship` pushing to GitHub, and `--pr`.
-- The tag-driven release workflow.
 - Agent sign-ins and `copy_logins` with a real agy login.
 - Books, repository kit approval and managed settings, beyond unit tests.
 
@@ -516,7 +521,7 @@ Push a `vX.Y.Z` tag on `main` (`git tag v0.1.0 && git push origin v0.1.0`). The 
 commit that is not on `main`. A build job with read-only permissions then runs the tests, builds the four archives
 with the tag as `stage version` and writes `SHA256SUMS`. A separate release job attests the archives and creates
 the GitHub release with generated notes. A tag with a hyphen, such as `v0.1.0-rc.1`, makes a prerelease. The
-workflow has not yet run on a real tag.
+workflow ran end to end on a `v0.0.0-rc.1` prerelease, since deleted.
 
 The tag and `main` checks catch mistakes, not a malicious writer: a tag push runs `release.yml` as it exists at
 the tagged commit, so anyone who can push a tag can also change the checks. The real controls are branch
