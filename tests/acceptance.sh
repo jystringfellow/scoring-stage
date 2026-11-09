@@ -34,17 +34,88 @@ check() {
 code() { echo "curl -s -o /dev/null -w '%{http_code}' --max-time 15 $*"; }
 
 sha() { printf %s "$1" | shasum -a 256 | cut -d' ' -f1; }
+b64() { printf %s "$1" | base64 | tr -d '\n'; }
+
+read -r -d '' scan_script <<'SCAN'
+hash_lines() {
+  if command -v perl >/dev/null; then
+    perl -MDigest::SHA=sha256_hex -nle 'print sha256_hex($_)'
+  elif command -v python3 >/dev/null; then
+    python3 -c 'import hashlib,sys
+for line in sys.stdin: print(hashlib.sha256(line.rstrip("\n").encode()).hexdigest())'
+  else
+    while read -r word; do printf %s "$word" | sha256sum | cut -d' ' -f1; done
+  fi
+}
+canary="stagecanary$(od -An -tx1 -N16 /dev/urandom 2>/dev/null | tr -dc '0-9a-f')${RANDOM}${RANDOM}${RANDOM}$$"
+canary_file="/tmp/stage-scan-canary.$$"
+printf '%s\n' "$canary" >"$canary_file" 2>/dev/null
+export STAGE_SCAN_CANARY="$canary"
+printf 'canary %s\n' "$(printf '%s\n' "$canary" | hash_lines)"
+{
+  env
+  cat /proc/[0-9]*/environ /proc/[0-9]*/cmdline 2>/dev/null | tr '\0' '\n'
+  echo
+  cat ~/.aws/config 2>/dev/null
+  echo
+  grep -rIhoE '[A-Za-z0-9+/=_-]{20,}' --exclude-dir=ssl --exclude-dir=ca-certificates \
+    /home/agent "$REPO_DIR" /etc /tmp 2>/dev/null
+  if command -v strings >/dev/null; then
+    find /home/agent "$REPO_DIR" -type f -size -64M -exec grep -IL . {} + 2>/dev/null |
+      while read -r binary; do strings -n 20 "$binary"; done
+  fi
+} | grep -oE '[A-Za-z0-9+/=_-]{20,}' | awk '{
+  print
+  n = split($0, words, /[^A-Za-z0-9_]+/)
+  for (i = 1; i <= n; i++) if (length(words[i]) >= 20) print words[i]
+  rest = $0
+  sub(/^[\/-]+/, "", rest)
+  if (rest != $0 && length(rest) >= 20) print rest
+  while (match(rest, /=[^=]/)) {
+    rest = substr(rest, RSTART + 1)
+    sub(/^[\/-]+/, "", rest)
+    if (length(rest) >= 20) print rest
+  }
+}' | sort -u | hash_lines | awk '{ print } END { print "scanned " NR }'
+rm -f "$canary_file"
+SCAN
 
 sandbox_hashes() {
-  box "{ env; cat ~/.aws/config 2>/dev/null; grep -rIhoE '[A-Za-z0-9_]{20,}' /home/agent /etc /tmp 2>/dev/null; } |
-    grep -oE '[A-Za-z0-9_]{20,}' | sort -u | while read -r word; do printf %s \"\$word\" | sha256sum | cut -d' ' -f1; done"
+  box "REPO_DIR=$(printf %q "$repo_dir"); $scan_script"
+}
+
+scan_sandbox() {
+  local output canary_hash scanned
+  output="$(sandbox_hashes 2>/dev/null)"
+  hashes="$(printf '%s\n' "$output" | grep -E '^[0-9a-f]{64}$')"
+  canary_hash="$(printf '%s\n' "$output" | sed -n 's/^canary \([0-9a-f]\{64\}\)$/\1/p' | head -1)"
+  scanned="$(printf '%s\n' "$output" | sed -n 's/^scanned \([0-9][0-9]*\)$/\1/p' | tail -1)"
+  scan_ok=0
+  if [ -z "$scanned" ]; then
+    echo "FAIL the sandbox scan for token-like strings did not finish"
+  elif [ "$scanned" -eq 0 ]; then
+    echo "FAIL the sandbox scan for token-like strings found nothing to hash"
+  elif [ -z "$canary_hash" ]; then
+    echo "FAIL the sandbox scan for token-like strings planted no canary"
+  elif ! printf '%s\n' "$hashes" | grep -qxF "$canary_hash"; then
+    echo "FAIL the sandbox scan for token-like strings missed its own canary"
+  else
+    scan_ok=1
+    echo "ok   the sandbox scan hashed $scanned token-like strings and found its canary"
+    return
+  fi
+  failures=$((failures + 1))
 }
 
 secret_absent() {
   local name="$1" secret="$2"
   if [ -z "$secret" ]; then
     echo "skip $name (no such secret on the host)"
-  elif ! printf '%s\n' "$hashes" | grep -qx "$(sha "$secret")"; then
+  elif [ "$scan_ok" != 1 ]; then
+    echo "FAIL $name (the sandbox scan is not trustworthy)"
+    failures=$((failures + 1))
+  elif ! printf '%s\n' "$hashes" | grep -qxF -e "$(sha "$secret")" -e "$(sha "$(b64 "$secret")")" \
+    -e "$(sha "$(b64 "x-access-token:$secret")")" -e "$(sha "$(b64 ":$secret")")"; then
     echo "ok   $name"
   else
     echo "FAIL $name"
@@ -77,26 +148,22 @@ else
 fi
 box "rm -f .git/$marker; git config --unset core.fsmonitor" >/dev/null 2>&1
 check "the task directory and its task.json are not visible to the sandbox" "test ! -e ../task.json && test ! -e ../sbxenv.yaml"
-if box "test -d /run/sandbox/source" >/dev/null 2>&1; then
-  check "the host source mount is read-only" "! touch /run/sandbox/source/.git/$marker 2>/dev/null"
-else
-  echo "skip the host source mount is read-only (no source mount in this sandbox)"
-fi
+case "$(box "if test -d /run/sandbox/source; then echo present; else echo absent; fi" 2>/dev/null)" in
+  present) check "the host source mount is read-only" "! touch /run/sandbox/source/.git/$marker 2>/dev/null" ;;
+  absent) echo "skip the host source mount is read-only (no source mount in this sandbox)" ;;
+  *) echo "FAIL could not check the host source mount"; failures=$((failures + 1)) ;;
+esac
 
-if hashes="$(sandbox_hashes)" && [ -n "$hashes" ]; then
-  secret_absent "the host gh login token is nowhere in the sandbox" "$(gh auth token 2>/dev/null)"
-  for token_path in "$home"/secrets/github/*.token; do
-    [ -f "$token_path" ] && secret_absent "the GitHub token $(basename "$token_path") is nowhere in the sandbox" "$(tr -d '[:space:]' <"$token_path")"
-  done
-  if [ -f "$home/secrets/github/app.json" ]; then
-    secret_absent "the GitHub App refresh token is nowhere in the sandbox" "$(jq -r '.refresh_token // empty' "$home/secrets/github/app.json")"
-    secret_absent "the current GitHub App access token is nowhere in the sandbox" "$(jq -r '.access_token // empty' "$home/secrets/github/app.json")"
-  fi
-  [ -s "$token_file" ] && secret_absent "the broker token is nowhere in the sandbox" "$(cat "$token_file")"
-else
-  echo "FAIL could not list token-like strings in the sandbox"
-  failures=$((failures + 1))
+scan_sandbox
+secret_absent "the host gh login token is nowhere in the sandbox" "$(gh auth token 2>/dev/null)"
+for token_path in "$home"/secrets/github/*.token; do
+  [ -f "$token_path" ] && secret_absent "the GitHub token $(basename "$token_path") is nowhere in the sandbox" "$(tr -d '[:space:]' <"$token_path")"
+done
+if [ -f "$home/secrets/github/app.json" ]; then
+  secret_absent "the GitHub App refresh token is nowhere in the sandbox" "$(jq -r '.refresh_token // empty' "$home/secrets/github/app.json")"
+  secret_absent "the current GitHub App access token is nowhere in the sandbox" "$(jq -r '.access_token // empty' "$home/secrets/github/app.json")"
 fi
+[ -s "$token_file" ] && secret_absent "the broker token is nowhere in the sandbox" "$(cat "$token_file")"
 
 if [ -n "$granted" ]; then
   check "aws config routes $granted through the broker" \
