@@ -280,6 +280,17 @@ func TestUpWarnsButContinuesWhenGitHubAcceptsATokenWhoseExpiryReadsAsPast(t *tes
 	}
 }
 
+func TestUpDoesNotCallATokenAcceptedWhenGitHubAnsweredAnErrorWithAPastExpiry(t *testing.T) {
+	h := setup(t)
+	h.github.answer(http.StatusForbidden, expiryIn(-time.Hour))
+	h.expect(0, "up", h.remote.Checkout, "fix")
+	h.expectStderr("GitHub answered 403 for the token for acme, and its expiry header (")
+	h.expectStderr("run `stage token set acme`")
+	if strings.Contains(h.stderr.String(), "GitHub accepted") {
+		t.Errorf("said GitHub accepted a token it answered 403 for: %s", h.stderr.String())
+	}
+}
+
 func TestUpContinuesWhenGitHubIsUnreachable(t *testing.T) {
 	h := setup(t)
 	h.github.transport.Unreachable()

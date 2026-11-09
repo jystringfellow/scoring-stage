@@ -163,8 +163,11 @@ func (a *App) reportTokenExpiry(owner string, status config.GitHubTokenStatus, n
 	switch {
 	case status.ExpiryProblem != "":
 		a.warn("%s", status.ExpiryProblem)
-	case status.ExpiredAt(now):
+	case status.ExpiredAt(now) && status.StatusCode >= 200 && status.StatusCode < 300:
 		a.warn("GitHub accepted the token for %s, but its expiry header (%s) reads as past; check this machine's clock", owner, status.ExpiryHeader)
+	case status.ExpiredAt(now):
+		a.warn("GitHub answered %d for the token for %s, and its expiry header (%s) reads as past; if the token has expired, create a new one "+
+			"and run `stage token set %s`, otherwise check this machine's clock", status.StatusCode, owner, status.ExpiryHeader, owner)
 	case status.ExpiresSoon(now):
 		a.warn("the GitHub token for %s expires %s; create a new one and run `stage token set %s`", owner, describeExpiry(status.Expires, now), owner)
 	case !verbose:
