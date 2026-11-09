@@ -423,13 +423,15 @@ func TestFnmatchStarsCrossSlashes(t *testing.T) {
 
 func TestBookSecretCommandsCanNameTheBookDirectory(t *testing.T) {
 	dir := t.TempDir()
-	path := book(t, dir, "org with space", `
+	path := filepath.Join(dir, "org with space")
+	testutil.WriteFile(t, filepath.Join(path, "book.toml"), dedent(`
+		name = "org"
 		[secrets.ado]
 		command = "python3 -I {book}/host/ado.py"
 
 		[bindings.ado]
 		apiKey = { domains = ["pkgs.dev.azure.com"] }
-	`)
+	`))
 	settings, selection := withBooks(t, filepath.Join(dir, "home"), path)
 	composition := composeWith(t, settings, selection)
 	want := map[string]any{"command": "python3 -I '" + Resolve(path) + "'/host/ado.py"}
@@ -444,12 +446,9 @@ func TestBookSecretCommandsCanNameTheBookDirectory(t *testing.T) {
 func TestTwoBooksDisagreeingIsAnErrorRatherThanASilentWinner(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
-	first := book(t, dir, "one", "base = \"docker.io/org/base:1\"\n[aws]\nregion = \"us-west-2\"\n")
-	second := book(t, dir, "two", "base = \"docker.io/org/base:2\"\n")
+	first := book(t, dir, "one", "[aws]\nregion = \"us-west-2\"\n")
 	third := book(t, dir, "three", "[aws]\nregion = \"eu-west-1\"\n")
-	_, err := Compose(load(t, home), Selection{Books: []string{first, second}})
-	expectError(t, err, "book two sets base docker.io/org/base:2, but book one set")
-	_, err = Compose(load(t, home), Selection{Books: []string{first, third}})
+	_, err := Compose(load(t, home), Selection{Books: []string{first, third}})
 	expectError(t, err, "AWS region eu-west-1")
 }
 
@@ -469,7 +468,7 @@ func TestBooksAgreeingOnASecretIsFineButDifferingIsAnError(t *testing.T) {
 func TestUserConfigOverridesBooksAndListsBooks(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
-	path := book(t, dir, "org", "base = \"docker.io/org/base:1\"\n[aws]\nprofiles = [\"dev\"]\nregion = \"us-west-2\"\n[[repos]]\nmatch = \"api\"\n")
+	path := book(t, dir, "org", "[aws]\nprofiles = [\"dev\"]\nregion = \"us-west-2\"\n[[repos]]\nmatch = \"api\"\n")
 	testutil.WriteFile(t, filepath.Join(home, "config.toml"), dedent(`
 		books = ["`+path+`"]
 		base = "docker.io/me/base:9"

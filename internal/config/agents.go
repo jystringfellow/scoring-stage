@@ -125,3 +125,26 @@ func copyableAgents() []string {
 	}
 	return names
 }
+
+func reservedServices() []string {
+	reserved := map[string]bool{"copilot": true, GitHubService: true, BrokerService: true}
+	for _, spec := range agents {
+		for service := range spec.bindings {
+			reserved[service] = true
+		}
+	}
+	names := make([]string, 0, len(reserved))
+	for service := range reserved {
+		names = append(names, service)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func isReservedService(service string) bool {
+	return contains(reservedServices(), strings.ToLower(strings.TrimSpace(service)))
+}
+
+func reservedReason() string {
+	return "books cannot touch the credentials of agents, GitHub or the stage broker (reserved: " + strings.Join(reservedServices(), ", ") + ")"
+}

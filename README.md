@@ -38,7 +38,7 @@ stage setup --agent claude --agent codex  # save the agents you use; check sbx, 
 stage up ~/Code/api fix-login        # sandbox stage-fix-login on a scratch clone of ~/Code/api
 stage up ~/Code/api fix-login --agent agy --book dotnet  # add an agent or an installed book for one box
 stage up ~/Code/api fix-login --aws-profile staging    # grant an AWS profile to one box and make it the default
-stage up ~/Code/api fix-login --plan # write the env file and show sbx's plan without creating
+stage up ~/Code/api fix-login --plan # write the env file and show sbx's plan without creating (stops first if approvals are missing)
 stage shell fix-login                # login shell in the repository; run claude, codex or copilot
 stage exec fix-login -- git log -1
 stage ship fix-login [--pr]          # review and push the sandbox's HEAD to agent/fix-login/<sha> from the host
@@ -241,7 +241,7 @@ in its `.scoring-stage/config.toml`.
 
 ```toml
 agents = ["claude", "codex"]                       # the agents you use; names or kit references
-books = ["~/Code/my-org-books/backend"]            # installed books; each applies only when asked for
+books = ["~/Code/my-org-books/backend"]            # installed books, relative to ~/.scoring-stage; each applies only when asked for
 base = "docker.io/sbx/shell:1.1.0"                 # the workload kit
 kits = ["./kits/personal"]                         # extra kits, relative to ~/.scoring-stage
 
@@ -290,6 +290,11 @@ An installed book applies to a sandbox when the repository's config names it, wh
 of its `[[repos]]` entries matches the repository; the `[[repos]]` rules are for repositories you cannot add a
 config to. `--book ./dir` also uses a book that is not installed.
 
+A book's `name` matches `^[a-z0-9][a-z0-9._-]*$`, and its `description` has no control characters. A book cannot
+set `base`, and it cannot set a secret or binding for, or ship a local kit that declares a credential for, a
+reserved service: any service an agent binds (`anthropic`, `openai`, `copilot`), `github` or `stage-broker`. Those
+come only from stage and your own config.
+
 A repository's `.scoring-stage/config.toml`, read from the branch the sandbox starts from:
 
 ```toml
@@ -307,10 +312,10 @@ Kits and books can widen a sandbox's network access, send credentials and run co
 kits a repository adds, and the installed books it turns on, only after you approve them. It lists each one with
 what it does (network rules, credentials, host commands, AWS profiles) and asks. Without a terminal, pass
 `--approve-repo-config` after reviewing them. An approval covers that exact content (a local kit's files, a published
-kit's digest and arguments, a book's files) and is kept in `~/.scoring-stage/trusted-kits`, so a change asks
-again. A book you ask for yourself, with `--book` or a `[[repos]]` rule, needs no approval.
+kit's digest and arguments, a book's files) and is kept in `~/.scoring-stage/trusted-kits`, one JSON object per
+line, so a change asks again. `stage up --plan` lists what needs approving and stops before writing the env file. A book you ask for yourself, with `--book` or a `[[repos]]` rule, needs no approval.
 
-Books and both configs are decoded strictly: an unknown key is an error. Two books that set the same base,
+Books and both configs are decoded strictly: an unknown key is an error. Two books that set the same
 region, AWS default profile, secret or binding differently are an error rather than a silent winner. Your config
 overrides books.
 

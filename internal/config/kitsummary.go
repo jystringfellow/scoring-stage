@@ -19,12 +19,8 @@ type kitSpec struct {
 
 // SummarizeKit describes what a local kit's capabilities do, for a person deciding whether to approve it.
 func SummarizeKit(dir string) []string {
-	files, _ := filepath.Glob(filepath.Join(dir, "*.yaml"))
-	more, _ := filepath.Glob(filepath.Join(dir, "*.yml"))
-	files = append(files, more...)
-	sort.Strings(files)
 	var details []string
-	for _, file := range files {
+	for _, file := range kitFiles(dir) {
 		content, err := os.ReadFile(file)
 		if err != nil {
 			continue
@@ -41,12 +37,58 @@ func SummarizeKit(dir string) []string {
 	if len(details) == 0 {
 		details = append(details, "no capabilities found; read the kit's files before approving")
 	}
+	for i, detail := range details {
+		details[i] = Printable(detail)
+	}
 	return details
 }
 
-func describeCapability(kind string, config map[string]any) []string {
+func kitFiles(dir string) []string {
+	files, _ := filepath.Glob(filepath.Join(dir, "*.yaml"))
+	more, _ := filepath.Glob(filepath.Join(dir, "*.yml"))
+	files = append(files, more...)
+	sort.Strings(files)
+	return files
+}
+
+func capabilityName(kind string) string {
 	name := kind[strings.LastIndex(kind, "/")+1:]
 	name, _, _ = strings.Cut(name, "@")
+	return name
+}
+
+func refuseReservedKitCredentials(dir, owner string) error {
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return nil
+	}
+	for _, file := range kitFiles(dir) {
+		content, err := os.ReadFile(file)
+		if err != nil {
+			return errorf("%s: kit %s: cannot read %s: %v", owner, dir, filepath.Base(file), err)
+		}
+		var spec kitSpec
+		if err := yaml.Unmarshal(content, &spec); err != nil {
+			return errorf("%s: kit %s: %s is unreadable: %v", owner, dir, filepath.Base(file), err)
+		}
+		for _, capability := range spec.Capabilities {
+			if capabilityName(capability.Type) != "credential" {
+				continue
+			}
+			service, ok := capability.Config["service"].(string)
+			if !ok {
+				return errorf("%s: kit %s declares a credential without a service name in %s", owner, dir, filepath.Base(file))
+			}
+			if isReservedService(service) {
+				return errorf("%s: kit %s declares credential %s, which is reserved; %s", owner, dir, Printable(service), reservedReason())
+			}
+		}
+	}
+	return nil
+}
+
+func describeCapability(kind string, config map[string]any) []string {
+	name := capabilityName(kind)
 	switch name {
 	case "network-policy":
 		var details []string

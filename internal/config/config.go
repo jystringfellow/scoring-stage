@@ -103,7 +103,6 @@ type repo struct {
 type Book struct {
 	Name     string
 	Path     string
-	base     any
 	agents   []any
 	kits     []any
 	aws      aws
@@ -218,7 +217,7 @@ func LoadSettings(home string) (*Settings, error) {
 	}
 	installed := map[string]string{}
 	for _, bookPath := range bookPaths {
-		book, err := LoadBook(ExpandUser(bookPath))
+		book, err := LoadBook(bookDirectory(home, bookPath))
 		if err != nil {
 			return nil, err
 		}
@@ -230,6 +229,16 @@ func LoadSettings(home string) (*Settings, error) {
 	}
 	return settings, nil
 }
+
+func bookDirectory(home, entry string) string {
+	path := ExpandUser(entry)
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(home, path)
+	}
+	return path
+}
+
+var bookName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
 func LoadBook(path string) (*Book, error) {
 	path = Resolve(path)
@@ -251,7 +260,23 @@ func LoadBook(path string) (*Book, error) {
 	if name == "" {
 		return nil, errorf("%s: name is required", manifest)
 	}
-	book := &Book{Name: name, Path: path, base: data["base"]}
+	if !bookName.MatchString(name) {
+		return nil, errorf("%s: book name %q must match %s", manifest, Printable(name), bookName)
+	}
+	owner := "book " + name
+	if HasControl(path) {
+		return nil, errorf("%s: the book's directory %q contains control characters", owner, Printable(path))
+	}
+	if description, present := data["description"]; present {
+		text, ok := description.(string)
+		if !ok || HasControl(text) {
+			return nil, errorf("%s (%s): description must be a string without control characters", owner, manifest)
+		}
+	}
+	if _, present := data["base"]; present {
+		return nil, errorf("%s (%s): books cannot set base; set base in config.toml", owner, manifest)
+	}
+	book := &Book{Name: name, Path: path}
 	if book.agents, err = optionalList(data, "agents", manifest); err != nil {
 		return nil, err
 	}
@@ -268,6 +293,9 @@ func LoadBook(path string) (*Book, error) {
 		return nil, err
 	}
 	if err := refuseGitHubService(book.secrets, book.bindings, manifest); err != nil {
+		return nil, err
+	}
+	if err := refuseReservedServices(book.secrets, book.bindings, owner+" ("+manifest+")"); err != nil {
 		return nil, err
 	}
 	repos, ok := asList(data["repos"])
@@ -307,7 +335,47 @@ func LoadBook(path string) (*Book, error) {
 		}
 		book.repos = append(book.repos, r)
 	}
+	if err := refuseReservedBookKits(book, owner); err != nil {
+		return nil, err
+	}
 	return book, nil
+}
+
+func refuseReservedServices(secrets, bindings map[string]any, owner string) error {
+	for _, service := range sortedKeys(secrets) {
+		if isReservedService(service) {
+			return errorf("%s: secret %s is reserved; %s", owner, Printable(service), reservedReason())
+		}
+	}
+	for _, service := range sortedKeys(bindings) {
+		if isReservedService(service) {
+			return errorf("%s: binding %s is reserved; %s", owner, Printable(service), reservedReason())
+		}
+	}
+	return nil
+}
+
+func refuseReservedBookKits(book *Book, owner string) error {
+	entries := append(append([]any{}, book.kits...), book.agents...)
+	for _, r := range book.repos {
+		entries = append(append(entries, r.kits...), r.agents...)
+	}
+	for _, entry := range entries {
+		if name, ok := entry.(string); ok && looksLikeName(name) {
+			continue
+		}
+		kit, err := parseKit(entry, book.Path, owner)
+		if err != nil {
+			return err
+		}
+		if !kit.IsLocal() {
+			continue
+		}
+		if err := refuseReservedKitCredentials(kit.Source, owner); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Selection is what one sandbox asks for beyond the user's own settings.
@@ -327,7 +395,7 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 		return nil, err
 	}
 	var base *Kit
-	var baseOwner, region, regionOwner, defaultProfile, defaultProfileOwner string
+	var region, regionOwner, defaultProfile, defaultProfileOwner string
 	var agentKits, bookKits, repoKits, userKits []Kit
 	var profiles, agentNames []string
 	secrets := map[string]any{}
@@ -394,16 +462,6 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 	}
 	for _, book := range active {
 		owner := "book " + book.Name
-		if book.base != nil {
-			candidate, err := parseKit(book.base, book.Path, owner)
-			if err != nil {
-				return nil, err
-			}
-			if base != nil && !candidate.Equal(*base) {
-				return nil, errorf("%s sets base %s, but %s set %s", owner, candidate.Source, baseOwner, base.Source)
-			}
-			base, baseOwner = &candidate, owner
-		}
 		if err := addAgents(book.agents, book.Path, owner); err != nil {
 			return nil, err
 		}
