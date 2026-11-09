@@ -60,11 +60,22 @@ clone, so ship anything you want to keep first.
    default "balanced" lists) widens every sandbox. `stage up` refuses to run while global allow rules exist unless
    you pass `--allow-global-policy`. `stage setup --yes` runs `sbx policy reset --force` and
    `sbx policy init deny-all`; that deletes every local policy and stops running sandboxes.
-2. **GitHub token (recommended).** Without one, sandboxes use the global sbx `github` secret, which is usually your
-   full `gh` token: the agent cannot read it, but it can use it. To limit that, create a fine-grained read-only
-   token (Contents, Metadata and Pull requests: read) and save it as
-   `~/.scoring-stage/secrets/github-readonly-token` (mode 600). Pushes are refused at the proxy either way, but only
-   a read-only token stops API writes such as comments or merges.
+2. **GitHub token (required).** `stage up` refuses to start until
+   `~/.scoring-stage/secrets/github-readonly-token` (mode 600) holds a single fine-grained personal access token
+   (`github_pat_...`). stage checks only that the token is fine-grained; it cannot see the token's permissions, so
+   making it read-only is up to you. Limit it to the repositories you work on and give it only Contents: read and
+   Metadata: read (add Pull requests: read if agents should read pull requests). A read-only token can still read
+   every repository it is scoped to, so keep that list short. gh login tokens (`gho_`), classic tokens (`ghp_`) and
+   GitHub App tokens are refused. To give sandboxes no GitHub credential at all, set `github = "none"` in
+   `~/.scoring-stage/config.toml`.
+
+   `stage up` also refuses while sbx has a global `github` secret (`sbx secret ls --global`), because any sandbox
+   with a `github` binding, including one saved by an earlier sandbox, can fall back to it. Remove it with
+   `sbx secret rm github -f`. Your config and books cannot bind any credential to GitHub's hosts.
+
+   The proxy refuses `git push`, PUT, PATCH and DELETE to GitHub, and POST to the API's repository, user,
+   organization, gist and webhook-subscription endpoints. GraphQL writes share `POST /graphql` with reads, so only
+   the token's own permissions stop those.
 3. **Agent logins.** See [Agent logins](#agent-logins).
 
 ## What a sandbox gets
@@ -74,7 +85,7 @@ Nothing you did not choose. Every sandbox gets:
 | Kit | Purpose |
 | --- | --- |
 | `docker.io/sbx/shell` | Debian base with git, gh, curl, jq, Python and Docker |
-| [`kits/stage`](kits/stage/stage.yaml) | Refuses `POST /**/git-receive-pack` on ports 443 and 80 of every host, sets your git identity, tells the agent the rules |
+| [`kits/stage`](kits/stage/stage.yaml) | Refuses `POST /**/git-receive-pack` on ports 443 and 80 of every host and GitHub REST writes, sets your git identity, tells the agent the rules |
 | [`kits/aws-broker`](kits/aws-broker/aws-broker.yaml) | Only when AWS profiles are configured: `~/.aws/config` with a `credential_process` per profile, plus `[default]` when a default profile applies |
 
 plus the agents chosen by your config, the repository, a book or `--agent`. Agents are Docker's published mixins,
@@ -84,12 +95,12 @@ each with its own egress and credentials:
 | --- | --- | --- |
 | `claude` | `docker.io/sbx/claude-mixin` | `anthropic` (OAuth) |
 | `codex` | `docker.io/sbx/codex-mixin` | `openai` (OAuth) |
-| `copilot` | `docker.io/sbx/copilot-mixin` | `copilot`, from `gh auth token` |
+| `copilot` | `docker.io/sbx/copilot-mixin` | `copilot`, from `gh auth token`, sent only to Copilot's API hosts |
 | `agy` | `docker.io/sbx/antigravity-mixin` | none; see [Agent logins](#agent-logins) |
 
 A kit reference works wherever a name does, for another agent or another version of one of these.
 
-The `github` binding, an agent's bindings and, with AWS, `stage-broker` are written to sbx's
+The `github` binding (when a token is set), an agent's bindings and, with AWS, `stage-broker` are written to sbx's
 `~/.config/sbx/credentials.yaml`. A binding approves a service's credential on named domains, capped by what the
 kits declare. Bindings are shared by every sandbox, so `stage down` leaves them in place.
 
@@ -129,6 +140,7 @@ in its `.scoring-stage/config.toml`.
 
 ```toml
 agents = ["claude", "codex"]                       # the agents you use; names or kit references
+github = "readonly-token"                          # or "none": sandboxes get no GitHub credential
 books = ["~/Code/my-org-books/backend"]            # installed books; each applies only when asked for
 base = "docker.io/sbx/shell:1.1.0"                 # the workload kit
 kits = ["./kits/personal"]                         # extra kits, relative to ~/.scoring-stage
