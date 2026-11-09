@@ -650,10 +650,12 @@ func PRBody(slug, sha, footer string) string {
 }
 
 func (a *App) cmdShip(args []string, home string) (int, error) {
-	fs := a.newFlags("ship", "<slug> [--ref R] [--branch B] [--pr]")
+	fs := a.newFlags("ship", "<slug> [--ref R] [--branch B] [--pr] [--yes] [--allow-protected-paths]")
 	ref := fs.String("ref", "HEAD", "sandbox ref to ship")
 	branchFlag := fs.String("branch", "", "branch to push (default: agent/<slug>/<sha>)")
 	pr := fs.Bool("pr", false, "open a draft pull request")
+	yes := fs.Bool("yes", false, "push without asking, after reviewing the summary")
+	allowProtected := fs.Bool("allow-protected-paths", false, "ship changes to CI, workflow or sandbox config files")
 	positional, err := fs.parse(args, "slug")
 	if err != nil {
 		return 0, err
@@ -685,7 +687,10 @@ func (a *App) cmdShip(args []string, home string) (int, error) {
 	if _, err := source.Git(repo, "check-ref-format", "refs/heads/"+branch); err != nil {
 		return 0, err
 	}
-	if err := source.GitInteractive(repo, "push", "origin", sha+":refs/heads/"+branch); err != nil {
+	if err := a.reviewShipment(repo, sha, branch, task.GitHubRepo, *yes, *allowProtected); err != nil {
+		return 0, err
+	}
+	if err := source.GitInteractive(repo, "push", "https://github.com/"+task.GitHubRepo+".git", sha+":refs/heads/"+branch); err != nil {
 		return 0, err
 	}
 	a.say("pushed %s to %s %s", sha[:min(8, len(sha))], task.GitHubRepo, branch)
@@ -706,6 +711,82 @@ func (a *App) cmdShip(args []string, home string) (int, error) {
 		return 0, exitCode(code)
 	}
 	return 0, err
+}
+
+// protectedPaths are files whose changes run with the repository's secrets in
+// CI or widen future sandboxes, so ship refuses them unless told otherwise.
+var protectedPaths = []string{
+	".github/", ".azure-pipelines/", ".pipelines/", ".circleci/", ".buildkite/", ".gitlab-ci.yml", "Jenkinsfile",
+	".scoring-stage/", ".gitmodules",
+}
+
+func isProtected(path string) bool {
+	base := filepath.Base(path)
+	if strings.HasPrefix(base, "azure-pipelines") && (strings.HasSuffix(base, ".yml") || strings.HasSuffix(base, ".yaml")) {
+		return true
+	}
+	for _, protected := range protectedPaths {
+		if path == protected || (strings.HasSuffix(protected, "/") && strings.HasPrefix(path, protected)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *App) reviewShipment(repo, sha, branch, github string, yes, allowProtected bool) error {
+	base, err := source.Git(repo, "merge-base", "HEAD", sha)
+	if err != nil {
+		return err
+	}
+	if base == sha {
+		return errorf("nothing to ship: %s has no commits beyond the sandbox's starting point", sha[:min(8, len(sha))])
+	}
+	commits, err := source.Git(repo, "log", "--no-decorate", "--format=%h %s", base+".."+sha)
+	if err != nil {
+		return err
+	}
+	stat, err := source.Git(repo, "diff", "--no-ext-diff", "--no-textconv", "--stat", base, sha)
+	if err != nil {
+		return err
+	}
+	names, err := source.Git(repo, "diff", "--no-ext-diff", "--name-only", "-z", base, sha)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(a.Stdout, "stage: shipping to %s %s:\n%s\n%s\n", github, branch, indent(commits), indent(stat))
+	var protected []string
+	for _, name := range strings.Split(names, "\x00") {
+		if name != "" && isProtected(name) {
+			protected = append(protected, name)
+		}
+	}
+	if len(protected) > 0 {
+		if !allowProtected {
+			return errorf("refusing to ship changes to CI, workflow or sandbox config files: %s. These run with the "+
+				"repository's secrets or widen future sandboxes; review them and pass --allow-protected-paths to ship them",
+				strings.Join(protected, ", "))
+		}
+		a.warn("shipping changes to protected files: %s", strings.Join(protected, ", "))
+	}
+	unattributed, err := source.Git(repo, "log", "--no-decorate", "--format=%h", "--invert-grep", "-i", "--grep=^co-authored-by:", base+".."+sha)
+	if err != nil {
+		return err
+	}
+	if unattributed != "" {
+		a.warn("commits without a Co-authored-by trailer naming the agent: %s", strings.Join(strings.Fields(unattributed), " "))
+	}
+	if yes || a.confirm("Push these commits?") {
+		return nil
+	}
+	return errorf("not shipped; rerun with --yes to push without asking")
+}
+
+func indent(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		lines[i] = "  " + line
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (a *App) cmdList(args []string, home string) (int, error) {

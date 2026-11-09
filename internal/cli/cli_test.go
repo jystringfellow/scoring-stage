@@ -304,7 +304,7 @@ func shippedTask(t *testing.T) (*harness, string) {
 func TestShipPushesTheSandboxHeadToAnAgentBranch(t *testing.T) {
 	h, box := shippedTask(t)
 	sha := testutil.RunGit(t, box, "rev-parse", "HEAD")
-	h.expect(0, "ship", "fix")
+	h.expect(0, "ship", "fix", "--yes")
 	branch := "agent/fix/" + sha[:8]
 	if pushed := testutil.RunGit(t, h.remote.Bare, "rev-parse", branch); pushed != sha {
 		t.Errorf("pushed %s, want %s", pushed, sha)
@@ -565,4 +565,70 @@ func TestARepositoryKitNeedsApprovalUntilItChanges(t *testing.T) {
 	h.commitToMain(map[string]string{".scoring-stage/kits/rules/kit.yaml": "allow: [\"**\"]\n"})
 	h.expect(1, "up", h.remote.Checkout, "four")
 	h.expectStderr("adds kits you have not approved")
+}
+
+func boxCommit(t *testing.T, box, path, message string) {
+	t.Helper()
+	testutil.WriteFile(t, filepath.Join(box, path), "agent work\n")
+	testutil.RunGit(t, box, "add", ".")
+	testutil.RunGit(t, box, "commit", "-q", "-m", message)
+}
+
+func TestShipShowsWhatItWillPushAndWaitsForAYes(t *testing.T) {
+	h, box := shippedTask(t)
+	sha := testutil.RunGit(t, box, "rev-parse", "HEAD")
+	h.expect(1, "ship", "fix")
+	for _, want := range []string{"shipping to acme/api agent/fix/" + sha[:8], "Fix the login redirect", "change.txt | 1 +"} {
+		if !strings.Contains(h.stdout.String(), want) {
+			t.Errorf("stdout lacks %q:\n%s", want, h.stdout.String())
+		}
+	}
+	h.expectStderr("not shipped; rerun with --yes")
+	if out := testutil.RunGit(t, h.remote.Bare, "branch", "--list", "agent/*"); out != "" {
+		t.Fatalf("pushed without a yes: %s", out)
+	}
+}
+
+func TestShipRefusesProtectedPathsUnlessAllowed(t *testing.T) {
+	for _, path := range []string{".github/workflows/ci.yml", "azure-pipelines.yml", "build/azure-pipelines-pr.yaml", ".scoring-stage/config.toml", "Jenkinsfile"} {
+		h, box := shippedTask(t)
+		boxCommit(t, box, path, "Touch "+path)
+		h.expect(1, "ship", "fix", "--yes")
+		h.expectStderr("refusing to ship changes to CI, workflow or sandbox config files: " + path)
+		h.expect(0, "ship", "fix", "--yes", "--allow-protected-paths")
+		h.expectStderr("shipping changes to protected files: " + path)
+	}
+}
+
+func TestShipWarnsAboutCommitsWithoutAnAgentTrailer(t *testing.T) {
+	h, box := shippedTask(t)
+	boxCommit(t, box, "two.txt", "Second change\n\nCo-authored-by: Claude <noreply@anthropic.com>")
+	h.expect(0, "ship", "fix", "--yes")
+	first := testutil.RunGit(t, box, "rev-parse", "--short", "HEAD~1")
+	h.expectStderr("commits without a Co-authored-by trailer naming the agent: " + first)
+	if second := testutil.RunGit(t, box, "rev-parse", "--short", "HEAD"); strings.Contains(h.stderr.String(), second) {
+		t.Errorf("warned about the attributed commit %s", second)
+	}
+}
+
+func TestShipRefusesWhenTheSandboxHasNothingNew(t *testing.T) {
+	h, box := shippedTask(t)
+	testutil.RunGit(t, box, "reset", "-q", "--hard", "HEAD~1")
+	h.expect(1, "ship", "fix", "--yes")
+	h.expectStderr("nothing to ship")
+}
+
+func TestHostGitIgnoresHooksAndFsmonitorInTheScratchClone(t *testing.T) {
+	h, _ := shippedTask(t)
+	scratch := filepath.Join(h.task("fix"), "src")
+	marker := filepath.Join(t.TempDir(), "ran")
+	hook := testutil.WriteFile(t, filepath.Join(scratch, ".git", "hooks", "pre-push"), "#!/bin/sh\ntouch "+marker+"\n")
+	if err := os.Chmod(hook, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	testutil.RunGit(t, scratch, "config", "core.fsmonitor", "touch "+marker+"; false")
+	h.expect(0, "ship", "fix", "--yes")
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("host git ran a command from the scratch clone's config")
+	}
 }

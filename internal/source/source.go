@@ -27,8 +27,17 @@ func GitInteractive(repo string, args ...string) error {
 	return err
 }
 
+// hardened keeps git on the host from running anything a repository's own
+// config names, in case a sandbox ever writes to a scratch clone's .git.
+var hardened = []string{
+	"-c", "core.hooksPath=/dev/null",
+	"-c", "core.fsmonitor=false",
+	"-c", "core.pager=cat",
+	"-c", "protocol.ext.allow=never",
+}
+
 func git(capture bool, repo string, args []string) (string, error) {
-	command := exec.Command("git", append([]string{"-C", repo}, args...)...)
+	command := exec.Command("git", append(append(append([]string{}, hardened...), "-C", repo), args...)...)
 	command.Stdin = os.Stdin
 	var stdout, stderr bytes.Buffer
 	if capture {

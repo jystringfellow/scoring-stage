@@ -41,13 +41,20 @@ stage up ~/Code/api fix-login --aws-profile staging    # grant an AWS profile to
 stage up ~/Code/api fix-login --plan # write the env file and show sbx's plan without creating
 stage shell fix-login                # login shell in the repository; run claude, codex or copilot
 stage exec fix-login -- git log -1
-stage ship fix-login [--pr]          # push the sandbox's HEAD to agent/fix-login/<sha> from the host
+stage ship fix-login [--pr]          # review and push the sandbox's HEAD to agent/fix-login/<sha> from the host
 stage list
 stage login fix-login                # save the sandbox's agy login for future sandboxes (copy_logins)
 stage down fix-login                 # remove the sandbox, its scoped secrets and the scratch clone
 stage broker start|stop|status       # the AWS broker (up starts it when a sandbox needs it)
 stage broker serve                   # run the broker in the foreground
 ```
+
+`stage ship` shows the commits and a diffstat and asks before pushing (`--yes` skips the question). It refuses
+changes to CI and workflow files (`.github/`, Azure Pipelines, GitLab, Jenkins, CircleCI, Buildkite), `.gitmodules`
+and `.scoring-stage/` unless you pass `--allow-protected-paths`: CI runs a pushed branch's workflow files with the
+repository's secrets, and `.scoring-stage/` widens future sandboxes. It warns about commits without a
+`Co-authored-by` trailer, since commits carry your git identity. Git on the host runs with hooks and fsmonitor
+off, so nothing in the scratch clone's `.git` runs on your machine.
 
 `stage up` clones the repository to `~/.scoring-stage/tasks/<slug>/src`, writes an
 [sbx environment file](https://docs.docker.com/ai/sandboxes/configuration/environment-files/) next to it and runs

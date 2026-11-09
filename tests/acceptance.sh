@@ -43,6 +43,18 @@ check "a real git push fails" "! git push -q origin HEAD:refs/heads/stage-accept
 check "unlisted hosts are refused" "test \"\$($(code https://example.org/))\" = 403"
 check "GH_TOKEN is a placeholder, not the host token" "test \"\${GH_TOKEN:-}\" != '$(gh auth token 2>/dev/null)'"
 
+marker="stage-acceptance-$$"
+box "touch .git/$marker; git config core.fsmonitor 'touch /tmp/$marker'" >/dev/null 2>&1
+if [ ! -e "$repo_dir/.git/$marker" ] && ! git -C "$repo_dir" config --local --get core.fsmonitor >/dev/null; then
+  echo "ok   the sandbox cannot write the host scratch clone's .git"
+else
+  echo "FAIL the sandbox cannot write the host scratch clone's .git"
+  rm -f "$repo_dir/.git/$marker"
+  git -C "$repo_dir" config --local --unset core.fsmonitor 2>/dev/null
+  failures=$((failures + 1))
+fi
+box "rm -f .git/$marker; git config --unset core.fsmonitor" >/dev/null 2>&1
+
 if [ -n "$granted" ]; then
   check "aws config routes $granted through the broker" \
     "grep -q 'credential_process = /home/agent/.local/bin/stage-aws-credentials $granted' ~/.aws/config"
