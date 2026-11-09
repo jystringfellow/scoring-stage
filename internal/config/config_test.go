@@ -219,6 +219,21 @@ func TestAnOwnerNameCannotLeaveTheTokenDirectory(t *testing.T) {
 	expectError(t, load(t, home).CheckGitHub("jdoe_acme", ""), "no GitHub token for jdoe_acme")
 }
 
+func TestATokenFileIsFoundWhateverItsASCIICaseButNotThroughUnicodeFolding(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), fineGrained)
+	settings := load(t, home)
+	dir := settings.GitHubTokenDir()
+	writeToken(t, filepath.Join(dir, "Globex.token"), "github_pat_globex\n")
+	if got := settings.GitHubTokenFile("globex"); testutil.ReadFile(t, got) != "github_pat_globex\n" {
+		t.Errorf("GitHubTokenFile(globex) = %s", got)
+	}
+	writeToken(t, filepath.Join(dir, "Kite.token"), "github_pat_kite\n")
+	if got := settings.GitHubTokenFile("kite"); filepath.Base(got) != "kite.token" {
+		t.Errorf("GitHubTokenFile(kite) followed Unicode folding: %s", got)
+	}
+}
+
 func writeToken(t *testing.T, path, token string) string {
 	t.Helper()
 	testutil.WriteFile(t, path, token)
@@ -240,7 +255,7 @@ func TestATokenFileOthersCanReadIsRefusedAndNeverBound(t *testing.T) {
 }
 
 func TestNoConfigOrBookBindingMaySendACredentialToGitHub(t *testing.T) {
-	for _, domain := range []string{"github.com", "api.github.com:443", "*.github.com", "**", "uploads.github.com", "gist.github.com", "github.com.", "models.github.ai"} {
+	for _, domain := range []string{"github.com", "api.github.com:443", "*.github.com", "**", "uploads.github.com", "gist.github.com", "github.com.", "models.github.ai", "*.com", "**.com", "*hub.com", "api.*", "*.githubusercontent.com", "*.ai", "*.github.ai:443", "githu?.com", "git[h]ub.com", "{github,x}.com"} {
 		home := filepath.Join(t.TempDir(), "home")
 		testutil.WriteFile(t, filepath.Join(home, "config.toml"), "[bindings.gh2]\napiKey = { domains = [\""+domain+"\"] }\n")
 		_, err := LoadSettings(home)
@@ -867,5 +882,21 @@ func TestOnlyAgentsWithAnInSandboxLoginCanBeCopied(t *testing.T) {
 func TestTheBrokerBindingCoversOnlyTheBrokerPort(t *testing.T) {
 	if got := brokerBinding(); !reflect.DeepEqual(got, map[string]any{"apiKey": map[string]any{"domains": []any{"localhost:9911"}}}) {
 		t.Fatalf("broker binding %v", got)
+	}
+}
+
+func TestWildcardBindingsThatCannotMatchAGitHubHostAreAllowed(t *testing.T) {
+	for _, domain := range []string{"*.amazonaws.com", "*.githubcopilot.com", "api.*.example.org", "copilot.github.com"} {
+		if ReachesGitHub(domain) {
+			t.Errorf("%s was treated as reaching GitHub", domain)
+		}
+	}
+}
+
+func TestBindingDomainsWithGlobCharactersOtherThanAStarAreTreatedAsReachingGitHub(t *testing.T) {
+	for _, domain := range []string{"githu?.com", "git[h]ub.com", "{github,x}.com", `github\.com`, "example.org?"} {
+		if !ReachesGitHub(domain) {
+			t.Errorf("%s was not treated as reaching GitHub", domain)
+		}
 	}
 }

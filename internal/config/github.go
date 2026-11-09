@@ -71,7 +71,31 @@ func (s *Settings) GitHubMode() string {
 func (s *Settings) GitHubTokenDir() string { return filepath.Join(s.Home, "secrets", "github") }
 
 func (s *Settings) GitHubTokenFile(owner string) string {
-	return filepath.Join(s.GitHubTokenDir(), strings.ToLower(owner)+gitHubTokenSuffix)
+	name := strings.ToLower(owner) + gitHubTokenSuffix
+	file := filepath.Join(s.GitHubTokenDir(), name)
+	if _, err := os.Lstat(file); err == nil {
+		return file
+	}
+	entries, _ := os.ReadDir(s.GitHubTokenDir())
+	var matches []string
+	for _, entry := range entries {
+		if isASCII(entry.Name()) && strings.ToLower(entry.Name()) == name {
+			matches = append(matches, entry.Name())
+		}
+	}
+	if len(matches) == 1 {
+		return filepath.Join(s.GitHubTokenDir(), matches[0])
+	}
+	return file
+}
+
+func isASCII(text string) bool {
+	for i := 0; i < len(text); i++ {
+		if text[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Settings) LegacyGitHubToken() string {

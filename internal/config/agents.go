@@ -192,6 +192,9 @@ func hostReaches(host, target string) bool {
 
 func reachesAny(domain string, targets []string) bool {
 	host := normalizeHost(domain)
+	if strings.ContainsAny(host, `?[]{}\`) {
+		return true
+	}
 	for _, target := range targets {
 		if hostReaches(host, target) {
 			return true
