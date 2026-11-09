@@ -425,10 +425,14 @@ asks sbx, git and GitHub to do, not what they then do.
   `.git` do not reach the host scratch clone, that the task directory is hidden, and that the host source mount is
   read-only (skipped when sbx adds none). Given an AWS profile, it checks that the broker serves that profile and
   refuses another. It has no CI.
-- The acceptance script's secret scan. The sandbox reports hashes of the token-like strings it finds in its
-  environment, its processes' environments, its home directory, `/etc`, `/tmp` and the repository, and the host
-  compares them with the hashes of its own secrets. A canary planted in the sandbox before the scan proves the scan
-  ran: if the canary's hash is missing, the run fails.
+- The acceptance script's secret scan, which has run only in a local harness. As the sandbox's own user, the
+  sandbox hashes the token-like words in its environment, the environments and command lines of processes that user
+  can see (not root's or the proxy's), its home directory, `/tmp`, the repository and its git history, the strings in
+  binary files under the home directory and repository, and `/etc`. The host checks those hashes against its secrets, as written and base64-encoded.
+- The scan plants a canary in the environment, the home directory, the repository, `/tmp` and a binary file, and
+  adds an end marker. A missing canary fails the run and names where it was missing. `/etc` cannot hold a canary, so
+  its coverage is unproven. Matching is by whole token-like word, so a base64 token sitting at an offset inside a
+  longer blob is not found.
 - The GitHub REST write refusals in the stage kit (the same deny mechanism as the push refusal).
 - `fine-grained` token checks and `stage token set` against GitHub itself.
 - `app` mode end to end: a registered GitHub App, `stage github login`, the installation check and sbx refreshing
