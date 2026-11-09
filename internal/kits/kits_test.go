@@ -3,6 +3,7 @@ package kits
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	scoringstage "github.com/jystringfellow/scoring-stage"
@@ -43,5 +44,21 @@ func TestExtractWritesTheKitsToAContentHashedDirectoryOnce(t *testing.T) {
 	entries, _ := os.ReadDir(filepath.Join(home, "kits"))
 	if len(entries) != 1 {
 		t.Fatalf("staging directories left behind: %v", entries)
+	}
+}
+
+func TestTheBrokerKitReachesOnlyTheBrokerPort(t *testing.T) {
+	content, err := scoringstage.Kits.ReadFile("kits/aws-broker/aws-broker.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(content), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "- localhost" || strings.Contains(trimmed, "domain: localhost,") {
+			t.Errorf("aws-broker.yaml reaches every localhost port: %q", trimmed)
+		}
+	}
+	if !strings.Contains(string(content), "- localhost:9911") || !strings.Contains(string(content), `domain: "localhost:9911"`) {
+		t.Error("aws-broker.yaml does not allow and inject on localhost:9911")
 	}
 }

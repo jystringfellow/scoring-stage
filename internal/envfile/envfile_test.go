@@ -20,7 +20,7 @@ func composition(root string) *config.Composition {
 		AWSProfiles: []string{"dev"},
 		AWSRegion:   "us-east-1",
 		Secrets:     map[string]any{"stage-broker": map[string]any{"command": "/bin/cat /t"}},
-		Bindings:    map[string]any{"stage-broker": map[string]any{"apiKey": map[string]any{"domains": []any{"localhost"}}}},
+		Bindings:    map[string]any{"stage-broker": map[string]any{"apiKey": map[string]any{"domains": []any{"localhost:9911"}}}},
 	}
 }
 
@@ -70,7 +70,7 @@ bindings:
   stage-broker:
     apiKey:
       domains:
-        - "localhost"
+        - "localhost:9911"
 `
 	if got := dump(t, env); got != want {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)

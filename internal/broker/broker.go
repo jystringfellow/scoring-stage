@@ -102,11 +102,41 @@ func (s *CredentialSource) CredentialProcess(profile string, granted map[string]
 			return nil, &Error{http.StatusBadGateway, profile + ": aws cli returned incomplete credentials"}
 		}
 	}
+	if err := checkTemporary(credentials, now()); err != nil {
+		return nil, &Error{http.StatusForbidden, profile + ": " + err.Error()}
+	}
 	var compact bytes.Buffer
 	if err := json.Compact(&compact, []byte(result.Stdout)); err != nil {
 		return nil, &Error{http.StatusBadGateway, profile + ": aws cli returned invalid JSON"}
 	}
 	return compact.Bytes(), nil
+}
+
+var now = time.Now
+
+// MaxLifetime is the longest a credential may stay valid when the broker
+// hands it to a sandbox: an SSO or assumed-role session's 12-hour maximum,
+// plus a few minutes for clock skew.
+const MaxLifetime = 12*time.Hour + 5*time.Minute
+
+func checkTemporary(credentials map[string]any, at time.Time) error {
+	keyID, _ := credentials["AccessKeyId"].(string)
+	token, _ := credentials["SessionToken"].(string)
+	expiration, _ := credentials["Expiration"].(string)
+	if !strings.HasPrefix(keyID, "ASIA") || token == "" || expiration == "" {
+		return errors.New("long-lived keys are not served to sandboxes; use an SSO or assumed-role profile, whose credentials expire")
+	}
+	expires, err := time.Parse(time.RFC3339, expiration)
+	if err != nil {
+		return fmt.Errorf("credentials have an unreadable Expiration %q", expiration)
+	}
+	if !expires.After(at) {
+		return errors.New("credentials have expired; refresh the profile's login on the host")
+	}
+	if expires.Sub(at) > MaxLifetime {
+		return fmt.Errorf("credentials stay valid for %s, longer than the %s the broker serves; use a shorter session", expires.Sub(at).Round(time.Minute), MaxLifetime)
+	}
+	return nil
 }
 
 func lastLine(text string) string {

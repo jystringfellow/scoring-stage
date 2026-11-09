@@ -250,7 +250,7 @@ func TestAWSProfilesAddTheBrokerKitAndBinding(t *testing.T) {
 	if !brokerKit.Equal(want) {
 		t.Errorf("broker kit = %v", brokerKit)
 	}
-	if got := composition.Bindings[BrokerService]; !reflect.DeepEqual(got, map[string]any{"apiKey": map[string]any{"domains": []any{"localhost"}}}) {
+	if got := composition.Bindings[BrokerService]; !reflect.DeepEqual(got, map[string]any{"apiKey": map[string]any{"domains": []any{"localhost:9911"}}}) {
 		t.Errorf("binding = %v", got)
 	}
 }
@@ -674,4 +674,10 @@ func TestOnlyAgentsWithAnInSandboxLoginCanBeCopied(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(repoDir, RepoConfigPath), "copy_logins = [\"agy\"]\n")
 	_, err = LoadRepoConfig(repoDir)
 	expectError(t, err, "a repository cannot set copy_logins")
+}
+
+func TestTheBrokerBindingCoversOnlyTheBrokerPort(t *testing.T) {
+	if got := brokerBinding(); !reflect.DeepEqual(got, map[string]any{"apiKey": map[string]any{"domains": []any{"localhost:9911"}}}) {
+		t.Fatalf("broker binding %v", got)
+	}
 }

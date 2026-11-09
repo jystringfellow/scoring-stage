@@ -27,7 +27,7 @@ const (
 )
 
 func brokerBinding() map[string]any {
-	return domains("apiKey", "localhost")
+	return domains("apiKey", "localhost:9911")
 }
 
 func domains(kind string, hosts ...string) map[string]any {
