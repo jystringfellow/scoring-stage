@@ -24,12 +24,34 @@ macOS or Linux with `sbx` 0.51.0 or later (signed in), `git`, and optionally `gh
 
 ## Install
 
+`stage` is a single binary: the core kits are embedded in it and extracted to `~/.scoring-stage/kits/<content
+hash>/` the first time `stage up` needs them. On Windows, install and run the Linux binary inside WSL.
+
+**From a release.** [Releases](https://github.com/jystringfellow/scoring-stage/releases) carry a tar.gz for
+`darwin_amd64`, `darwin_arm64`, `linux_amd64` and `linux_arm64`, each holding `stage`, `LICENSE` and `README.md`,
+plus a `SHA256SUMS` file. Download with curl rather than a browser, so macOS does not quarantine the binary:
+
+```sh
+version=v0.0.1
+asset="stage_${version}_$(uname -s | tr A-Z a-z)_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
+base="https://github.com/jystringfellow/scoring-stage/releases/download/$version"
+curl -fsSLO "$base/$asset.tar.gz" -O "$base/SHA256SUMS"
+grep " $asset.tar.gz\$" SHA256SUMS | shasum -a 256 -c -    # or sha256sum -c -
+gh attestation verify "$asset.tar.gz" --repo jystringfellow/scoring-stage
+tar -xzf "$asset.tar.gz" && install -m 755 "$asset/stage" ~/.local/bin/stage
+```
+
+Each archive has a [build provenance attestation](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations)
+from the release workflow; `gh attestation verify` checks that a GitHub Actions workflow in this repository
+built the archive, and prints the workflow and commit it was built from.
+
+**With Go** (1.26 or later):
+
 ```
 go install github.com/jystringfellow/scoring-stage/cmd/stage@latest
 ```
 
-or, from a clone, `go build -o bin/stage ./cmd/stage`. `stage` is a single binary: the core kits are embedded in it
-and extracted to `~/.scoring-stage/kits/<content hash>/` the first time `stage up` needs them.
+or, from a clone, `go build -o bin/stage ./cmd/stage`. `stage version` prints the version.
 
 ## Use
 
@@ -384,6 +406,13 @@ tests/acceptance.sh <slug> [granted] [other] # checks a live sandbox made with s
 ```
 
 [docs/design.md](docs/design.md) records why the tool is shaped this way and what was verified on sbx.
+
+### Releasing
+
+Push a `vX.Y.Z` tag on `main` (`git tag v0.1.0 && git push origin v0.1.0`). The release workflow
+(`.github/workflows/release.yml`) runs the tests, builds the four archives with the tag as `stage version`, attests
+them, writes `SHA256SUMS` and creates the GitHub release with generated notes. A tag with a hyphen, such as
+`v0.1.0-rc.1`, makes a prerelease.
 
 ## License
 
