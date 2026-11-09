@@ -819,6 +819,10 @@ func checkGitConfig(task *Task) error {
 	if err != nil {
 		return err
 	}
+	includes, _ := source.Git(task.RepoDir, "config", "--local", "--name-only", "--get-regexp", `^include(if\..*)?\.path$`)
+	if includes != "" {
+		return errorf("the git config in %s includes other files (%s); refusing to run git there", task.RepoDir, strings.Join(strings.Fields(includes), ", "))
+	}
 	if current != task.GitConfig {
 		return errorf("the git config in %s changed after stage up created the sandbox; refusing to run git there. "+
 			"Inspect %s and recreate the task", task.RepoDir, filepath.Join(task.RepoDir, ".git"))
@@ -834,7 +838,7 @@ func printable(text string) string {
 		switch {
 		case r == '\n':
 			out.WriteRune(r)
-		case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f:
+		case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f, r >= 0x200b && r <= 0x200f, r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069, r == 0xfeff:
 			fmt.Fprintf(&out, "\\x%02x", r)
 		default:
 			out.WriteRune(r)
