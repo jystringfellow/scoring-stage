@@ -445,9 +445,10 @@ asks sbx, git and GitHub to do, not what they then do.
 
 ### Checked live on GitHub
 
-- The tag-driven release workflow, on a `v0.0.0-rc.1` prerelease from `main`: both jobs ran, the archive matched
-  `SHA256SUMS`, `stage version` printed the tag, and the `gh attestation verify` command under Install passed with
+- The tag-driven release workflow, on a `v0.0.0-rc.1` prerelease from `main`: both jobs ran, the darwin/arm64 archive
+  matched `SHA256SUMS`, `stage version` printed the tag, and the `gh attestation verify` command under Install passed with
   `--signer-workflow` and `--source-ref`, while the same command with another tag's `--source-ref` failed.
+  Only the success path ran; the refusals of a malformed tag and of a commit not on `main` were not exercised live.
 
 ### Written but not yet run live
 
