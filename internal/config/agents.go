@@ -1,6 +1,7 @@
 package config
 
 import (
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -82,12 +83,33 @@ func agentFor(source string) (string, bool) {
 	return "", false
 }
 
+// repositoryOf normalises a kit reference to registry/path without tag or
+// digest, so docker.io's aliases and letter case name the same repository.
 func repositoryOf(source string) string {
+	source = strings.ToLower(source)
 	slash := strings.LastIndex(source, "/")
 	head, last := source[:slash+1], source[slash+1:]
 	last, _, _ = strings.Cut(last, "@")
 	last, _, _ = strings.Cut(last, ":")
-	return head + last
+	repository := head + last
+	first, rest, nested := strings.Cut(repository, "/")
+	switch {
+	case !nested:
+		return "docker.io/library/" + repository
+	case first == "index.docker.io", first == "registry-1.docker.io":
+		return "docker.io/" + rest
+	case !strings.ContainsAny(first, ".:") && first != "localhost":
+		return "docker.io/" + repository
+	}
+	return repository
+}
+
+var mixinRepository = regexp.MustCompile(`(^|/)sbx/[^/]+-mixin$`)
+
+// looksLikeAgentMixin reports a reference to one of Docker's agent mixins,
+// known to stage or not.
+func looksLikeAgentMixin(source string) bool {
+	return mixinRepository.MatchString(repositoryOf(source))
 }
 
 func LoginFiles(agent string) []LoginFile {

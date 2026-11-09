@@ -10,6 +10,7 @@ import (
 
 	"github.com/jystringfellow/scoring-stage/internal/config"
 	"github.com/jystringfellow/scoring-stage/internal/kits"
+	"github.com/jystringfellow/scoring-stage/internal/source"
 	"github.com/jystringfellow/scoring-stage/internal/testutil"
 )
 
@@ -20,6 +21,7 @@ type harness struct {
 	remote         testutil.Remote
 	stdout, stderr bytes.Buffer
 	brokerStarts   []string
+	managed        string
 	hostProfiles   []string
 }
 
@@ -30,6 +32,10 @@ func setup(t *testing.T) *harness {
 	t.Setenv("STAGE_HOME", given)
 	h.sbx = testutil.NewFakeSbx(t)
 	h.remote = testutil.GitHubRemote(t)
+	h.managed = filepath.Join(t.TempDir(), "managed.toml")
+	original := config.ManagedPaths
+	config.ManagedPaths = func() []string { return []string{h.managed} }
+	t.Cleanup(func() { config.ManagedPaths = original })
 	writeToken(t, filepath.Join(given, "secrets", "github-readonly-token"), "github_pat_readonly\n")
 	return h
 }
@@ -307,13 +313,30 @@ func shippedTask(t *testing.T) (*harness, string) {
 	testutil.RunGit(t, box, "add", ".")
 	testutil.RunGit(t, box, "commit", "-q", "-m", "Fix the login redirect")
 	testutil.RunGit(t, filepath.Join(h.task("fix"), "src"), "remote", "add", "sandbox-stage-fix", box)
+	h.pinGitConfig("fix")
 	return h, box
+}
+
+// pinGitConfig records the scratch clone's config as sbx leaves it, with the
+// sandbox remote that the fake sbx does not add itself.
+func (h *harness) pinGitConfig(slug string) {
+	h.t.Helper()
+	task, err := loadTask(h.home, slug)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	if task.GitConfig, err = source.ConfigFingerprint(task.RepoDir); err != nil {
+		h.t.Fatal(err)
+	}
+	if err := writeTask(*task, h.task(slug)); err != nil {
+		h.t.Fatal(err)
+	}
 }
 
 func TestShipPushesTheSandboxHeadToAnAgentBranch(t *testing.T) {
 	h, box := shippedTask(t)
 	sha := testutil.RunGit(t, box, "rev-parse", "HEAD")
-	h.expect(0, "ship", "fix")
+	h.expect(0, "ship", "fix", "--yes")
 	branch := "agent/fix/" + sha[:8]
 	if pushed := testutil.RunGit(t, h.remote.Bare, "rev-parse", branch); pushed != sha {
 		t.Errorf("pushed %s, want %s", pushed, sha)
@@ -544,6 +567,164 @@ func TestTheTaskRecordsItsAgents(t *testing.T) {
 	if strings.Join(task.Agents, " ") != "agy claude" {
 		t.Fatalf("agents = %v", task.Agents)
 	}
+}
+
+func (h *harness) commitToMain(files map[string]string) {
+	h.t.Helper()
+	for path, content := range files {
+		testutil.WriteFile(h.t, filepath.Join(h.remote.Checkout, path), content)
+	}
+	testutil.RunGit(h.t, h.remote.Checkout, "add", ".")
+	testutil.RunGit(h.t, h.remote.Checkout, "commit", "-q", "-m", "Change the repository")
+	testutil.RunGit(h.t, h.remote.Checkout, "push", "-q", "https://github.com/acme/api.git", "HEAD:main")
+}
+
+func TestARepositoryKitNeedsApprovalUntilItChanges(t *testing.T) {
+	h := setup(t)
+	h.commitToMain(map[string]string{
+		".scoring-stage/config.toml":         "kits = [\"./.scoring-stage/kits/rules\"]\n",
+		".scoring-stage/kits/rules/kit.yaml": "allow: [example.com]\n",
+	})
+	h.expect(1, "up", h.remote.Checkout, "one")
+	h.expectStderr("asks for kits or books you have not approved")
+	h.expectStderr("not approved; review them")
+	if h.anyCall("env create") {
+		t.Fatal("created a sandbox with an unapproved repository kit")
+	}
+
+	h.expect(0, "up", h.remote.Checkout, "two", "--approve-repo-config")
+	h.expect(0, "up", h.remote.Checkout, "three")
+
+	h.commitToMain(map[string]string{".scoring-stage/kits/rules/kit.yaml": "allow: [\"**\"]\n"})
+	h.expect(1, "up", h.remote.Checkout, "four")
+	h.expectStderr("asks for kits or books you have not approved")
+}
+
+func boxCommit(t *testing.T, box, path, message string) {
+	t.Helper()
+	testutil.WriteFile(t, filepath.Join(box, path), "agent work\n")
+	testutil.RunGit(t, box, "add", ".")
+	testutil.RunGit(t, box, "commit", "-q", "-m", message)
+}
+
+func TestShipShowsWhatItWillPushAndWaitsForAYes(t *testing.T) {
+	h, box := shippedTask(t)
+	sha := testutil.RunGit(t, box, "rev-parse", "HEAD")
+	h.expect(1, "ship", "fix")
+	for _, want := range []string{"shipping to acme/api agent/fix/" + sha[:8], "Fix the login redirect", "change.txt | 1 +"} {
+		if !strings.Contains(h.stdout.String(), want) {
+			t.Errorf("stdout lacks %q:\n%s", want, h.stdout.String())
+		}
+	}
+	h.expectStderr("not shipped; rerun with --yes")
+	if out := testutil.RunGit(t, h.remote.Bare, "branch", "--list", "agent/*"); out != "" {
+		t.Fatalf("pushed without a yes: %s", out)
+	}
+}
+
+func TestShipRefusesProtectedPathsUnlessAllowed(t *testing.T) {
+	for _, path := range []string{".github/workflows/ci.yml", "azure-pipelines.yml", "build/azure-pipelines-pr.yaml", ".scoring-stage/config.toml", "Jenkinsfile", ".vscode/tasks.json", ".devcontainer/devcontainer.json", ".envrc"} {
+		h, box := shippedTask(t)
+		boxCommit(t, box, path, "Touch "+path)
+		h.expect(1, "ship", "fix", "--yes")
+		h.expectStderr("refusing to ship changes to CI, workflow or sandbox config files: " + path)
+		h.expect(0, "ship", "fix", "--yes", "--allow-protected-paths")
+		h.expectStderr("shipping changes to protected files: " + path)
+	}
+}
+
+func TestShipWarnsAboutCommitsWithoutAnAgentTrailer(t *testing.T) {
+	h, box := shippedTask(t)
+	boxCommit(t, box, "two.txt", "Second change\n\nCo-authored-by: Claude <noreply@anthropic.com>")
+	h.expect(0, "ship", "fix", "--yes")
+	first := testutil.RunGit(t, box, "rev-parse", "--short", "HEAD~1")
+	h.expectStderr("commits without a Co-authored-by trailer naming the agent: " + first)
+	if second := testutil.RunGit(t, box, "rev-parse", "--short", "HEAD"); strings.Contains(h.stderr.String(), second) {
+		t.Errorf("warned about the attributed commit %s", second)
+	}
+}
+
+func TestShipRefusesWhenTheSandboxHasNothingNew(t *testing.T) {
+	h, box := shippedTask(t)
+	testutil.RunGit(t, box, "reset", "-q", "--hard", "HEAD~1")
+	h.expect(1, "ship", "fix", "--yes")
+	h.expectStderr("nothing to ship")
+}
+
+func TestHostGitIgnoresHooksAndFsmonitorInTheScratchClone(t *testing.T) {
+	h, _ := shippedTask(t)
+	scratch := filepath.Join(h.task("fix"), "src")
+	marker := filepath.Join(t.TempDir(), "ran")
+	hook := testutil.WriteFile(t, filepath.Join(scratch, ".git", "hooks", "pre-push"), "#!/bin/sh\ntouch "+marker+"\n")
+	if err := os.Chmod(hook, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	testutil.RunGit(t, scratch, "config", "core.fsmonitor", "touch "+marker+"; false")
+	h.pinGitConfig("fix")
+	h.expect(0, "ship", "fix", "--yes")
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("host git ran a command from the scratch clone's config")
+	}
+}
+
+func TestShipRefusesAScratchCloneWhoseGitConfigChanged(t *testing.T) {
+	h, _ := shippedTask(t)
+	scratch := filepath.Join(h.task("fix"), "src")
+	testutil.RunGit(t, scratch, "config", "url.ssh://evil/.insteadOf", "https://github.com/")
+	h.expect(1, "ship", "fix", "--yes")
+	h.expectStderr("the git config in " + scratch + " changed after stage up")
+	if out := testutil.RunGit(t, h.remote.Bare, "branch", "--list", "agent/*"); out != "" {
+		t.Fatalf("pushed from a changed clone: %s", out)
+	}
+}
+
+func TestUpRecordsTheScratchClonesGitConfig(t *testing.T) {
+	h := setup(t)
+	h.expect(0, "up", h.remote.Checkout, "fix")
+	task, err := loadTask(h.home, "fix")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := source.ConfigFingerprint(task.RepoDir)
+	if task.GitConfig == "" || task.GitConfig != want {
+		t.Fatalf("git_config %q, want %q", task.GitConfig, want)
+	}
+}
+
+func TestTheShipSummaryEscapesTerminalControlCharacters(t *testing.T) {
+	h, box := shippedTask(t)
+	boxCommit(t, box, "two.txt", "Harmless\x1b[2A\x1b]52;c;ZXZpbA==\x07 subject \u202egnp.exe")
+	h.expect(0, "ship", "fix", "--yes")
+	out := h.stdout.String()
+	if strings.ContainsAny(out, "\x1b\x07\u202e") {
+		t.Fatalf("summary carries control characters: %q", out)
+	}
+	if !strings.Contains(out, `Harmless\x1b[2A\x1b]52;c;ZXZpbA==\x07 subject`) {
+		t.Errorf("summary %q lacks the escaped subject", out)
+	}
+}
+
+func TestManagedSettingsCanRefuseTheGlobalPolicyOverrideAndShowInSetup(t *testing.T) {
+	h := setup(t)
+	testutil.WriteFile(t, h.managed, "allow_global_policy = false\nallowed_agents = [\"claude\"]\n")
+	h.sbx.SetPolicy(`{"rules": [{"id": "r1", "scope": "global", "decision": "allow", "resource_type": "network"}]}`)
+	h.expect(1, "up", h.remote.Checkout, "fix", "--allow-global-policy")
+	h.expectStderr("--allow-global-policy is refused by the managed settings (" + h.managed + ")")
+	h.expect(0, "setup")
+	for _, want := range []string{"managed settings: " + h.managed, "allowed agents: claude", "--allow-global-policy: refused"} {
+		if !strings.Contains(h.stdout.String(), want) {
+			t.Errorf("setup output lacks %q:\n%s", want, h.stdout.String())
+		}
+	}
+}
+
+func TestShipRefusesAScratchCloneWhoseConfigIncludesOtherFiles(t *testing.T) {
+	h, _ := shippedTask(t)
+	scratch := filepath.Join(h.task("fix"), "src")
+	testutil.RunGit(t, scratch, "config", "include.path", "/tmp/elsewhere")
+	h.pinGitConfig("fix")
+	h.expect(1, "ship", "fix", "--yes")
+	h.expectStderr("includes other files (include.path)")
 }
 
 func TestUpRefusesToStartWithoutAReadOnlyGitHubToken(t *testing.T) {

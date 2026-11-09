@@ -43,6 +43,24 @@ check "a real git push fails" "! git push -q origin HEAD:refs/heads/stage-accept
 check "unlisted hosts are refused" "test \"\$($(code https://example.org/))\" = 403"
 check "GH_TOKEN is a placeholder, not the host token" "test \"\${GH_TOKEN:-}\" != '$(gh auth token 2>/dev/null)'"
 
+marker="stage-acceptance-$$"
+if box "touch .git/$marker && test -e .git/$marker && git config core.fsmonitor 'touch /tmp/$marker'" >/dev/null 2>&1; then
+  if [ ! -e "$repo_dir/.git/$marker" ] && ! git -C "$repo_dir" config --local --get core.fsmonitor >/dev/null; then
+    echo "ok   the sandbox's writes to its clone's .git do not reach the host scratch clone"
+  else
+    echo "FAIL the sandbox's writes to its clone's .git do not reach the host scratch clone"
+    rm -f "$repo_dir/.git/$marker"
+    git -C "$repo_dir" config --local --unset core.fsmonitor 2>/dev/null
+    failures=$((failures + 1))
+  fi
+else
+  echo "FAIL the sandbox's writes to its clone's .git do not reach the host scratch clone (could not write in the sandbox)"
+  failures=$((failures + 1))
+fi
+box "rm -f .git/$marker; git config --unset core.fsmonitor" >/dev/null 2>&1
+check "the task directory and its task.json are not visible to the sandbox" "test ! -e ../task.json && test ! -e ../sbxenv.yaml"
+check "the host source mount, if present, is read-only" "test ! -d /run/sandbox/source || ! touch /run/sandbox/source/.git/$marker 2>/dev/null"
+
 if [ -n "$granted" ]; then
   check "aws config routes $granted through the broker" \
     "grep -q 'credential_process = /home/agent/.local/bin/stage-aws-credentials $granted' ~/.aws/config"

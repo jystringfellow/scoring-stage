@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,6 +42,7 @@ type exitCode int
 func (e exitCode) Error() string { return "exit status " + strconv.Itoa(int(e)) }
 
 type App struct {
+	Stdin           io.Reader
 	Stdout, Stderr  io.Writer
 	FindGh          func() string
 	BrokerPID       func(home string) int
@@ -50,7 +52,7 @@ type App struct {
 }
 
 func New() *App {
-	app := &App{Stdout: os.Stdout, Stderr: os.Stderr, FindGh: config.FindGh, BrokerPID: brokerPID}
+	app := &App{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, FindGh: config.FindGh, BrokerPID: brokerPID}
 	app.BrokerStart = app.brokerStart
 	app.HostAWSProfiles = hostAWSProfiles
 	app.IsTerminal = func() bool {
@@ -66,6 +68,7 @@ type Task struct {
 	GitHubRepo string   `json:"github_repo"`
 	SourceRepo string   `json:"source_repo"`
 	Agents     []string `json:"agents,omitempty"`
+	GitConfig  string   `json:"git_config,omitempty"`
 }
 
 const usage = `usage: stage <command> [options]
@@ -131,6 +134,17 @@ func (a *App) say(format string, args ...any) {
 
 func (a *App) warn(format string, args ...any) {
 	fmt.Fprintf(a.Stderr, "stage: WARNING: "+format+"\n", args...)
+}
+
+// confirm asks a yes-or-no question on the terminal; without one the answer is no.
+func (a *App) confirm(question string) bool {
+	if !a.IsTerminal() || a.Stdin == nil {
+		return false
+	}
+	fmt.Fprintf(a.Stderr, "%s [y/N] ", question)
+	answer, _ := bufio.NewReader(a.Stdin).ReadString('\n')
+	answer = strings.ToLower(strings.TrimSpace(answer))
+	return answer == "y" || answer == "yes"
 }
 
 func sandboxOf(slug string) string { return sandboxPrefix + slug }
@@ -356,6 +370,12 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	for _, line := range settings.Managed.Summary() {
+		a.say("%s", line)
+	}
+	for _, warning := range settings.Managed.Warnings() {
+		a.warn("managed settings: %s", warning)
+	}
 	if agentList := settings.AgentEntries(); len(agentList) > 0 {
 		a.say("agents: %s", strings.Join(agentList, ", "))
 	} else {
@@ -413,6 +433,7 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	cpus := fs.intFlag("cpus", "CPUs for the sandbox")
 	memory := fs.String("memory", "", "memory for the sandbox, such as 16g")
 	allowGlobal := fs.Bool("allow-global-policy", false, "continue even if the global sbx policy has allow rules")
+	approveRepoConfig := fs.Bool("approve-repo-config", false, "approve, and remember, the kits and books the repository's config asks for")
 	plan := fs.Bool("plan", false, "write the env file and show sbx's plan without creating")
 	positional, err := fs.parse(args, "repo", "slug")
 	if err != nil {
@@ -446,6 +467,9 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 		return 0, err
 	}
 
+	if *allowGlobal && !settings.Managed.AllowsGlobalPolicy() {
+		return 0, errorf("--allow-global-policy is refused by the managed settings (%s)", strings.Join(settings.Managed.Paths, ", "))
+	}
 	if !*plan {
 		allows, err := sbx.GlobalAllows()
 		if err != nil {
@@ -496,6 +520,9 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	if err := a.checkRepoApprovals(settings.Home, composition, *approveRepoConfig, *plan); err != nil {
+		return 0, err
+	}
 	if len(composition.Agents) == 0 {
 		a.warn("no agents chosen, so the sandbox has only a shell; use --agent, agents in config.toml or %s", config.RepoConfigPath)
 	}
@@ -536,6 +563,12 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	if err := sbx.Run("env", "create", "--force", "--no-input", directory); err != nil {
 		return 0, errorf("%s; run `stage down %s` to clean up", err, slug)
 	}
+	if task.GitConfig, err = source.ConfigFingerprint(task.RepoDir); err != nil {
+		return 0, err
+	}
+	if err := writeTask(task, directory); err != nil {
+		return 0, err
+	}
 	a.restoreLogins(settings, &task)
 	a.say("%s is up: %s at %s", sandbox, github, task.RepoDir)
 	var handles []string
@@ -544,6 +577,39 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	}
 	a.say("kits: %s", strings.Join(handles, ", "))
 	return 0, nil
+}
+
+func (a *App) checkRepoApprovals(home string, composition *config.Composition, approve, plan bool) error {
+	approvals, err := config.RepoApprovals(composition)
+	if err != nil {
+		return err
+	}
+	missing, err := config.Unapproved(home, approvals)
+	if err != nil || len(missing) == 0 {
+		return err
+	}
+	fmt.Fprintf(a.Stderr, "stage: the repository's %s asks for kits or books you have not approved. They can widen the\n"+
+		"  sandbox's network access, send credentials or run commands. Review them before approving:\n", config.RepoConfigPath)
+	for _, approval := range missing {
+		fmt.Fprintf(a.Stderr, "  - %s\n", approval.Label)
+		for _, detail := range approval.Details {
+			fmt.Fprintf(a.Stderr, "      %s\n", detail)
+		}
+	}
+	if plan {
+		a.warn("plan only; stage up will ask you to approve these")
+		return nil
+	}
+	if !approve && !a.confirm("Approve these for this and future sandboxes while they are unchanged?") {
+		return errorf("not approved; review them and answer y, or pass --approve-repo-config to approve them without asking")
+	}
+	if err := config.Approve(home, missing); err != nil {
+		return err
+	}
+	for _, approval := range missing {
+		a.say("approved %s (%s); a change to it asks again", approval.Label, approval.Fingerprint[:12])
+	}
+	return nil
 }
 
 func checkNoGlobalGitHubSecret() error {
@@ -631,10 +697,12 @@ func PRBody(slug, sha, footer string) string {
 }
 
 func (a *App) cmdShip(args []string, home string) (int, error) {
-	fs := a.newFlags("ship", "<slug> [--ref R] [--branch B] [--pr]")
+	fs := a.newFlags("ship", "<slug> [--ref R] [--branch B] [--pr] [--yes] [--allow-protected-paths]")
 	ref := fs.String("ref", "HEAD", "sandbox ref to ship")
 	branchFlag := fs.String("branch", "", "branch to push (default: agent/<slug>/<sha>)")
 	pr := fs.Bool("pr", false, "open a draft pull request")
+	yes := fs.Bool("yes", false, "push without asking, after reviewing the summary")
+	allowProtected := fs.Bool("allow-protected-paths", false, "ship changes to CI, workflow or sandbox config files")
 	positional, err := fs.parse(args, "slug")
 	if err != nil {
 		return 0, err
@@ -645,6 +713,12 @@ func (a *App) cmdShip(args []string, home string) (int, error) {
 		return 0, err
 	}
 	repo := task.RepoDir
+	if err := checkGitConfig(task); err != nil {
+		return 0, err
+	}
+	if task.GitConfig == "" {
+		a.warn("task %s was created before stage recorded its git config; it cannot check that the scratch clone's config is unchanged", slug)
+	}
 	remote := "sandbox-" + task.Sandbox
 	if _, err := source.Git(repo, "remote", "get-url", remote); err != nil {
 		return 0, errorf("no %s remote in %s; is %s running?", remote, repo, task.Sandbox)
@@ -666,7 +740,10 @@ func (a *App) cmdShip(args []string, home string) (int, error) {
 	if _, err := source.Git(repo, "check-ref-format", "refs/heads/"+branch); err != nil {
 		return 0, err
 	}
-	if err := source.GitInteractive(repo, "push", "origin", sha+":refs/heads/"+branch); err != nil {
+	if err := a.reviewShipment(repo, sha, branch, task.GitHubRepo, *yes, *allowProtected); err != nil {
+		return 0, err
+	}
+	if err := source.GitInteractive(repo, "push", "https://github.com/"+task.GitHubRepo+".git", sha+":refs/heads/"+branch); err != nil {
 		return 0, err
 	}
 	a.say("pushed %s to %s %s", sha[:min(8, len(sha))], task.GitHubRepo, branch)
@@ -687,6 +764,120 @@ func (a *App) cmdShip(args []string, home string) (int, error) {
 		return 0, exitCode(code)
 	}
 	return 0, err
+}
+
+// protectedPaths are files whose changes run with the repository's secrets in
+// CI or widen future sandboxes, so ship refuses them unless told otherwise.
+var protectedPaths = []string{
+	".github/", ".azure-pipelines/", ".pipelines/", ".circleci/", ".buildkite/", ".gitlab-ci.yml", "Jenkinsfile",
+	".scoring-stage/", ".gitmodules",
+	".devcontainer/", ".vscode/", ".husky/", ".pre-commit-config.yaml", "lefthook.yml", ".lefthook.yml", ".envrc",
+	".mise.toml", "mise.toml", ".tool-versions",
+}
+
+func isProtected(path string) bool {
+	base := filepath.Base(path)
+	if strings.HasPrefix(base, "azure-pipelines") && (strings.HasSuffix(base, ".yml") || strings.HasSuffix(base, ".yaml")) {
+		return true
+	}
+	for _, protected := range protectedPaths {
+		if path == protected || (strings.HasSuffix(protected, "/") && strings.HasPrefix(path, protected)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *App) reviewShipment(repo, sha, branch, github string, yes, allowProtected bool) error {
+	base, err := source.Git(repo, "merge-base", "HEAD", sha)
+	if err != nil {
+		return err
+	}
+	if base == sha {
+		return errorf("nothing to ship: %s has no commits beyond the sandbox's starting point", sha[:min(8, len(sha))])
+	}
+	commits, err := source.Git(repo, "log", "--no-decorate", "--format=%h %s", base+".."+sha)
+	if err != nil {
+		return err
+	}
+	stat, err := source.Git(repo, "diff", "--no-ext-diff", "--no-textconv", "--stat", base, sha)
+	if err != nil {
+		return err
+	}
+	names, err := source.Git(repo, "diff", "--no-ext-diff", "--name-only", "-z", base, sha)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(a.Stdout, "stage: shipping to %s %s:\n%s\n%s\n", github, printable(branch), indent(printable(commits)), indent(printable(stat)))
+	var protected []string
+	for _, name := range strings.Split(names, "\x00") {
+		if name != "" && isProtected(name) {
+			protected = append(protected, printable(name))
+		}
+	}
+	if len(protected) > 0 {
+		if !allowProtected {
+			return errorf("refusing to ship changes to CI, workflow or sandbox config files: %s. These run with the "+
+				"repository's secrets or widen future sandboxes; review them and pass --allow-protected-paths to ship them",
+				strings.Join(protected, ", "))
+		}
+		a.warn("shipping changes to protected files: %s", strings.Join(protected, ", "))
+	}
+	unattributed, err := source.Git(repo, "log", "--no-decorate", "--format=%h", "--invert-grep", "-i", "--grep=^co-authored-by:", base+".."+sha)
+	if err != nil {
+		return err
+	}
+	if unattributed != "" {
+		a.warn("commits without a Co-authored-by trailer naming the agent: %s", strings.Join(strings.Fields(unattributed), " "))
+	}
+	if yes || a.confirm("Push these commits?") {
+		return nil
+	}
+	return errorf("not shipped; rerun with --yes to push without asking")
+}
+
+func checkGitConfig(task *Task) error {
+	if task.GitConfig == "" {
+		return nil
+	}
+	current, err := source.ConfigFingerprint(task.RepoDir)
+	if err != nil {
+		return err
+	}
+	includes, _ := source.Git(task.RepoDir, "config", "--local", "--name-only", "--get-regexp", `^include(if\..*)?\.path$`)
+	if includes != "" {
+		return errorf("the git config in %s includes other files (%s); refusing to run git there", task.RepoDir, strings.Join(strings.Fields(includes), ", "))
+	}
+	if current != task.GitConfig {
+		return errorf("the git config in %s changed after stage up created the sandbox; refusing to run git there. "+
+			"Inspect %s and recreate the task", task.RepoDir, filepath.Join(task.RepoDir, ".git"))
+	}
+	return nil
+}
+
+// printable escapes control characters so text from a sandbox cannot move
+// the cursor or rewrite the terminal while the user reviews it.
+func printable(text string) string {
+	var out strings.Builder
+	for _, r := range text {
+		switch {
+		case r == '\n':
+			out.WriteRune(r)
+		case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f, r >= 0x200b && r <= 0x200f, r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069, r == 0xfeff:
+			fmt.Fprintf(&out, "\\x%02x", r)
+		default:
+			out.WriteRune(r)
+		}
+	}
+	return out.String()
+}
+
+func indent(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		lines[i] = "  " + line
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (a *App) cmdList(args []string, home string) (int, error) {

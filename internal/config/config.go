@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -81,6 +82,8 @@ type Composition struct {
 	Secrets           map[string]any
 	Bindings          map[string]any
 	Books             []string
+	RepoKits          []Kit
+	RepoBooks         []Book
 }
 
 func (c *Composition) AllKits() []Kit {
@@ -115,6 +118,7 @@ type Book struct {
 
 type Settings struct {
 	Home       string
+	Managed    *Managed
 	Books      []Book
 	base       any
 	agents     []any
@@ -253,9 +257,15 @@ func LoadSettings(home string) (*Settings, error) {
 	if settings.copyLogins, err = optionalStrings(data, "copy_logins", path); err != nil {
 		return nil, err
 	}
+	if settings.Managed, err = LoadManaged(); err != nil {
+		return nil, err
+	}
 	for _, agent := range settings.copyLogins {
 		if !contains(copyableAgents(), agent) {
 			return nil, errorf("%s: copy_logins: %s cannot be copied (copyable: %s); claude, codex and copilot sign in through the proxy", path, agent, strings.Join(copyableAgents(), ", "))
+		}
+		if err := settings.Managed.CheckCopyLogin(agent); err != nil {
+			return nil, errorf("%s: %v", path, err)
 		}
 	}
 	bookPaths, err := optionalStrings(data, "books", path)
@@ -422,8 +432,12 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 			if containsKit(agentKits, kit) {
 				continue
 			}
+			name, known := agentFor(kit.Source)
+			if err := settings.Managed.CheckAgent(name, known, kit.Source); err != nil {
+				return errorf("%s: %v", owner, err)
+			}
 			agentKits = append(agentKits, kit)
-			if name, known := agentFor(kit.Source); known && !contains(agentNames, name) {
+			if known && !contains(agentNames, name) {
 				agentNames = append(agentNames, name)
 			}
 		}
@@ -485,11 +499,33 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 		}
 	}
 	if repo := selection.Repo; repo != nil {
+		for _, entry := range repo.agents {
+			if name, ok := entry.(string); !ok || !looksLikeName(name) {
+				return nil, errorf("%s: agents are named (%s), not given as kits; a repository's own kits go in kits", repo.Path, strings.Join(AgentNames(), ", "))
+			}
+		}
 		if err := addAgents(repo.agents, repo.dir, repo.Path); err != nil {
 			return nil, err
 		}
+		for _, entry := range repo.kits {
+			if source := kitSource(entry); !strings.HasPrefix(source, "./") && !pinnedReference.MatchString(source) {
+				return nil, errorf("%s: kit %s must be a ./ path inside the repository or a published kit pinned by digest (...@sha256:<64 hex>)", repo.Path, source)
+			}
+		}
 		if err := addKits(&repoKits, repo.kits, repo.dir, repo.Path); err != nil {
 			return nil, err
+		}
+		root := Resolve(repo.dir)
+		for _, kit := range repoKits {
+			if !kit.IsLocal() {
+				continue
+			}
+			if relative, err := filepath.Rel(root, kit.Source); err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, "../") {
+				return nil, errorf("%s: kit %s is outside the repository; a repository's local kits live in the repository", repo.Path, kit.Source)
+			}
+			if err := refuseLinks(kit.Source, repo.Path); err != nil {
+				return nil, err
+			}
 		}
 	}
 	cliAgents := make([]any, len(selection.Agents))
@@ -523,6 +559,11 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 	}
 	if defaultProfile == "" && len(profiles) == 1 {
 		defaultProfile = profiles[0]
+	}
+	for _, profile := range profiles {
+		if err := settings.Managed.CheckAWSProfile(profile); err != nil {
+			return nil, err
+		}
 	}
 	if defaultProfile != "" && !contains(profiles, defaultProfile) {
 		return nil, errorf("AWS default profile %s is not a granted profile (%s)", defaultProfile, strings.Join(profiles, " "))
@@ -572,6 +613,12 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 		AWSDefaultProfile: defaultProfile,
 		Secrets:           secrets,
 		Bindings:          bindings,
+		RepoKits:          repoKits,
+		RepoBooks:         booksOnlyTheRepoAskedFor(active, selection),
+	}
+	if settings.Managed.RepoKitsDenied() && (len(composition.RepoKits) > 0 || len(composition.RepoBooks) > 0) {
+		return nil, errorf("%s: the repository's kits and books are refused by %s (repo_kits = %q); ask for books with --book",
+			selection.Repo.Path, settings.Managed.where(), RepoKitsDeny)
 	}
 	if base != nil {
 		composition.Base = *base
@@ -581,6 +628,17 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 	}
 	for _, book := range active {
 		composition.Books = append(composition.Books, book.Name)
+	}
+	for _, kit := range composition.AllKits() {
+		if kit.IsLocal() {
+			continue
+		}
+		name, known := agentFor(kit.Source)
+		if known || looksLikeAgentMixin(kit.Source) {
+			if err := settings.Managed.CheckAgent(name, known, kit.Source); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return composition, nil
 }
@@ -646,6 +704,59 @@ func activeBooks(settings *Settings, selection Selection) ([]Book, error) {
 		seen[book.Name] = book.Path
 	}
 	return active, nil
+}
+
+var pinnedReference = regexp.MustCompile(`^[a-z0-9]+(?:[.-][a-z0-9]+)*(?::[0-9]+)?(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+(?::[A-Za-z0-9_.-]+)?@sha256:[a-f0-9]{64}$`)
+
+func kitSource(entry any) string {
+	switch typed := entry.(type) {
+	case string:
+		return typed
+	case map[string]any:
+		source, _ := typed["source"].(string)
+		return source
+	}
+	return ""
+}
+
+// refuseLinks keeps a repository kit's content inside its own files, where
+// its fingerprint and the containment check can see it.
+func refuseLinks(dir, owner string) error {
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return errorf("%s: kit %s is not a directory in the repository", owner, dir)
+	}
+	return filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Type()&fs.ModeSymlink != 0 {
+			return errorf("%s: kit %s contains a symbolic link (%s); a repository's kits cannot use links", owner, dir, path)
+		}
+		return nil
+	})
+}
+
+// booksOnlyTheRepoAskedFor returns the active books that are on only because
+// the repository's config named them, rather than --book or a [[repos]] rule.
+func booksOnlyTheRepoAskedFor(active []Book, selection Selection) []Book {
+	if selection.Repo == nil {
+		return nil
+	}
+	var books []Book
+	for _, book := range active {
+		if !contains(selection.Repo.books, book.Name) || contains(selection.Books, book.Name) || contains(selection.Books, book.Path) {
+			continue
+		}
+		matched := false
+		for _, r := range book.repos {
+			matched = matched || matchesAny(selection.RepoNames, r.patterns)
+		}
+		if !matched {
+			books = append(books, book)
+		}
+	}
+	return books
 }
 
 func parseAgent(entry any, dir, owner string) (Kit, error) {

@@ -41,13 +41,27 @@ stage up ~/Code/api fix-login --aws-profile staging    # grant an AWS profile to
 stage up ~/Code/api fix-login --plan # write the env file and show sbx's plan without creating
 stage shell fix-login                # login shell in the repository; run claude, codex or copilot
 stage exec fix-login -- git log -1
-stage ship fix-login [--pr]          # push the sandbox's HEAD to agent/fix-login/<sha> from the host
+stage ship fix-login [--pr]          # review and push the sandbox's HEAD to agent/fix-login/<sha> from the host
 stage list
 stage login fix-login                # save the sandbox's agy login for future sandboxes (copy_logins)
 stage down fix-login                 # remove the sandbox, its scoped secrets and the scratch clone
 stage broker start|stop|status       # the AWS broker (up starts it when a sandbox needs it)
 stage broker serve                   # run the broker in the foreground
 ```
+
+`stage ship` shows the commits and a diffstat, with control characters escaped, and asks before pushing (`--yes`
+skips the question). It refuses changes to CI and workflow files (`.github/`, `azure-pipelines*.yml`,
+`.azure-pipelines/`, `.pipelines/`, GitLab, Jenkins, CircleCI, Buildkite), files that run code when someone opens or
+checks out the branch (`.devcontainer/`, `.vscode/`, `.husky/`, pre-commit and lefthook configs, `.envrc`, mise and
+asdf tool files), `.gitmodules` and `.scoring-stage/`, unless you pass `--allow-protected-paths`: CI runs a pushed
+branch's workflow files with the repository's secrets, and `.scoring-stage/` widens future sandboxes. Azure
+Pipelines can read YAML from any path a pipeline names, so the file check is a heuristic there; use branch policies
+so `agent/*` branches cannot trigger pipelines that hold secrets. `ship` warns about commits without a
+`Co-authored-by` trailer, since commits carry your git identity.
+
+Git on the host runs with hooks and fsmonitor off. `stage up` records a hash of the scratch clone's git config
+(`.git/config`, `.git/info/` and related files) after sbx creates the sandbox, and `ship` refuses to run git there
+if it changed. sbx mounts the scratch clone into the sandbox read-only; `tests/acceptance.sh` checks that.
 
 `stage up` clones the repository to `~/.scoring-stage/tasks/<slug>/src`, writes an
 [sbx environment file](https://docs.docker.com/ai/sandboxes/configuration/environment-files/) next to it and runs
@@ -192,12 +206,20 @@ A repository's `.scoring-stage/config.toml`, read from the branch the sandbox st
 ```toml
 agents = ["claude", "codex"]     # for example, the agents its .kapellmeister ensembles seat
 books = ["backend"]              # installed books, by name
-kits = ["./.scoring-stage/kits/rules"]
+kits = ["./.scoring-stage/kits/rules"]  # inside the repository; approved by you before use
 ```
 
-A repository is not trusted with anything that acts on the host. It can add agents, kits and installed books, but
-it cannot set secrets, bindings, AWS profiles or the base, and it names books rather than pointing at them: a book
-it asks for that you have not installed is an error.
+A repository is not trusted with anything that acts on the host. It can add agents by name, installed books by
+name, and its own kits, but it cannot set secrets, bindings, AWS profiles, GitHub access or the base. A book it asks
+for that you have not installed is an error. A repository's kit is either a `./` path inside the repository, with no
+symbolic links, or a published kit pinned by digest (`registry/name@sha256:...`).
+
+Kits and books can widen a sandbox's network access, send credentials and run commands, so `stage up` uses the
+kits a repository adds, and the installed books it turns on, only after you approve them. It lists each one with
+what it does (network rules, credentials, host commands, AWS profiles) and asks. Without a terminal, pass
+`--approve-repo-config` after reviewing them. An approval covers that exact content (a local kit's files, a published
+kit's digest and arguments, a book's files) and is kept in `~/.scoring-stage/trusted-kits`, so a change asks
+again. A book you ask for yourself, with `--book` or a `[[repos]]` rule, needs no approval.
 
 Books and both configs are decoded strictly: an unknown key is an error. Two books that set the same base,
 region, AWS default profile, secret or binding differently are an error rather than a silent winner. Your config
@@ -210,6 +232,42 @@ grants a profile from your host AWS config to that one sandbox and makes it the 
 
 A kit that a book adds for its own service declares a `credential@1` entry for that service; the book's `secrets`
 entry supplies the value for each sandbox, and its `bindings` entry approves it.
+
+## Managed settings
+
+An administrator can limit what every user, book and repository on a machine may choose with a managed settings
+file, much like Claude Code's `managed-settings.json`. stage reads it from:
+
+| Platform | Path |
+| --- | --- |
+| macOS | `/Library/Application Support/scoring-stage/managed.toml` |
+| Linux | `/etc/scoring-stage/managed.toml` |
+| WSL | `/etc/scoring-stage/managed.toml`, and `C:\ProgramData\scoring-stage\managed.toml` (read as `/mnt/c/ProgramData/...`) so Windows device management can supply it |
+
+stage on Windows runs inside WSL. When more than one file exists, each can only narrow the others. Every key is
+optional, and an unknown key is an error:
+
+```toml
+allowed_agents = ["claude", "copilot"]   # only these agents; agents given only as kit references are refused
+denied_agents = ["agy"]
+repo_kits = "deny"                       # "ask" (default) or "deny": refuse kits and books a repository asks for
+copy_logins = []                         # agents whose logins may be copied between sandboxes
+allow_global_policy = false              # refuse stage up --allow-global-policy
+
+[aws]
+allowed_profiles = ["dev-*", "sandbox"]  # glob patterns a granted profile must match
+denied_profiles = ["*prod*", "*admin*"]
+```
+
+`stage setup` shows the managed settings in effect and warns about a managed file or directory that is not owned by
+root or that others can write. A managed file stage cannot read stops stage rather than being skipped. They only
+restrict, so they guard against mistakes and record policy; a user with administrator rights on the machine can
+still remove the file.
+
+Agent policy covers the agents stage puts in a sandbox: agents named anywhere, and Docker's agent mixins
+(`sbx/*-mixin` on any registry or mirror) wherever they appear, including as plain kits. It cannot
+stop a kit's setup commands from installing an agent CLI by other means; what stops that agent from working is the
+sandbox's egress to its vendor.
 
 ## Development
 
