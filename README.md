@@ -27,12 +27,36 @@ mode and `stage ship --pr`) and the `aws` CLI (the AWS broker). Building `stage`
 
 ## Install
 
+`stage` is a single binary: the core kits are embedded in it and extracted to `~/.scoring-stage/kits/<content
+hash>/` the first time `stage up` needs them. On Windows, install and run the Linux binary inside WSL.
+
+**From a release.** [Releases](https://github.com/jystringfellow/scoring-stage/releases) carry a tar.gz for
+`darwin_amd64`, `darwin_arm64`, `linux_amd64` and `linux_arm64`, each holding `stage`, `LICENSE` and `README.md`,
+plus a `SHA256SUMS` file. Download with curl rather than a browser, so macOS does not quarantine the binary:
+
+```sh
+version=v0.0.1
+asset="stage_${version}_$(uname -s | tr A-Z a-z)_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
+base="https://github.com/jystringfellow/scoring-stage/releases/download/$version"
+curl -fsSLO "$base/$asset.tar.gz" -O "$base/SHA256SUMS"
+grep " $asset.tar.gz\$" SHA256SUMS | shasum -a 256 -c -    # or sha256sum -c -
+gh attestation verify "$asset.tar.gz" --repo jystringfellow/scoring-stage \
+  --signer-workflow jystringfellow/scoring-stage/.github/workflows/release.yml --source-ref "refs/tags/$version"
+tar -xzf "$asset.tar.gz" && install -m 755 "$asset/stage" ~/.local/bin/stage
+```
+
+Each archive has a [build provenance attestation](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations)
+from the release workflow. With these flags, `gh attestation verify` checks that `release.yml` in this repository
+built the archive from the tag you asked for, and prints the commit it was built from. `SHA256SUMS` catches a
+corrupted download, not a tampered one; the attestation is the provenance check.
+
+**With Go** (1.26 or later):
+
 ```
 go install github.com/jystringfellow/scoring-stage/cmd/stage@latest
 ```
 
-or, from a clone, `go build -o bin/stage ./cmd/stage`. `stage` is a single binary: the core kits are embedded in it
-and extracted to `~/.scoring-stage/kits/<content hash>/` the first time `stage up` needs them.
+or, from a clone, `go build -o bin/stage ./cmd/stage`. `stage version` prints the version.
 
 ## Use
 
@@ -484,6 +508,20 @@ tests/acceptance.sh <slug> [granted] [other] # checks a live sandbox made with s
 ```
 
 [docs/design.md](docs/design.md) records why the tool is shaped this way and what was verified on sbx.
+
+### Releasing
+
+Push a `vX.Y.Z` tag on `main` (`git tag v0.1.0 && git push origin v0.1.0`). The release workflow
+(`.github/workflows/release.yml`) rejects a tag that is not `vX.Y.Z` with an optional `-suffix`, and a tagged
+commit that is not on `main`. A build job with read-only permissions then runs the tests, builds the four archives
+with the tag as `stage version` and writes `SHA256SUMS`. A separate release job attests the archives and creates
+the GitHub release with generated notes. A tag with a hyphen, such as `v0.1.0-rc.1`, makes a prerelease. The
+workflow has not yet run on a real tag.
+
+The tag and `main` checks catch mistakes, not a malicious writer: a tag push runs `release.yml` as it exists at
+the tagged commit, so anyone who can push a tag can also change the checks. The real controls are branch
+protection on `main` and a tag ruleset that limits creating, updating and deleting `v*` tags to admins.
+`SHA256SUMS` detects corruption, not tampering.
 
 ## License
 
