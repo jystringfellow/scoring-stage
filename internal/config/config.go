@@ -194,6 +194,9 @@ func LoadSettings(home string) (*Settings, error) {
 	if settings.githubApp, err = decodeGitHubAppClientID(data["github"], path); err != nil {
 		return nil, err
 	}
+	if err := refuseControlKeys(settings.secrets, settings.bindings, path); err != nil {
+		return nil, err
+	}
 	if err := refuseGitHubService(settings.secrets, settings.bindings, path); err != nil {
 		return nil, err
 	}
@@ -292,10 +295,17 @@ func LoadBook(path string) (*Book, error) {
 	if book.bindings, err = optionalTable(data, "bindings", manifest); err != nil {
 		return nil, err
 	}
+	where := owner + " (" + manifest + ")"
+	if err := refuseControlKeys(book.secrets, book.bindings, where); err != nil {
+		return nil, err
+	}
 	if err := refuseGitHubService(book.secrets, book.bindings, manifest); err != nil {
 		return nil, err
 	}
-	if err := refuseReservedServices(book.secrets, book.bindings, owner+" ("+manifest+")"); err != nil {
+	if err := refuseReservedServices(book.secrets, book.bindings, where); err != nil {
+		return nil, err
+	}
+	if err := refuseForeignBindings(book.secrets, book.bindings, where); err != nil {
 		return nil, err
 	}
 	repos, ok := asList(data["repos"])
@@ -335,10 +345,39 @@ func LoadBook(path string) (*Book, error) {
 		}
 		book.repos = append(book.repos, r)
 	}
-	if err := refuseReservedBookKits(book, owner); err != nil {
+	if err := checkBookKits(book, owner); err != nil {
 		return nil, err
 	}
 	return book, nil
+}
+
+func refuseControlKeys(secrets, bindings map[string]any, where string) error {
+	for kind, table := range map[string]map[string]any{"secret": secrets, "binding": bindings} {
+		for _, service := range sortedKeys(table) {
+			if HasControl(service) {
+				return errorf("%s: %s %q contains control characters", where, kind, Printable(service))
+			}
+		}
+	}
+	return nil
+}
+
+func refuseForeignBindings(secrets, bindings map[string]any, owner string) error {
+	for _, service := range sortedKeys(bindings) {
+		if _, owned := secrets[service]; !owned {
+			return errorf("%s: binding %s has no [secrets.%s] in the book; a book may bind only credentials it supplies", owner, service, service)
+		}
+		domains, err := bindingDomains(bindings[service])
+		if err != nil {
+			return errorf("%s: binding %s: %v", owner, service, err)
+		}
+		for _, domain := range domains {
+			if ReachesReserved(domain) {
+				return errorf("%s: binding %s covers %s, a host a reserved service uses; %s", owner, service, Printable(domain), reservedReason())
+			}
+		}
+	}
+	return nil
 }
 
 func refuseReservedServices(secrets, bindings map[string]any, owner string) error {
@@ -355,7 +394,9 @@ func refuseReservedServices(secrets, bindings map[string]any, owner string) erro
 	return nil
 }
 
-func refuseReservedBookKits(book *Book, owner string) error {
+const publishedKitReason = "published kits in books and repository configs cannot be inspected, and a kit can send any credential sbx holds to any host; use a local kit"
+
+func checkBookKits(book *Book, owner string) error {
 	entries := append(append([]any{}, book.kits...), book.agents...)
 	for _, r := range book.repos {
 		entries = append(append(entries, r.kits...), r.agents...)
@@ -369,9 +410,9 @@ func refuseReservedBookKits(book *Book, owner string) error {
 			return err
 		}
 		if !kit.IsLocal() {
-			continue
+			return errorf("%s: kit %s is published; %s", owner, kit.Source, publishedKitReason)
 		}
-		if err := refuseReservedKitCredentials(kit.Source, owner); err != nil {
+		if err := checkUntrustedKit(kit.Source, owner, book.secrets); err != nil {
 			return err
 		}
 	}
@@ -511,8 +552,8 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 			return nil, err
 		}
 		for _, entry := range repo.kits {
-			if source := kitSource(entry); !strings.HasPrefix(source, "./") && !pinnedReference.MatchString(source) {
-				return nil, errorf("%s: kit %s must be a ./ path inside the repository or a published kit pinned by digest (...@sha256:<64 hex>)", repo.Path, source)
+			if source := kitSource(entry); !strings.HasPrefix(source, "./") {
+				return nil, errorf("%s: kit %s must be a ./ path inside the repository; %s", repo.Path, source, publishedKitReason)
 			}
 		}
 		if err := addKits(&repoKits, repo.kits, repo.dir, repo.Path); err != nil {
@@ -527,6 +568,9 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 				return nil, errorf("%s: kit %s is outside the repository; a repository's local kits live in the repository", repo.Path, kit.Source)
 			}
 			if err := refuseLinks(kit.Source, repo.Path); err != nil {
+				return nil, err
+			}
+			if err := checkUntrustedKit(kit.Source, repo.Path, nil); err != nil {
 				return nil, err
 			}
 		}
@@ -706,8 +750,6 @@ func activeBooks(settings *Settings, selection Selection) ([]Book, error) {
 	return active, nil
 }
 
-var pinnedReference = regexp.MustCompile(`^[a-z0-9]+(?:[.-][a-z0-9]+)*(?::[0-9]+)?(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+(?::[A-Za-z0-9_.-]+)?@sha256:[a-f0-9]{64}$`)
-
 func kitSource(entry any) string {
 	switch typed := entry.(type) {
 	case string:
@@ -855,23 +897,11 @@ func bindingDomains(binding any) ([]string, error) {
 	return found, nil
 }
 
-// ReachesGitHub reports whether a binding domain would send a credential to a
-// GitHub host other than Copilot's, directly or through a wildcard.
 func ReachesGitHub(domain string) bool {
-	host := strings.ToLower(strings.TrimSpace(domain))
-	if index := strings.LastIndex(host, ":"); index >= 0 {
-		host = host[:index]
-	}
-	host = strings.TrimSuffix(host, ".")
-	if host == "copilot.github.com" {
+	if normalizeHost(domain) == "copilot.github.com" {
 		return false
 	}
-	for _, apex := range []string{"github.com", "github.ai", "githubusercontent.com"} {
-		if host == apex || strings.HasSuffix(host, "."+apex) {
-			return true
-		}
-	}
-	return strings.Contains(host, "*") && (strings.HasSuffix(host, "github.com") || strings.HasSuffix(host, "github.ai") || strings.HasSuffix(host, "*"))
+	return reachesAny(domain, gitHubApexes)
 }
 
 func bookSecret(spec any, bookPath, owner string) (map[string]any, error) {

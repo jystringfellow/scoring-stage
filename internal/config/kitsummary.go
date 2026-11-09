@@ -1,7 +1,11 @@
 package config
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -10,27 +14,179 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type kitSpec struct {
-	Capabilities []struct {
-		Type   string         `yaml:"type"`
-		Config map[string]any `yaml:"config"`
-	} `yaml:"capabilities"`
+type kitCapability struct {
+	Type   string         `yaml:"type"`
+	Config map[string]any `yaml:"config"`
 }
 
-// SummarizeKit describes what a local kit's capabilities do, for a person deciding whether to approve it.
-func SummarizeKit(dir string) []string {
-	var details []string
-	for _, file := range kitFiles(dir) {
+type kitSpec struct {
+	Extends      any             `yaml:"extends"`
+	Capabilities []kitCapability `yaml:"capabilities"`
+}
+
+type kitDocument struct {
+	file string
+	spec kitSpec
+}
+
+var kitFileExtensions = []string{".yaml", ".yml", ".json"}
+
+func kitFiles(dir string) ([]string, error) {
+	var files []string
+	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() && path == filepath.Join(dir, "files") {
+			return filepath.SkipDir
+		}
+		if entry.Type()&fs.ModeSymlink != 0 {
+			if info, err := os.Stat(path); err == nil && info.IsDir() {
+				return errorf("%s is a link to a directory", path)
+			}
+		}
+		if !entry.IsDir() && contains(kitFileExtensions, strings.ToLower(filepath.Ext(path))) {
+			files = append(files, path)
+		}
+		return nil
+	})
+	sort.Strings(files)
+	return files, err
+}
+
+func loadKit(dir string) ([]kitDocument, error) {
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return nil, errorf("kit %s is not a directory", dir)
+	}
+	files, err := kitFiles(dir)
+	if err != nil {
+		return nil, errorf("kit %s: %v", dir, err)
+	}
+	var documents []kitDocument
+	for _, file := range files {
+		relative, _ := filepath.Rel(dir, file)
 		content, err := os.ReadFile(file)
 		if err != nil {
-			continue
+			return nil, errorf("kit %s: cannot read %s: %v", dir, relative, err)
 		}
-		var spec kitSpec
-		if err := yaml.Unmarshal(content, &spec); err != nil {
-			details = append(details, fmt.Sprintf("%s: unreadable (%v); read it before approving", filepath.Base(file), err))
-			continue
+		decoder := yaml.NewDecoder(bytes.NewReader(content))
+		for {
+			var spec kitSpec
+			err := decoder.Decode(&spec)
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				return nil, errorf("kit %s: %s is unreadable: %v", dir, relative, err)
+			}
+			documents = append(documents, kitDocument{file: relative, spec: spec})
 		}
-		for _, capability := range spec.Capabilities {
+	}
+	return documents, nil
+}
+
+var knownCapabilities = []string{"network-policy", "credential", "lifecycle", "agent-context", "host-mount"}
+
+func capabilityName(kind string) string {
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	name, found := strings.CutPrefix(kind, "com.docker.sandbox/")
+	if !found {
+		return ""
+	}
+	name, _, _ = strings.Cut(name, "@")
+	if !contains(knownCapabilities, name) {
+		return ""
+	}
+	return name
+}
+
+func credentialDomains(config map[string]any) []string {
+	var found []string
+	for _, kindConfig := range config {
+		table, _ := kindConfig.(map[string]any)
+		injects, _ := table["inject"].([]any)
+		for _, inject := range injects {
+			if entry, ok := inject.(map[string]any); ok {
+				if domain, ok := entry["domain"].(string); ok {
+					found = append(found, domain)
+				}
+			}
+		}
+	}
+	sort.Strings(found)
+	return found
+}
+
+func normalizeService(service string) string {
+	return strings.ToLower(strings.TrimSpace(service))
+}
+
+func owns(owned map[string]any, service string) bool {
+	_, ok := owned[service]
+	return ok
+}
+
+func checkUntrustedKit(dir, owner string, owned map[string]any) error {
+	documents, err := loadKit(dir)
+	if err != nil {
+		return errorf("%s: %v", owner, err)
+	}
+	for _, document := range documents {
+		where := fmt.Sprintf("%s: kit %s (%s)", owner, dir, document.file)
+		if document.spec.Extends != nil {
+			return errorf("%s: extends another kit, which stage cannot check; copy what it needs into the kit", where)
+		}
+		for _, capability := range document.spec.Capabilities {
+			name := capabilityName(capability.Type)
+			if name == "" {
+				return errorf("%s: unrecognised capability type %q", where, Printable(capability.Type))
+			}
+			if name != "credential" {
+				continue
+			}
+			service, _ := capability.Config["service"].(string)
+			if HasControl(service) {
+				return errorf("%s: credential service %q contains control characters", where, Printable(service))
+			}
+			normalized := normalizeService(service)
+			if normalized == "" {
+				return errorf("%s: declares a credential without a service name", where)
+			}
+			if isReservedService(normalized) {
+				return errorf("%s: declares credential %s, which is reserved; %s", where, normalized, reservedReason())
+			}
+			if owned == nil {
+				return errorf("%s: declares credential %s; a repository's kits may declare no credentials, since a repository supplies none", where, normalized)
+			}
+			if service != normalized || !owns(owned, normalized) {
+				return errorf("%s: declares credential %q, but the book has no [secrets.%s]; a book's kits may declare only credentials the book supplies, named in lower case", where, service, normalized)
+			}
+			domains := credentialDomains(capability.Config)
+			if len(domains) == 0 {
+				return errorf("%s: credential %s has no inject domains stage recognises", where, service)
+			}
+			for _, domain := range domains {
+				if ReachesReserved(domain) {
+					return errorf("%s: credential %s is injected on %s, a host a reserved service uses; %s", where, service, Printable(domain), reservedReason())
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func SummarizeKit(dir string) []string {
+	var details []string
+	documents, err := loadKit(dir)
+	if err != nil {
+		details = append(details, fmt.Sprintf("%v; read it before approving", err))
+	}
+	for _, document := range documents {
+		if document.spec.Extends != nil {
+			details = append(details, fmt.Sprintf("%s: extends %v; read the parent kit before approving", document.file, document.spec.Extends))
+		}
+		for _, capability := range document.spec.Capabilities {
 			details = append(details, describeCapability(capability.Type, capability.Config)...)
 		}
 	}
@@ -43,53 +199,11 @@ func SummarizeKit(dir string) []string {
 	return details
 }
 
-func kitFiles(dir string) []string {
-	files, _ := filepath.Glob(filepath.Join(dir, "*.yaml"))
-	more, _ := filepath.Glob(filepath.Join(dir, "*.yml"))
-	files = append(files, more...)
-	sort.Strings(files)
-	return files
-}
-
-func capabilityName(kind string) string {
-	name := kind[strings.LastIndex(kind, "/")+1:]
-	name, _, _ = strings.Cut(name, "@")
-	return name
-}
-
-func refuseReservedKitCredentials(dir, owner string) error {
-	info, err := os.Stat(dir)
-	if err != nil || !info.IsDir() {
-		return nil
-	}
-	for _, file := range kitFiles(dir) {
-		content, err := os.ReadFile(file)
-		if err != nil {
-			return errorf("%s: kit %s: cannot read %s: %v", owner, dir, filepath.Base(file), err)
-		}
-		var spec kitSpec
-		if err := yaml.Unmarshal(content, &spec); err != nil {
-			return errorf("%s: kit %s: %s is unreadable: %v", owner, dir, filepath.Base(file), err)
-		}
-		for _, capability := range spec.Capabilities {
-			if capabilityName(capability.Type) != "credential" {
-				continue
-			}
-			service, ok := capability.Config["service"].(string)
-			if !ok {
-				return errorf("%s: kit %s declares a credential without a service name in %s", owner, dir, filepath.Base(file))
-			}
-			if isReservedService(service) {
-				return errorf("%s: kit %s declares credential %s, which is reserved; %s", owner, dir, Printable(service), reservedReason())
-			}
-		}
-	}
-	return nil
-}
-
 func describeCapability(kind string, config map[string]any) []string {
 	name := capabilityName(kind)
 	switch name {
+	case "":
+		return []string{fmt.Sprintf("unrecognised capability %s; read the kit's file before approving", kind)}
 	case "network-policy":
 		var details []string
 		for _, phase := range []string{"install", "runtime"} {
@@ -103,18 +217,7 @@ func describeCapability(kind string, config map[string]any) []string {
 		return details
 	case "credential":
 		service, _ := config["service"].(string)
-		var domains []string
-		for _, kindConfig := range config {
-			table, _ := kindConfig.(map[string]any)
-			injects, _ := table["inject"].([]any)
-			for _, inject := range injects {
-				if entry, ok := inject.(map[string]any); ok {
-					if domain, ok := entry["domain"].(string); ok {
-						domains = append(domains, domain)
-					}
-				}
-			}
-		}
+		domains := credentialDomains(config)
 		if len(domains) == 0 {
 			return []string{fmt.Sprintf("credential %s: unrecognised shape; read the kit's file before approving", service)}
 		}

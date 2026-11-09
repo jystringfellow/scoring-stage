@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 )
 
 // Approval is something a repository asked for that widens its sandbox: one
@@ -136,27 +137,28 @@ func readTrust(home string) (records []trustRecord, legacy bool, err error) {
 		if line == "" {
 			continue
 		}
+		if !strings.HasPrefix(line, "{") {
+			legacy = true
+			continue
+		}
 		var record trustRecord
-		if strings.HasPrefix(line, "{") {
-			if err := json.Unmarshal([]byte(line), &record); err != nil || !fingerprintPattern.MatchString(record.Fingerprint) {
-				return nil, false, errorf("%s:%d: not a trust record; fix or remove the line", trustFile(home), number)
-			}
-		} else {
-			fingerprint, label, _ := strings.Cut(line, " ")
-			if !fingerprintPattern.MatchString(fingerprint) {
-				return nil, false, errorf("%s:%d: not a trust record; fix or remove the line", trustFile(home), number)
-			}
-			record, legacy = trustRecord{Fingerprint: fingerprint, Label: label}, true
+		if err := json.Unmarshal([]byte(line), &record); err != nil || !fingerprintPattern.MatchString(record.Fingerprint) {
+			return nil, false, errorf("%s:%d: not a trust record; fix or remove the line", trustFile(home), number)
 		}
 		records = append(records, record)
 	}
 	return records, legacy, scanner.Err()
 }
 
-func writeTrust(home string, records []trustRecord) error {
-	if err := os.MkdirAll(home, 0o700); err != nil {
+func syncDirectory(dir string) error {
+	directory, err := os.Open(dir)
+	if err != nil {
 		return err
 	}
+	return errors.Join(directory.Sync(), directory.Close())
+}
+
+func writeTrust(home string, records []trustRecord) error {
 	var content strings.Builder
 	for _, record := range records {
 		line, err := json.Marshal(record)
@@ -171,25 +173,57 @@ func writeTrust(home string, records []trustRecord) error {
 		return err
 	}
 	defer os.Remove(temporary.Name())
-	if _, err := temporary.WriteString(content.String()); err != nil {
-		temporary.Close()
+	_, writeErr := temporary.WriteString(content.String())
+	if err := errors.Join(writeErr, temporary.Chmod(0o600), temporary.Sync(), temporary.Close()); err != nil {
 		return err
 	}
-	if err := temporary.Close(); err != nil {
+	if err := syncDirectory(home); err != nil {
 		return err
 	}
-	return os.Rename(temporary.Name(), trustFile(home))
+	if err := os.Rename(temporary.Name(), trustFile(home)); err != nil {
+		return err
+	}
+	return syncDirectory(home)
 }
 
-func trusted(home string) (map[string]bool, error) {
-	records, legacy, err := readTrust(home)
+func lockTrust(home string) (func(), error) {
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		return nil, err
+	}
+	lock, err := os.OpenFile(trustFile(home)+".lock", os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, err
 	}
-	if legacy {
-		if err := writeTrust(home, records); err != nil {
-			return nil, err
-		}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		lock.Close()
+		return nil, err
+	}
+	return func() {
+		syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+		lock.Close()
+	}, nil
+}
+
+func ClearLegacyTrust(home string) (bool, error) {
+	if _, err := os.Stat(trustFile(home)); errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	unlock, err := lockTrust(home)
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+	records, legacy, err := readTrust(home)
+	if err != nil || !legacy {
+		return false, err
+	}
+	return true, writeTrust(home, records)
+}
+
+func trusted(home string) (map[string]bool, error) {
+	records, _, err := readTrust(home)
+	if err != nil {
+		return nil, err
 	}
 	known := map[string]bool{}
 	for _, record := range records {
@@ -214,14 +248,21 @@ func Unapproved(home string, approvals []Approval) ([]Approval, error) {
 }
 
 func Approve(home string, approvals []Approval) error {
+	for _, approval := range approvals {
+		if !fingerprintPattern.MatchString(approval.Fingerprint) || HasControl(approval.Label) {
+			return errorf("cannot record approval of %s", Printable(approval.Label))
+		}
+	}
+	unlock, err := lockTrust(home)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	records, _, err := readTrust(home)
 	if err != nil {
 		return err
 	}
 	for _, approval := range approvals {
-		if !fingerprintPattern.MatchString(approval.Fingerprint) || HasControl(approval.Label) {
-			return errorf("cannot record approval of %s", Printable(approval.Label))
-		}
 		records = append(records, trustRecord{Fingerprint: approval.Fingerprint, Label: approval.Label})
 	}
 	return writeTrust(home, records)

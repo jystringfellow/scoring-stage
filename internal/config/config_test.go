@@ -354,13 +354,16 @@ func TestTheAWSProfileFlagIsGrantedAndOverridesEveryOtherDefault(t *testing.T) {
 func TestBookKitsResolveAgainstTheBookAndRepoKitsApplyOnlyToMatchingRepos(t *testing.T) {
 	dir := t.TempDir()
 	path := book(t, dir, "org", `
-		kits = ["./kits/toolchain", "docker.io/sbx/mise:1.0.0"]
+		kits = ["./kits/toolchain", "./kits/mise"]
 
 		[[repos]]
 		match = ["acme/api", "Acme.Api"]
 		kits = [{ source = "./kits/api-rules", args = { tier = "dev" } }]
 		aws = { profiles = ["api-dev"] }
 	`)
+	testutil.WriteFile(t, filepath.Join(path, "kits", "toolchain", "toolchain.yaml"), "capabilities: []\n")
+	testutil.WriteFile(t, filepath.Join(path, "kits", "mise", "mise.yaml"), "capabilities: []\n")
+	testutil.WriteFile(t, filepath.Join(path, "kits", "api-rules", "api-rules.yaml"), "capabilities: []\n")
 	settings, selection := withBooks(t, filepath.Join(dir, "home"), path)
 	selection.RepoNames = []string{"Acme.Api", "acme/api"}
 	matched := composeWith(t, settings, selection)
@@ -368,7 +371,7 @@ func TestBookKitsResolveAgainstTheBookAndRepoKitsApplyOnlyToMatchingRepos(t *tes
 	unmatched := composeWith(t, settings, selection)
 	bookDir := Resolve(path)
 	toolchain := Kit{Source: filepath.Join(bookDir, "kits/toolchain")}
-	mise := Kit{Source: "docker.io/sbx/mise:1.0.0"}
+	mise := Kit{Source: filepath.Join(bookDir, "kits/mise")}
 	expectKits(t, matched.Kits[len(matched.Kits)-3:], []Kit{toolchain, mise, {Source: filepath.Join(bookDir, "kits/api-rules"), Args: map[string]any{"tier": "dev"}}})
 	if !reflect.DeepEqual(matched.AWSProfiles, []string{"api-dev"}) {
 		t.Errorf("matched profiles = %v", matched.AWSProfiles)
@@ -386,6 +389,7 @@ func TestRepoMatchIsCaseSensitiveGlob(t *testing.T) {
 		match = "Acme.*"
 		kits = ["./kits/x"]
 	`)
+	testutil.WriteFile(t, filepath.Join(path, "kits", "x", "x.yaml"), "capabilities: []\n")
 	settings, selection := withBooks(t, filepath.Join(dir, "home"), path)
 	last := func(names ...string) string {
 		selection.RepoNames = names
@@ -594,7 +598,8 @@ func installedBook(t *testing.T, dir, name, body string) (home string) {
 
 func TestInstalledBooksApplyOnlyWhenNamedOrMatched(t *testing.T) {
 	dir := t.TempDir()
-	home := installedBook(t, dir, "dotnet", "agents = [\"claude\"]\nkits = [\"docker.io/org/dotnet:1\"]\n")
+	home := installedBook(t, dir, "dotnet", "agents = [\"claude\"]\nkits = [\"./kits/dotnet\"]\n")
+	testutil.WriteFile(t, filepath.Join(dir, "dotnet", "kits", "dotnet", "dotnet.yaml"), "capabilities: []\n")
 	settings := load(t, home)
 	if got := composeWith(t, settings, Selection{}); len(got.Books) != 0 || len(got.Agents) != 0 {
 		t.Fatalf("unrequested book applied: %v %v", got.Books, got.Agents)
@@ -609,7 +614,8 @@ func TestInstalledBooksApplyOnlyWhenNamedOrMatched(t *testing.T) {
 
 func TestARepositoryNamesInstalledBooksAndAddsAgentsAndKits(t *testing.T) {
 	dir := t.TempDir()
-	home := installedBook(t, dir, "dotnet", "kits = [\"docker.io/org/dotnet:1\"]\n")
+	home := installedBook(t, dir, "dotnet", "kits = [\"./kits/dotnet\"]\n")
+	testutil.WriteFile(t, filepath.Join(dir, "dotnet", "kits", "dotnet", "dotnet.yaml"), "capabilities: []\n")
 	repoDir := filepath.Join(dir, "repo")
 	testutil.WriteFile(t, filepath.Join(repoDir, RepoConfigPath), "agents = [\"codex\"]\nbooks = [\"dotnet\"]\nkits = [\"./tools/kit\"]\n")
 	testutil.WriteFile(t, filepath.Join(repoDir, "tools", "kit", "kit.yaml"), "x: 1\n")
@@ -619,7 +625,7 @@ func TestARepositoryNamesInstalledBooksAndAddsAgentsAndKits(t *testing.T) {
 	}
 	settings := load(t, home)
 	composition := composeWith(t, settings, Selection{Repo: repo})
-	want := []string{"docker.io/sbx/codex-mixin:0.167.0", filepath.Join(settings.CoreKits(), "stage"), "docker.io/org/dotnet:1", Resolve(filepath.Join(repoDir, "tools/kit"))}
+	want := []string{"docker.io/sbx/codex-mixin:0.167.0", filepath.Join(settings.CoreKits(), "stage"), Resolve(filepath.Join(dir, "dotnet", "kits", "dotnet")), Resolve(filepath.Join(repoDir, "tools/kit"))}
 	if got := sources(composition.Kits); !reflect.DeepEqual(got, want) {
 		t.Fatalf("kits = %v\nwant %v", got, want)
 	}
@@ -677,19 +683,18 @@ func TestAKitIsTrustedOnlyWhileItsFilesAndArgumentsAreUnchanged(t *testing.T) {
 	}
 }
 
-func TestARepositoryKitIsADotPathOrAPublishedKitPinnedByDigest(t *testing.T) {
+func TestARepositoryKitIsADotPathNeverAPublishedKit(t *testing.T) {
 	digest := "@sha256:" + strings.Repeat("a", 64)
 	for source, ok := range map[string]bool{
-		"./kits/rules":                      true,
-		"docker.io/org/kit" + digest:        true,
-		"docker.io/org/kit:1.0" + digest:    true,
-		"docker.io/org/kit:1.0":             false,
-		"localhost:5000/kit:latest":         false,
-		"kits/rules":                        false,
-		".scoring-stage/kits/x":             false,
-		"file:///etc":                       false,
-		".":                                 false,
-		"docker.io/org/kit@sha256:" + "abc": false,
+		"./kits/rules":                   true,
+		"docker.io/org/kit" + digest:     false,
+		"docker.io/org/kit:1.0" + digest: false,
+		"docker.io/org/kit:1.0":          false,
+		"localhost:5000/kit:latest":      false,
+		"kits/rules":                     false,
+		".scoring-stage/kits/x":          false,
+		"file:///etc":                    false,
+		".":                              false,
 	} {
 		repoDir := filepath.Join(t.TempDir(), "repo")
 		testutil.WriteFile(t, filepath.Join(repoDir, RepoConfigPath), "kits = [\""+source+"\"]\n")
@@ -703,7 +708,7 @@ func TestARepositoryKitIsADotPathOrAPublishedKitPinnedByDigest(t *testing.T) {
 			t.Errorf("%s: %v", source, err)
 		}
 		if !ok {
-			expectError(t, err, "must be a ./ path inside the repository or a published kit pinned by digest")
+			expectError(t, err, "must be a ./ path inside the repository; published kits in books and repository configs cannot be inspected, and a kit can send any credential sbx holds to any host")
 		}
 	}
 }
