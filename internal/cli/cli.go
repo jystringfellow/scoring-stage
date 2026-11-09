@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -97,6 +98,7 @@ commands:
                                     push the sandbox's commit to agent/<slug>/<sha> from the host
   list                              list scoring-stage sandboxes
   down <slug>                       remove the sandbox, its secrets and the scratch clone
+  version                           print the stage version
 `
 
 func (a *App) Main(args []string) int {
@@ -114,6 +116,10 @@ func (a *App) Main(args []string) int {
 	name := args[0]
 	if name == "-h" || name == "--help" || name == "help" {
 		fmt.Fprint(a.Stdout, usage)
+		return 0
+	}
+	if name == "version" || name == "--version" {
+		fmt.Fprintf(a.Stdout, "stage %s\n", versionOf(Version, debug.ReadBuildInfo))
 		return 0
 	}
 	command, ok := commands[name]
