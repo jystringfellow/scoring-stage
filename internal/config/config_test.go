@@ -240,7 +240,7 @@ func TestATokenFileOthersCanReadIsRefusedAndNeverBound(t *testing.T) {
 }
 
 func TestNoConfigOrBookBindingMaySendACredentialToGitHub(t *testing.T) {
-	for _, domain := range []string{"github.com", "api.github.com:443", "*.github.com", "**", "uploads.github.com", "gist.github.com", "github.com.", "models.github.ai"} {
+	for _, domain := range []string{"github.com", "api.github.com:443", "*.github.com", "**", "uploads.github.com", "gist.github.com", "github.com.", "models.github.ai", "*.com", "**.com", "*hub.com", "api.*", "*.githubusercontent.com", "*.ai", "*.github.ai:443"} {
 		home := filepath.Join(t.TempDir(), "home")
 		testutil.WriteFile(t, filepath.Join(home, "config.toml"), "[bindings.gh2]\napiKey = { domains = [\""+domain+"\"] }\n")
 		_, err := LoadSettings(home)
@@ -863,5 +863,13 @@ func TestOnlyAgentsWithAnInSandboxLoginCanBeCopied(t *testing.T) {
 func TestTheBrokerBindingCoversOnlyTheBrokerPort(t *testing.T) {
 	if got := brokerBinding(); !reflect.DeepEqual(got, map[string]any{"apiKey": map[string]any{"domains": []any{"localhost:9911"}}}) {
 		t.Fatalf("broker binding %v", got)
+	}
+}
+
+func TestWildcardBindingsThatCannotMatchAGitHubHostAreAllowed(t *testing.T) {
+	for _, domain := range []string{"*.amazonaws.com", "*.githubcopilot.com", "api.*.example.org", "copilot.github.com"} {
+		if ReachesGitHub(domain) {
+			t.Errorf("%s was treated as reaching GitHub", domain)
+		}
 	}
 }
