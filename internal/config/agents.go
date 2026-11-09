@@ -190,9 +190,15 @@ func hostReaches(host, target string) bool {
 	return host == target || strings.HasSuffix(host, "."+target) || strings.HasSuffix(target, "."+host)
 }
 
+const domainGlobReason = "glob characters other than * are refused because stage cannot tell which hosts they match"
+
+func hasDomainGlob(domain string) bool {
+	return strings.ContainsAny(normalizeHost(domain), `?[]{}\`)
+}
+
 func reachesAny(domain string, targets []string) bool {
 	host := normalizeHost(domain)
-	if strings.ContainsAny(host, `?[]{}\`) {
+	if hasDomainGlob(host) {
 		return true
 	}
 	for _, target := range targets {

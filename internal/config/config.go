@@ -372,6 +372,9 @@ func refuseForeignBindings(secrets, bindings map[string]any, owner string) error
 			return errorf("%s: binding %s: %v", owner, service, err)
 		}
 		for _, domain := range domains {
+			if hasDomainGlob(domain) {
+				return errorf("%s: binding %s covers %s; %s", owner, service, Printable(domain), domainGlobReason)
+			}
 			if ReachesReserved(domain) {
 				return errorf("%s: binding %s covers %s, a host a reserved service uses; %s", owner, service, Printable(domain), reservedReason())
 			}
@@ -866,6 +869,9 @@ func refuseGitHubService(secrets, bindings map[string]any, where string) error {
 			return errorf("%s: binding %s: %v", where, service, err)
 		}
 		for _, domain := range domains {
+			if hasDomainGlob(domain) {
+				return errorf("%s: binding %s covers %s; %s", where, service, Printable(domain), domainGlobReason)
+			}
 			if ReachesGitHub(domain) {
 				return errorf("%s: binding %s covers %s; GitHub credentials come only from [github] mode", where, service, domain)
 			}
