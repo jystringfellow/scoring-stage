@@ -19,8 +19,8 @@ const (
 )
 
 var (
-	GitHubModes = []string{GitHubFineGrained, GitHubGh, GitHubNone}
-	githubKeys  = []string{"mode"}
+	GitHubModes = []string{GitHubFineGrained, GitHubApp, GitHubGh, GitHubNone}
+	githubKeys  = []string{"mode", "app_client_id"}
 	githubOwner = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?$`)
 )
 
@@ -80,6 +80,7 @@ func (s *Settings) LegacyGitHubToken() string {
 
 var gitHubModeDescriptions = map[string]string{
 	GitHubFineGrained: "a read-only token per owner",
+	GitHubApp:         "your own read-only GitHub App",
 	GitHubGh:          "your gh login, which can write",
 	GitHubNone:        "no GitHub credential",
 }
@@ -114,6 +115,8 @@ func (s *Settings) CheckGitHub(owner, gh string) error {
 	switch mode {
 	case GitHubNone:
 		return nil
+	case GitHubApp:
+		return s.checkGitHubApp()
 	case GitHubGh:
 		if gh == "" {
 			return errorf("[github] mode = %q needs the gh CLI on the host, logged in with `gh auth login`", GitHubGh)
@@ -205,6 +208,12 @@ func (s *Settings) gitHubCredential(selection Selection, secrets, bindings map[s
 		secrets[GitHubService] = map[string]any{"command": "/bin/cat " + ShellQuote(s.GitHubTokenFile(selection.GitHubOwner))}
 	case GitHubGh:
 		secrets[GitHubService] = map[string]any{"command": ShellQuote(selection.Gh) + " auth token"}
+	case GitHubApp:
+		secret, err := s.gitHubAppSecret()
+		if err != nil {
+			return
+		}
+		secrets[GitHubService] = secret
 	default:
 		return
 	}

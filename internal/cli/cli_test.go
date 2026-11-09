@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/jystringfellow/scoring-stage/internal/config"
+	"github.com/jystringfellow/scoring-stage/internal/github/githubtest"
 	"github.com/jystringfellow/scoring-stage/internal/kits"
 	"github.com/jystringfellow/scoring-stage/internal/source"
 	"github.com/jystringfellow/scoring-stage/internal/testutil"
@@ -26,6 +27,7 @@ type harness struct {
 	hostProfiles   []string
 	gh             string
 	github         *fakeGitHub
+	githubApp      *githubtest.Fake
 	terminal       bool
 	stdinTerminal  bool
 	stdin          string
@@ -81,6 +83,9 @@ func (h *harness) stage(args ...string) int {
 		HostAWSProfiles: func() ([]string, error) {
 			return h.hostProfiles, nil
 		},
+	}
+	if h.githubApp != nil {
+		app.GitHub = h.githubApp.Client()
 	}
 	return app.Main(args)
 }
@@ -773,8 +778,8 @@ func TestSetupSavesTheGitHubModeOnceAndReportsAMissingChoice(t *testing.T) {
 	}
 	h.expect(1, "setup", "--github", "gh")
 	h.expectStderr("already sets github; edit it there")
-	h.expect(1, "setup", "--github", "app")
-	h.expectStderr("--github must be one of fine-grained, gh, none")
+	h.expect(1, "setup", "--github", "bogus")
+	h.expectStderr("--github must be one of fine-grained, app, gh, none")
 	writeToken(t, filepath.Join(h.home, "secrets", "github", "Globex.token"), "github_pat_globex\n")
 	h.expect(0, "setup")
 	if !strings.Contains(h.stdout.String(), "github token for globex: fine-grained") {
@@ -923,7 +928,7 @@ func TestAnEmptyManagedGitHubModeListRefusesEveryMode(t *testing.T) {
 func TestSetupRejectsABadGitHubModeBeforeSavingAgents(t *testing.T) {
 	h := setup(t)
 	testutil.WriteFile(t, filepath.Join(h.home, "config.toml"), "")
-	h.expect(1, "setup", "--agent", "codex", "--github", "app")
+	h.expect(1, "setup", "--agent", "codex", "--github", "bogus")
 	if got := testutil.ReadFile(t, filepath.Join(h.home, "config.toml")); got != "" {
 		t.Fatalf("config.toml = %q", got)
 	}

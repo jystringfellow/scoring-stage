@@ -22,6 +22,7 @@ import (
 	"github.com/jystringfellow/scoring-stage/internal/broker"
 	"github.com/jystringfellow/scoring-stage/internal/config"
 	"github.com/jystringfellow/scoring-stage/internal/envfile"
+	"github.com/jystringfellow/scoring-stage/internal/github"
 	"github.com/jystringfellow/scoring-stage/internal/kits"
 	"github.com/jystringfellow/scoring-stage/internal/sbx"
 	"github.com/jystringfellow/scoring-stage/internal/source"
@@ -49,13 +50,14 @@ type App struct {
 	BrokerStart     func(home string) error
 	IsTerminal      func() bool
 	HostAWSProfiles func() ([]string, error)
+	GitHub          *github.Client
 	StdinIsTerminal func() bool
 	ReadSecret      func() ([]byte, error)
 	GitHubAPI       config.GitHubAPI
 }
 
 func New() *App {
-	app := &App{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, FindGh: config.FindGh, BrokerPID: brokerPID}
+	app := &App{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, FindGh: config.FindGh, BrokerPID: brokerPID, GitHub: github.NewClient()}
 	app.BrokerStart = app.brokerStart
 	app.HostAWSProfiles = hostAWSProfiles
 	app.StdinIsTerminal = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
@@ -86,6 +88,7 @@ commands:
                                    check sbx, the global policy, credentials and books; save your agents
   token set <owner>                 save a fine-grained GitHub token for a repository owner, read from stdin
   broker start|stop|status|serve    manage the host AWS credential broker
+  github login|token                log in to your GitHub App ([github] mode = "app"); print a fresh token
   up <repo> <slug> [options]        create a sandbox for a repository
   shell <slug>                      open a login shell in the repository
   login <slug>                      save the sandbox's copyable agent logins (copy_logins) for future sandboxes
@@ -105,7 +108,8 @@ func (a *App) Main(args []string) int {
 	commands := map[string]func([]string, string) (int, error){
 		"setup": a.cmdSetup, "broker": a.cmdBroker, "up": a.cmdUp, "shell": a.cmdShell,
 		"exec": a.cmdExec, "ship": a.cmdShip, "list": a.cmdList, "down": a.cmdDown, "login": a.cmdLogin,
-		"token": a.cmdToken,
+		"github": a.cmdGitHub,
+		"token":  a.cmdToken,
 	}
 	name := args[0]
 	if name == "-h" || name == "--help" || name == "help" {
@@ -650,6 +654,9 @@ func (a *App) checkGitHubAccess(settings *config.Settings, owner, gh string) err
 	if err := settings.CheckGitHub(owner, gh); err != nil {
 		return err
 	}
+	if settings.GitHubMode() == config.GitHubApp {
+		return a.checkGitHubApp(settings)
+	}
 	if settings.GitHubMode() != config.GitHubGh {
 		return nil
 	}
@@ -673,6 +680,8 @@ func (a *App) reportGitHub(settings *config.Settings, gh string, ghLoggedIn bool
 	switch mode {
 	case config.GitHubNone:
 		a.say("github: none (sandboxes get no GitHub credential)")
+	case config.GitHubApp:
+		a.reportGitHubApp(settings)
 	case config.GitHubGh:
 		if err := settings.CheckGitHub("", gh); err != nil {
 			a.warn("%s; stage up will refuse", err)
