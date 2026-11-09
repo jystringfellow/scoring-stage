@@ -322,6 +322,19 @@ func TestEveryAgentBindingHostIsReserved(t *testing.T) {
 	}
 }
 
+func TestReservedDomainsRefuseGlobsAndWildcardsThatCouldReachThem(t *testing.T) {
+	for _, domain := range []string{"api.anthropi?.com", "api.anthropic.co[m]", "{api,x}.openai.com", "*.githubcopilot.com", "localhost:99*", "*.anthropic.com", "gith?b.com"} {
+		if !ReachesReserved(domain) {
+			t.Errorf("%s does not reach a reserved host", domain)
+		}
+	}
+	for _, domain := range []string{"pkgs.dev.azure.com", "*.amazonaws.com", "nuget.example.com"} {
+		if ReachesReserved(domain) {
+			t.Errorf("%s reaches a reserved host", domain)
+		}
+	}
+}
+
 func TestSecretAndBindingNamesCannotCarryControlCharacters(t *testing.T) {
 	_, err := LoadBook(book(t, t.TempDir(), "org", "[secrets.\"anthropic\u200b\"]\ncommand = \"cat /tmp/k\"\n"))
 	expectError(t, err, "contains control characters")
