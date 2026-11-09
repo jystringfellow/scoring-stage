@@ -104,7 +104,7 @@ func repositoryOf(source string) string {
 	return repository
 }
 
-var mixinRepository = regexp.MustCompile(`^docker\.io/sbx/[^/]+-mixin$`)
+var mixinRepository = regexp.MustCompile(`(^|/)sbx/[^/]+-mixin$`)
 
 // looksLikeAgentMixin reports a reference to one of Docker's agent mixins,
 // known to stage or not.

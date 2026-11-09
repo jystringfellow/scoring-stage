@@ -253,7 +253,7 @@ restrict, so they guard against mistakes and record policy; a user with administ
 still remove the file.
 
 Agent policy covers the agents stage puts in a sandbox: agents named anywhere, and Docker's agent mixins
-(`docker.io/sbx/*-mixin`, under any of docker.io's aliases) wherever they appear, including as plain kits. It cannot
+(`sbx/*-mixin` on any registry or mirror) wherever they appear, including as plain kits. It cannot
 stop a kit's setup commands from installing an agent CLI by other means; what stops that agent from working is the
 sandbox's egress to its vendor.
 

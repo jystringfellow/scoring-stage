@@ -141,9 +141,11 @@ func TestAgentPolicyCannotBeSidesteppedByReferenceAliasesOrPlainKits(t *testing.
 		}
 	}
 	home := filepath.Join(t.TempDir(), "home")
-	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "kits = [\"docker.io/sbx/newagent-mixin:1\"]\n")
-	_, err := Compose(load(t, home), Selection{})
-	expectError(t, err, "is not a known agent")
+	for _, kit := range []string{"docker.io/sbx/newagent-mixin:1", "registry.hub.docker.com/sbx/codex-mixin:1", "mirror.example.com/sbx/codex-mixin:1"} {
+		testutil.WriteFile(t, filepath.Join(home, "config.toml"), "kits = [\""+kit+"\"]\n")
+		_, err := Compose(load(t, home), Selection{})
+		expectError(t, err, "is not a known agent")
+	}
 }
 
 func TestAnUnreadableManagedFileOrBadPatternRefusesToRun(t *testing.T) {
