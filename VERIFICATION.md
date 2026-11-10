@@ -225,10 +225,14 @@ Token refresh:
   expiry, not before it: the access token's fingerprint changed, its new expiry was eight hours on, and the refresh
   token's expiry moved to six months from the rewrite. No fingerprint of the refresh token was taken at login, so
   this does not show the refresh token itself changed.
-- Nothing ran `stage github token` by hand. sbx's audit log shows the kapellmeister sandbox active only in the minutes
-  after login, and nothing from it again until it was started about 45 minutes after the rewrite, so it did not
-  refresh the token. The rewrite came 34 seconds before another stage sandbox's first audit event. That fits its
-  creation running `stage github token`, which refreshes a login that has expired or has under 40 minutes left.
+- Nothing ran `stage github token` by hand. The kapellmeister sandbox was stopped across the expiry:
+  - `sbx ls` showed it stopped about eight hours before expiry.
+  - The next command run in it, about 45 minutes after the rewrite, printed that sbx had started it.
+  - sbx's audit log records a `filesystem_mount` event for every command run in a sandbox, including the one that
+    starts it; another sandbox started by `sbx exec` that day logged one at that second. The kapellmeister sandbox
+    has none between the minutes after login and that later command.
+- The rewrite came 34 seconds before another stage sandbox's first audit event. That fits its creation running
+  `stage github token`, which refreshes a login that has expired or has under 40 minutes left.
 - So a sandbox start refreshed an expired login. A running sandbox re-running the command on `refresh: 30m` was not
   observed: no app-mode sandbox was running across the expiry.
 - After the kapellmeister sandbox was started again, `GET /user` from inside it returned 200. This shows the
