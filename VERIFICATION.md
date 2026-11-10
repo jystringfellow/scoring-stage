@@ -31,6 +31,10 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
 - Agent sign-ins, and `copy_logins` with a real agy login, on the current code.
 - Books, repository kit approval and managed settings, beyond unit tests.
 - Whether `sbx env create --force` prints the plan it approves.
+- Where sbx keeps `credentials.yaml`, beyond `~/.config/sbx/credentials.yaml` on macOS. `stage setup`'s bindings
+  audit also looks under `$XDG_CONFIG_HOME` and `%APPDATA%`, inferred from strings in the sbx binary.
+- The audit's parsing of `sbx secret ls --global --json` against real sbx output.
+- That `sbx secret rm <service>` removes the global secret by default, which comes from sbx's help text only.
 - sbx's kit loader: which files it reads from a kit directory, and whether it matches keys case-insensitively.
   stage checks `.yaml`, `.yml` and `.json` files at any depth except under `files/`, and refuses keys that differ
   from `capabilities`, `extends`, `type`, `config`, `service`, `inject` or `domain` only in case.
