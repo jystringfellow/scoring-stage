@@ -15,9 +15,8 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
 - `tests/acceptance.sh` has no CI; each run is recorded here.
 - The GitHub REST write refusals in the stage kit beyond the three requests checked on 2026-11-10.
 - `fine-grained` token checks and `stage token set` against GitHub itself.
-- `app` mode's token refresh: whether sbx re-runs `stage github token` on the secret's `refresh` interval, so a
-  sandbox keeps GitHub access after its first access token expires. Also a refresh-token rotation, and whether
-  `/user/installations` reports account permissions (the app checked on 2026-11-10 had none).
+- `app` mode: whether `/user/installations` reports account permissions (the app checked on 2026-11-10 had none),
+  and which process ran the refresh recorded on 2026-11-10 (see that entry).
 - `stage ship` pushing to GitHub, and `--pr`.
 - The release workflow's refusals: a tag that is not `vX.Y.Z[-suffix]`, and a tagged commit that is not on `main`.
 - A full kapellmeister score on the current code. A score ran on an earlier stage build (2026-11-09, outside this
@@ -208,3 +207,27 @@ kapellmeister (`agent/e7125958/scoring-stage` at 77ff6873):
   vendor and used a tool. claude (22 s), codex (10 s), copilot (28 s) and agy (36 s) all did, 36 s in all. Only
   `cao-server`'s own tmux session remained afterwards. This is the first record of claude, codex, copilot and agy,
   including agy's copied login, authenticating and answering inside a sandbox on the current code.
+
+## 2026-11-10: app-mode token refresh, and sbx moving the sandbox remote
+
+- **sbx:** 0.51.0.
+- **stage:** the same temporary build and sandbox as the previous entry.
+- **Credentials:** as the previous entry.
+- **Shared state:** no sbx command changed `~/.config/sbx/credentials.yaml`, whose sha256 was still
+  `4998c033b4b70e066939e87ed0f223fea6dee62917823758bc7a58e2ce021008`.
+
+Token refresh:
+
+- The first access token expired eight hours after login. Three minutes after that, stage's saved app login was
+  rewritten. The access token's fingerprint changed, and the new token's expiry was eight hours on.
+- The refresh token's expiry moved to six months from the rewrite, so GitHub rotated the refresh token as well.
+- `stage github token` was not run by hand. The rewrite happened while the sandbox was running, which fits sbx
+  re-running the secret's command on `refresh: 30m`; the host cannot show which process ran it.
+- After the refresh, `GET /user` from inside the sandbox returned 200.
+
+Sandbox remote:
+
+- While the sandbox was stopped, the scratch clone's `.git/config` had no `sandbox-<sandbox>` remote. On the next
+  start sbx added it again as `git://127.0.0.1:<port>/src` with its two fetch refspecs, on a different port from the
+  one it had at `stage up`. Before #29, `stage ship` refused every sandbox that had restarted for this reason.
+
