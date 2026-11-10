@@ -1,6 +1,7 @@
 package source
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -89,5 +90,23 @@ func TestPrepareReportsAnUnknownBase(t *testing.T) {
 	_, _, err := Prepare(remote.Checkout, filepath.Join(t.TempDir(), "src"), "acme/api", "no-such-branch")
 	if err == nil || !strings.Contains(err.Error(), "git fetch") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestPrepareClonesWithoutRunningHooksTheHostGitConfigNames(t *testing.T) {
+	remote := testutil.GitHubRemote(t)
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "ran")
+	hook := testutil.WriteFile(t, filepath.Join(dir, "hooks", "post-checkout"), "#!/bin/sh\ntouch "+marker+"\n")
+	if err := os.Chmod(hook, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	global := testutil.WriteFile(t, filepath.Join(dir, "gitconfig"), "[core]\n\thooksPath = "+filepath.Join(dir, "hooks")+"\n")
+	t.Setenv("GIT_CONFIG_GLOBAL", global)
+	if _, _, err := Prepare(remote.Checkout, filepath.Join(dir, "task", "src"), "acme/api", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("the initial clone ran a hook")
 	}
 }

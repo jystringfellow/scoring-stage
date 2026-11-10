@@ -11,7 +11,7 @@ the host, compute a secret, or choose which sandbox gets which grant. Those are 
 | --- | --- |
 | Egress, push refusal, agent files and guidance | Kits |
 | Secret values (`gh auth token`, a token file, a feed password) | `stage`, as per-sandbox `secrets` with a host `command` |
-| Credential approval per service and domain | `stage`, as `bindings` |
+| Credential authorisation per service (kits decide the hosts) | `stage`, as `bindings` |
 | AWS credentials | `stage`'s host broker, plus the `aws-broker` kit |
 | Scratch clone, `ship`, cleanup | `stage` |
 | sbx version floor and the global deny-all check | `stage` |
@@ -28,9 +28,10 @@ repository's config, a book or `--agent`, and an agent's bindings come with it.
 Configuration follows kapellmeister's split between the user's directory and the repository's. The repository's
 config is input from whoever can commit to it, so it may only ask for agents by name, things the user has already
 installed (books, by name), and its own kits. Kits and books can widen egress, send credentials and run host
-commands, so a repository's kits must be link-free `./` directories in the repository or digest-pinned published
-kits, and its kits and the books it turns on are used only after the user approves each one by content: a local
-kit's or book's files, or a published kit's digest and arguments. Secrets run commands on the host, bindings
+commands, so a repository's kits must be link-free `./` directories in the repository, and its kits and the books
+it turns on are used only after the user approves each one by content: a local kit's or book's files. Books and
+repository configs cannot name published kits, because a kit decides where a credential is injected and a published
+kit cannot be inspected; their local kits are checked for the credentials they declare. Secrets run commands on the host, bindings
 and AWS profiles hand out credentials, and a book location would let a repository supply its own host commands, so
 those stay with the user and the books they install.
 
@@ -86,6 +87,15 @@ sandbox, and stay usable until they expire; signing requests at the proxy instea
   both as optional with the same content so either selection composes.
 - Typing a built-in agent name (`claude`) selects Docker's v2 kits, which cannot compose with v3 mixins; `stage`
   always names a v3 workload by reference.
+- Binding domains do not bound injection. A binding only authorises a service name; a kit's `credential@1` inject
+  domain decides where the secret goes. A local mixin declaring `service: copilot` with an inject domain of another
+  host got the copilot secret injected there with no binding in the env file, because the global
+  `credentials.yaml` already bound copilot. The same holds for any service with a binding on the machine; a service
+  with none is refused ("no binding authorizes X").
+- `sbx env plan` runs no secret commands and merges no bindings.
+- `kit.allowedSources` refuses a kit even under `--force`, before any binding merges.
+- `sbx env rm --prune-bindings` removes the whole shared service entry from `credentials.yaml`, not just the
+  sandbox's use of it.
 - `kit.allowedSources` defaults to Docker Hub and dhi.io. Books published to another registry need it widened, and
   signed kits must be published images: local and git sources cannot be signed.
 
@@ -97,3 +107,6 @@ sandbox, and stay usable until they expire; signing requests at the proxy instea
   access token before it expires.
 - `workspace.clone` keeping the sandbox's `.git` writes out of the host scratch clone. `tests/acceptance.sh` checks
   it, but has no recorded run since that check was added.
+- sbx's kit loader: which files it reads from a kit directory, and whether it matches keys case-insensitively. stage
+  checks `.yaml`, `.yml` and `.json` files at any depth except under `files/`, and refuses keys that differ from
+  `capabilities`, `extends`, `type`, `config`, `service`, `inject` or `domain` only in case.

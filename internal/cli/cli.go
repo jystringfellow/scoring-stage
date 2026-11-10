@@ -620,6 +620,13 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 }
 
 func (a *App) checkRepoApprovals(home string, composition *config.Composition, approve, plan bool) error {
+	cleared, err := config.ClearLegacyTrust(home)
+	if err != nil {
+		return err
+	}
+	if cleared {
+		a.warn("stage now stores approvals as JSON; earlier approvals were cleared, and you'll be asked again")
+	}
 	approvals, err := config.RepoApprovals(composition)
 	if err != nil {
 		return err
@@ -631,14 +638,13 @@ func (a *App) checkRepoApprovals(home string, composition *config.Composition, a
 	fmt.Fprintf(a.Stderr, "stage: the repository's %s asks for kits or books you have not approved. They can widen the\n"+
 		"  sandbox's network access, send credentials or run commands. Review them before approving:\n", config.RepoConfigPath)
 	for _, approval := range missing {
-		fmt.Fprintf(a.Stderr, "  - %s\n", approval.Label)
+		fmt.Fprintf(a.Stderr, "  - %s\n", config.Printable(approval.Label))
 		for _, detail := range approval.Details {
-			fmt.Fprintf(a.Stderr, "      %s\n", detail)
+			fmt.Fprintf(a.Stderr, "      %s\n", config.Printable(detail))
 		}
 	}
 	if plan {
-		a.warn("plan only; stage up will ask you to approve these")
-		return nil
+		return errorf("plan stopped before writing the env file: approve these first by running stage up without --plan, then plan again")
 	}
 	if !approve && !a.confirm("Approve these for this and future sandboxes while they are unchanged?") {
 		return errorf("not approved; review them and answer y, or pass --approve-repo-config to approve them without asking")
@@ -647,7 +653,7 @@ func (a *App) checkRepoApprovals(home string, composition *config.Composition, a
 		return err
 	}
 	for _, approval := range missing {
-		a.say("approved %s (%s); a change to it asks again", approval.Label, approval.Fingerprint[:12])
+		a.say("approved %s (%s); a change to it asks again", config.Printable(approval.Label), approval.Fingerprint[:12])
 	}
 	return nil
 }
@@ -967,21 +973,12 @@ func checkGitConfig(task *Task) error {
 	return nil
 }
 
-// printable escapes control characters so text from a sandbox cannot move
-// the cursor or rewrite the terminal while the user reviews it.
 func printable(text string) string {
-	var out strings.Builder
-	for _, r := range text {
-		switch {
-		case r == '\n':
-			out.WriteRune(r)
-		case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f, r >= 0x200b && r <= 0x200f, r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069, r == 0xfeff:
-			fmt.Fprintf(&out, "\\x%02x", r)
-		default:
-			out.WriteRune(r)
-		}
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		lines[i] = config.Printable(line)
 	}
-	return out.String()
+	return strings.Join(lines, "\n")
 }
 
 func indent(text string) string {
