@@ -171,23 +171,27 @@ repository config; no AWS profile):
 - The repository kit's setup worked: `km`, `cao` and `cao-server` were installed, `cao-server` was running in tmux,
   and the saved agy login was copied in. A `km run` was not attempted.
 
-
 ## 2026-11-10: GitHub App mode and agent sign-ins on kapellmeister
 
 - **sbx:** 0.51.0.
 - **stage:** `main` at a452ee8, built to a temporary binary, the same build as the 2026-11-09 acceptance entry;
-  `tests/acceptance.sh` from main at d39aee4.
+  `tests/acceptance.sh` from main at d39aee4. No non-test code changed between a452ee8 and d39aee4.
 - **Credentials:** real. `[github] mode = "app"` with an enterprise-owned GitHub App the maintainer registered with
   read-only repository permissions and no organisation or account permissions, Device Flow on and expiring user
   tokens; the maintainer's agent logins; the saved agy login through `copy_logins`. No AWS profile.
 - **Shared state:** the earlier kapellmeister sandbox, created in gh mode, was removed with `stage down` and
-  recreated. The sandbox was left running after this entry to check token refresh.
+  recreated. `~/.config/sbx/credentials.yaml` had the same sha256 after the run as before it
+  (`4998c033b4b70e066939e87ed0f223fea6dee62917823758bc7a58e2ce021008`): the `github` binding on `api.github.com`
+  and `github.com` already existed and did not change. `sbx secret ls --global` still listed no `github` secret.
+  `stage github login` left the app login on the host, an access token and a refresh token in
+  `secrets/github/app.json` under stage's home, which stays until it is removed or expires. The sandbox was left
+  running after this entry to check token refresh.
 
 GitHub App:
 
 - `stage github login` showed a device code; after the maintainer authorised it, stage saved the login, reported
-  the access token's expiry (8 hours) and the refresh token's (about 6 months), and listed the app's 11
-  installations. The read-only check passed on all of them.
+  the access token's expiry (8 hours) and the refresh token's (about 6 months), and listed the app's
+  installations. The read-only check passed on every one.
 - The sandbox's env file had a `github` secret with the command `stage github token` and `refresh: 30m`.
 - Inside the sandbox, `GET /user` returned 200 as the maintainer, and a GraphQL read returned 200. `GH_TOKEN` held a
   `gho_sbxp…` placeholder whose hash matched neither the gh login token nor the app access token; the proxy
@@ -199,7 +203,8 @@ kapellmeister (`agent/e7125958/scoring-stage` at 77ff6873):
 
 - `tests/acceptance.sh`: every check that applies without AWS passed, including the new checks that the app's
   refresh token and current access token are nowhere in the sandbox (488,877 strings scanned, every canary found).
-- `km preflight` with all four agents, in a throwaway worktree and state directory: claude (22 s), codex (10 s),
-  copilot (28 s) and agy (36 s) each answered ready through CAO, 36 s in all. Only `cao-server`'s own tmux session
+- `km preflight` with all four agents, in a throwaway worktree and state directory. Preflight sends each agent a
+  prompt to write the word "ready" to a file and reply "ready", so each one made an authenticated call to its
+  vendor and used a tool: claude (22 s), codex (10 s), copilot (28 s) and agy (36 s) all did, 36 s in all. Only `cao-server`'s own tmux session
   remained afterwards. This is the first record of claude, codex, copilot and agy, including agy's copied login,
   authenticating and answering inside a sandbox on the current code.
