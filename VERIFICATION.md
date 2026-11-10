@@ -118,13 +118,13 @@ Passed:
 
 Not exercised: the refusal of a malformed tag and of a tag not on `main`.
 
-## 2026-11-09: acceptance on a private .NET service and on kapellmeister
+## 2026-11-09: acceptance on a private repository and on kapellmeister
 
 - **sbx:** 0.51.0.
 - **stage:** `main` at a452ee8, built to a temporary binary; `tests/acceptance.sh` from 9728e55, which fixes the
   scan bug below.
 - **Credentials:** real. `[github] mode = "gh"` (the maintainer's gh login), the maintainer's agent logins, a saved
-  agy login through `copy_logins`, a package-feed token from a private book's secret command, and one AWS profile
+  agy login through `copy_logins`, a token from a private book's secret command, and one AWS profile
   through the broker. The leftover global `github` secret from 2026-11-08 was removed with `sbx secret rm github -f`
   before the run, as `stage up` requires.
 - **Global secrets:** `sbx secret rm github -f`, with no scope flag, printed "Removed secret github (global)", so it
@@ -134,13 +134,13 @@ Not exercised: the refusal of a malformed tag and of a tag not on `main`.
 - **Shared state:** `~/.config/sbx/credentials.yaml` was copied before the run (sha256
   `4998c033b4b70e066939e87ed0f223fea6dee62917823758bc7a58e2ce021008`) and was byte-for-byte the same after the
   first sandbox's `stage down`, with the kapellmeister sandbox still up; every binding the runs needed already
-  existed. The stale `localhost` entry under
-  `stage-broker` remains, as the `stage setup` audit reports. The first run on this version cleared old-format
+  existed. The stale `localhost` entry under `stage-broker` remains, as the `stage setup` audit
+  reports. The first run on this version cleared old-format
   approvals, and both repository configs were approved with `--approve-repo-config` after review.
 
-**A private .NET Web API repository**, with a repository config naming three private books (the .NET SDK and a
-package feed, AWS access, and platform egress for SQL Server, Postgres, Redis and staging APIs) and one repository
-kit; agents claude, codex and copilot; one AWS profile granted:
+**A private repository**, with a repository config naming three private books and one repository kit; agents
+claude, codex and copilot; one AWS profile granted. One book supplies a credential through a host secret command;
+the others add egress and the AWS profile.
 
 - `stage up --plan` with approvals missing listed them and exited 1 without writing the env file or running
   `sbx env plan`, and printed the bindings audit.
@@ -160,8 +160,8 @@ kit; agents claude, codex and copilot; one AWS profile granted:
   "FAIL the broker token is nowhere in the sandbox" was reported, and the gh token check still passed. The file was
   then removed.
 - The repository's end-to-end tests: 134 passed, 8 skipped by the tests' own attributes, 0 failed.
-- A sample of its contract tests against Postgres, SQL Server and HTTP providers: 269 passed, 11 failed. The 11 are
-  S3 uploads that also fail on the host.
+- A sample of its integration tests, built with the book's credential and run through the books' egress: 269
+  passed, 11 failed. The same 11 fail on the host.
 
 **kapellmeister** (`agent/e7125958/scoring-stage` at 77ff6873; agents agy, claude, codex and copilot from the
 repository config; no AWS profile):
