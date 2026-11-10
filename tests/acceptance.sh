@@ -66,7 +66,6 @@ announce repo "$repo_canary"
 announce tmp "$tmp_canary"
 announce bin "$bin_canary"
 announce end "$end_canary"
-command -v strings >/dev/null || echo nostrings
 {
   env
   cat /proc/[0-9]*/environ /proc/[0-9]*/cmdline 2>/dev/null | tr '\0' '\n'
@@ -76,11 +75,9 @@ command -v strings >/dev/null || echo nostrings
   grep -rIhoE '[A-Za-z0-9+/=_-]{20,}' --exclude-dir=ssl --exclude-dir=ca-certificates \
     "$AGENT_HOME" "$REPO_DIR" /etc "$TMP_ROOT" 2>/dev/null
   git -C "$REPO_DIR" log -p --all 2>/dev/null
-  if command -v strings >/dev/null; then
-    comm -23 <(find "$AGENT_HOME" "$REPO_DIR" -type f -size -64M 2>/dev/null | sort) \
-      <(find "$AGENT_HOME" "$REPO_DIR" -type f -size -64M -exec grep -lI '' {} + 2>/dev/null | sort) |
-      while read -r binary; do strings -n 20 "$binary"; done
-  fi
+  comm -23 <(find "$AGENT_HOME" "$REPO_DIR" -type f -size -64M 2>/dev/null | sort) \
+    <(find "$AGENT_HOME" "$REPO_DIR" -type f -size -64M -exec grep -lI '' {} + 2>/dev/null | sort) |
+    while read -r binary; do grep -aoE '[A-Za-z0-9+/=_-]{20,}' "$binary"; done
   printf '%s\n' "$end_canary"
 } | grep -oE '[A-Za-z0-9+/=_-]{20,}' | awk '{
   print
@@ -112,7 +109,7 @@ scan_sandbox() {
   scanned="$(printf '%s\n' "$output" | sed -n 's/^scanned \([0-9][0-9]*\)$/\1/p' | tail -1)"
   for label in env home repo tmp bin end; do
     canary_hash="$(printf '%s\n' "$output" | sed -n "s/^canary $label \\([0-9a-f]\\{64\\}\\)\$/\\1/p" | head -1)"
-    if [ -z "$canary_hash" ] || ! printf '%s\n' "$hashes" | grep -qxF "$canary_hash"; then
+    if [ -z "$canary_hash" ] || ! grep -qxF -e "$canary_hash" <<<"$hashes"; then
       missing="$missing $label"
     fi
   done
@@ -123,7 +120,6 @@ scan_sandbox() {
     echo "FAIL the sandbox scan for token-like strings found nothing to hash"
   elif [ -n "$missing" ]; then
     echo "FAIL the sandbox scan for token-like strings missed its canary in:$missing"
-    printf '%s\n' "$output" | grep -qx nostrings && echo "     strings is not installed in the sandbox, so binaries were not scanned"
   else
     scan_ok=1
     echo "ok   the sandbox scan hashed $scanned token-like strings and found its canary in every planted source"
@@ -139,8 +135,8 @@ secret_absent() {
   elif [ "$scan_ok" != 1 ]; then
     echo "FAIL $name (the sandbox scan is not trustworthy)"
     failures=$((failures + 1))
-  elif ! printf '%s\n' "$hashes" | grep -qxF -e "$(sha "$secret")" -e "$(sha "$(b64 "$secret")")" \
-    -e "$(sha "$(b64 "x-access-token:$secret")")" -e "$(sha "$(b64 ":$secret")")"; then
+  elif ! grep -qxF -e "$(sha "$secret")" -e "$(sha "$(b64 "$secret")")" \
+    -e "$(sha "$(b64 "x-access-token:$secret")")" -e "$(sha "$(b64 ":$secret")")" <<<"$hashes"; then
     echo "ok   $name"
   else
     echo "FAIL $name"
