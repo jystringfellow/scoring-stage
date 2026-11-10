@@ -18,7 +18,7 @@ host-side wiring they need (secrets, credential bindings, AWS profiles, per-repo
 session player is handed for a gig, a book holds what the stage needs for one kind of work.
 
 > Status: early. Some of it has been checked against live sandboxes on sbx 0.51; much is covered only by unit tests
-> with fakes. [What is verified](#what-is-verified) says which. The command line and book format may still change.
+> with fakes. [VERIFICATION.md](VERIFICATION.md) says which. The command line and book format may still change.
 
 ## Requirements
 
@@ -472,43 +472,9 @@ sandbox's egress to its vendor.
 
 ## What is verified
 
-`go test ./...` runs every command against fakes: an `sbx` script on PATH, a local repository standing in for
-github.com, a simulated GitHub API and device flow, and a stub `aws` CLI behind the broker. The tests show what stage
-asks sbx, git and GitHub to do, not what they then do.
-
-### Checked live on sbx 0.51.0
-
-- The sbx behaviours listed in [docs/design.md](docs/design.md#verified-on-sbx-0510), including the push refusal on
-  ports 443 and 80 and the broker reachable only on `localhost:9911` with its token added by the proxy. The push
-  deny is limited to ports 443 and 80, so non-HTTP connections on other ports, such as SQL Server on 1433, still
-  work.
-- The first version of `tests/acceptance.sh`, run against a sandbox made with `stage up`: the repository path, that
-  the claude, codex and copilot CLIs start, the git identity and agent guidance, fetching from github.com, and that
-  `git push` and an unlisted host are refused. Its secret checks from that run do not count; they could pass
-  without looking at anything.
-
-### Written but not yet run live
-
-- The current `tests/acceptance.sh` as a whole. Beyond the checks above, it checks that the sandbox's writes to its
-  `.git` do not reach the host scratch clone, that the task directory is hidden, and that the host source mount is
-  read-only (skipped when sbx adds none). Given an AWS profile, it checks that the broker serves that profile and
-  refuses another. It has no CI.
-- The acceptance script's secret scan, which has run only in a local harness. As the sandbox's own user, the
-  sandbox hashes the token-like words in its environment, the environments and command lines of processes that user
-  can see (not root's or the proxy's), its home directory, `/tmp`, the repository and its git history, the strings in
-  binary files under the home directory and repository, and `/etc`. The host checks those hashes against its secrets, as written and base64-encoded.
-- The scan plants a canary in the environment, the home directory, the repository, `/tmp` and a binary file, and
-  adds an end marker. A missing canary fails the run and names where it was missing. `/etc` cannot hold a canary, so
-  its coverage is unproven. Matching is by whole token-like word, so a base64 token sitting at an offset inside a
-  longer blob is not found.
-- The GitHub REST write refusals in the stage kit (the same deny mechanism as the push refusal).
-- `fine-grained` token checks and `stage token set` against GitHub itself.
-- `app` mode end to end: a registered GitHub App, `stage github login`, the installation check and sbx refreshing
-  the secret.
-- `stage ship` pushing to GitHub, and `--pr`.
-- The tag-driven release workflow.
-- Agent sign-ins and `copy_logins` with a real agy login.
-- Books, repository kit approval and managed settings, beyond unit tests.
+`go test ./...` runs every command against fakes, so it shows what stage asks sbx, git and GitHub to do, not what
+they then do. [VERIFICATION.md](VERIFICATION.md) records what has been checked against a live sbx or GitHub, when,
+and what has not been run live yet.
 
 ## Limitations
 
@@ -562,11 +528,11 @@ asks sbx, git and GitHub to do, not what they then do.
 ## Development
 
 ```
-go test ./...                                # unit tests with fakes; see What is verified
+go test ./...                                # unit tests with fakes; see VERIFICATION.md
 tests/acceptance.sh <slug> [granted] [other] # checks a live sandbox made with stage up
 ```
 
-[docs/design.md](docs/design.md) records why the tool is shaped this way and what was verified on sbx.
+[docs/design.md](docs/design.md) records why the tool is shaped this way; [VERIFICATION.md](VERIFICATION.md) records what was checked live.
 
 ### Releasing
 
@@ -574,8 +540,8 @@ Push a `vX.Y.Z` tag on `main` (`git tag v0.1.0 && git push origin v0.1.0`). The 
 (`.github/workflows/release.yml`) rejects a tag that is not `vX.Y.Z` with an optional `-suffix`, and a tagged
 commit that is not on `main`. A build job with read-only permissions then runs the tests, builds the four archives
 with the tag as `stage version` and writes `SHA256SUMS`. A separate release job attests the archives and creates
-the GitHub release with generated notes. A tag with a hyphen, such as `v0.1.0-rc.1`, makes a prerelease. The
-workflow has not yet run on a real tag.
+the GitHub release with generated notes. A tag with a hyphen, such as `v0.1.0-rc.1`, makes a prerelease. See
+[VERIFICATION.md](VERIFICATION.md) for its runs.
 
 The tag and `main` checks catch mistakes, not a malicious writer: a tag push runs `release.yml` as it exists at
 the tagged commit, so anyone who can push a tag can also change the checks. The real controls are branch

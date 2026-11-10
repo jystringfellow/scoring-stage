@@ -23,7 +23,9 @@ policy, secrets and bindings are created and removed together.
 
 A sandbox carries only the agents someone chose: each agent's mixin widens egress and brings credential
 bindings, so an agent nobody runs is attack surface with no use. Agents come from the user's config, the
-repository's config, a book or `--agent`, and an agent's bindings come with it.
+repository's config, a book or `--agent`, and an agent's bindings come with it. Typing a built-in agent name such as
+`claude` would select Docker's v2 kits, which cannot compose with v3 mixins, so stage always names a v3 workload
+by reference.
 
 Configuration follows kapellmeister's split between the user's directory and the repository's. The repository's
 config is input from whoever can commit to it, so it may only ask for agents by name, things the user has already
@@ -66,47 +68,6 @@ broker serves only temporary credentials (an `ASIA` key with a `SessionToken`) t
 so an IAM user's long-lived keys never reach a sandbox through the broker. Those temporary keys do enter the
 sandbox, and stay usable until they expire; signing requests at the proxy instead would keep them out.
 
-## Verified on sbx 0.51.0
+## Verified on sbx
 
-- `network-policy@2` bounded allow and deny entries are enforced and refused with HTTP 403. A kit's deny wins over a
-  global allow. IP globs such as `1.1.*.*:443` work.
-- Bounded entries cannot match query strings. Refusing `POST /**/git-receive-pack` is what stops a push; the
-  `info/refs?service=git-receive-pack` discovery request is left to the origin, which answers 403 for anonymous
-  callers.
-- A bounded entry makes its hosts require HTTP inspection, and sbx fails closed on connections it cannot inspect
-  ("HTTP policy requires L7 enforcement, which is unavailable for transparent connections"). The push deny is
-  therefore limited to `**:443` and `**:80`; on `**` it refused every non-HTTP connection, such as SQL Server on
-  1433. Port suffixes on bounded deny hosts are honored.
-- `host-port@1` is not supported; `host-mount@1` is, and is shared by every sandbox composing the same kit.
-- `sbx secret set <service> --sandbox <name>` accepts services that are not built in, which is how `stage-broker`
-  and book services get values.
-- `sbx env create --force --no-input` creates a sandbox, its secrets and its bindings without prompting.
-  `sbx env rm` removes the sandbox and its scoped secrets; `--prune-bindings` would also remove bindings shared by
-  other sandboxes, so `stage down` does not pass it.
-- Docker's published agent mixins use `agent-context@1`, which cannot compose with `@2`. The `stage` kit declares
-  both as optional with the same content so either selection composes.
-- Typing a built-in agent name (`claude`) selects Docker's v2 kits, which cannot compose with v3 mixins; `stage`
-  always names a v3 workload by reference.
-- Binding domains do not bound injection. A binding only authorises a service name; a kit's `credential@1` inject
-  domain decides where the secret goes. A local mixin declaring `service: copilot` with an inject domain of another
-  host got the copilot secret injected there with no binding in the env file, because the global
-  `credentials.yaml` already bound copilot. The same holds for any service with a binding on the machine; a service
-  with none is refused ("no binding authorizes X").
-- `sbx env plan` runs no secret commands and merges no bindings.
-- `kit.allowedSources` refuses a kit even under `--force`, before any binding merges.
-- `sbx env rm --prune-bindings` removes the whole shared service entry from `credentials.yaml`, not just the
-  sandbox's use of it.
-- `kit.allowedSources` defaults to Docker Hub and dhi.io. Books published to another registry need it widened, and
-  signed kits must be published images: local and git sources cannot be signed.
-
-## Not yet verified on sbx
-
-- The stage kit's GitHub REST denies. They are bounded deny entries like the push deny, but no request has been
-  checked against them.
-- A secret's `refresh` interval. App mode relies on sbx re-running `stage github token` on the host to replace an
-  access token before it expires.
-- `workspace.clone` keeping the sandbox's `.git` writes out of the host scratch clone. `tests/acceptance.sh` checks
-  it, but has no recorded run since that check was added.
-- sbx's kit loader: which files it reads from a kit directory, and whether it matches keys case-insensitively. stage
-  checks `.yaml`, `.yml` and `.json` files at any depth except under `files/`, and refuses keys that differ from
-  `capabilities`, `extends`, `type`, `config`, `service`, `inject` or `domain` only in case.
+What has been checked against a live sbx, and what has not, is in [VERIFICATION.md](../VERIFICATION.md).
