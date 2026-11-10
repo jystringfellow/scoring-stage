@@ -66,7 +66,7 @@ From stage:
 - **approval:** the user's consent to a repository's kits and books, stored by content fingerprint in the trust
   store.
 - **reserved service:** a service a book or repository cannot set or claim: agents' services, sbx's built-ins,
-  `github`, `copilot` and `stage-broker`. A book's bindings and kits also cannot cover their hosts.
+  `github`, `copilot` and `stage-broker`. A book's bindings and kits also cannot cover a reserved service's hosts.
 - **task:** one sandbox's host state under `~/.scoring-stage/tasks/<slug>/`, addressed by its **slug**.
 - **scratch clone:** the host clone a sandbox's workspace is made from, and that `stage ship` pushes from.
 - **broker:** stage's host process that hands each sandbox temporary AWS credentials for the profiles it was granted.
