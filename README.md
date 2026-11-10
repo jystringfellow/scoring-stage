@@ -515,13 +515,16 @@ asks sbx, git and GitHub to do, not what they then do.
 - **Books run code on your host.** A book's secret commands run on your machine as you, before the sandbox exists.
   The checks on books stop them from rebinding stage's credentials (agent, sbx built-in, GitHub and broker) and catch
   mistakes. They cannot stop a book whose secret runs a command such as `gh auth token` and whose own kit injects
-  the result on a host the book controls. Turn on only books from protected repositories whose changes are reviewed; see the known gap under
-  [Configuration and books](#configuration-and-books).
+  the result on a host the book controls. Turn on only books from protected repositories whose changes are
+  reviewed; see the known gap under [Configuration and books](#configuration-and-books).
 - **Any kit can send any bound credential anywhere.** A kit that declares a credential for a service with a global
   sbx binding gets that secret injected on whatever hosts the kit names. That holds for published kits you add to
   your own config and for Docker's agent mixins that stage pins in its agent table, which are trusted by design.
   Add only kits you trust as much as stage itself. Books and repository configs may use only local kits, which stage
   checks.
+- **A binding plus a global secret is standing risk outside stage.** If a service has a global sbx secret,
+  including agent sign-ins such as `anthropic` or `openai`, any kit run under a plain `sbx run` can redirect it.
+  `stage setup` lists these as `global secret set`.
 - **`[bindings]` domains do not limit where a credential is injected.** A binding authorises a service; kits decide
   the hosts. Treat the domains as documentation, not as a boundary.
 - **Do not run `sbx env rm --prune-bindings` on stage sandboxes.** Bindings are shared, and pruning one sandbox's
