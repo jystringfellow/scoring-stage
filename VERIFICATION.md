@@ -20,13 +20,14 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
   `stage github token` at the secret's `refresh` interval.
 - `stage ship` pushing to GitHub, and `--pr`.
 - The release workflow's refusals: a tag that is not `vX.Y.Z[-suffix]`, and a tagged commit that is not on `main`.
-- Agent sign-ins, and `copy_logins` with a real agy login, on the current code.
-- Books, repository kit approval and managed settings, beyond unit tests.
+- An agent using its login inside a sandbox on the current code: claude, codex, copilot or agy authenticating to
+  its vendor, including agy with a login copied in by `copy_logins`. The acceptance check only starts each CLI.
+- Managed settings, beyond unit tests.
+- Book and repository kit refusals: a changed kit asking again, a book claiming a reserved service, and a
+  published kit in a book or repository config.
 - Whether `sbx env create --force` prints the plan it approves.
 - Where sbx keeps `credentials.yaml`, beyond `~/.config/sbx/credentials.yaml` on macOS. `stage setup`'s bindings
   audit also looks under `$XDG_CONFIG_HOME` and `%APPDATA%`, inferred from strings in the sbx binary.
-- The audit's parsing of `sbx secret ls --global --json` against real sbx output.
-- That `sbx secret rm <service>` removes the global secret by default, which comes from sbx's help text only.
 - sbx's kit loader: which files it reads from a kit directory, and whether it matches keys case-insensitively.
   stage checks `.yaml`, `.yml` and `.json` files at any depth except under `files/`, and refuses keys that differ
   from `capabilities`, `extends`, `type`, `config`, `service`, `inject` or `domain` only in case.
@@ -84,6 +85,10 @@ on 2026-11-09 (see Not yet run live).
 - **sbx:** 0.51.0, driven directly with hand-written env files and local kits, not through stage.
 - **Credentials:** dummy only. Each probed secret was a command printing a fixed dummy string; no real gh, copilot
   or agent secret was used.
+- **Global secrets:** `sbx secret rm github -f`, with no scope flag, printed "Removed secret github (global)", so it
+  removes the global secret by default. Afterwards the `stage up --plan` bindings audit, which reads
+  `sbx secret ls --global --json`, marked `anthropic` and `openai` as "global secret set" and `github` as not, which
+  matches `sbx secret ls --global`.
 - **Shared state:** `~/.config/sbx/credentials.yaml` was copied before the first probe (sha256
   `4998c033b4b70e066939e87ed0f223fea6dee62917823758bc7a58e2ce021008`) and put back afterwards; the restored file had
   the same sha256. Every probe sandbox was removed.
@@ -128,7 +133,8 @@ Not exercised: the refusal of a malformed tag and of a tag not on `main`.
   before the run, as `stage up` requires.
 - **Shared state:** `~/.config/sbx/credentials.yaml` was copied before the run (sha256
   `4998c033b4b70e066939e87ed0f223fea6dee62917823758bc7a58e2ce021008`) and was byte-for-byte the same after the
-  first sandbox's `stage down`; every binding the runs needed already existed. The stale `localhost` entry under
+  first sandbox's `stage down`, with the kapellmeister sandbox still up; every binding the runs needed already
+  existed. The stale `localhost` entry under
   `stage-broker` remains, as the `stage setup` audit reports. The first run on this version cleared old-format
   approvals, and both repository configs were approved with `--approve-repo-config` after review.
 
@@ -161,5 +167,6 @@ kit; agents claude, codex and copilot; one AWS profile granted:
 repository config; no AWS profile):
 
 - All 14 checks that apply without AWS passed; the scan hashed 488,784 strings and found every canary.
+- The agents' CLIs started, but no agent signed in or made a request in either sandbox.
 - The repository kit's setup worked: `km`, `cao` and `cao-server` were installed, `cao-server` was running in tmux,
   and the saved agy login was copied in. A `km run` was not attempted.
