@@ -85,10 +85,6 @@ on 2026-11-09 (see Not yet run live).
 - **sbx:** 0.51.0, driven directly with hand-written env files and local kits, not through stage.
 - **Credentials:** dummy only. Each probed secret was a command printing a fixed dummy string; no real gh, copilot
   or agent secret was used.
-- **Global secrets:** `sbx secret rm github -f`, with no scope flag, printed "Removed secret github (global)", so it
-  removes the global secret by default. Afterwards the `stage up --plan` bindings audit, which reads
-  `sbx secret ls --global --json`, marked `anthropic` and `openai` as "global secret set" and `github` as not, which
-  matches `sbx secret ls --global`.
 - **Shared state:** `~/.config/sbx/credentials.yaml` was copied before the first probe (sha256
   `4998c033b4b70e066939e87ed0f223fea6dee62917823758bc7a58e2ce021008`) and put back afterwards; the restored file had
   the same sha256. Every probe sandbox was removed.
@@ -131,6 +127,10 @@ Not exercised: the refusal of a malformed tag and of a tag not on `main`.
   agy login through `copy_logins`, a package-feed token from a private book's secret command, and one AWS profile
   through the broker. The leftover global `github` secret from 2026-11-08 was removed with `sbx secret rm github -f`
   before the run, as `stage up` requires.
+- **Global secrets:** `sbx secret rm github -f`, with no scope flag, printed "Removed secret github (global)", so it
+  removes the global secret by default. Afterwards the `stage up --plan` bindings audit, which reads
+  `sbx secret ls --global --json`, marked `anthropic` and `openai` as "global secret set" and `github` as not, which
+  matches `sbx secret ls --global`.
 - **Shared state:** `~/.config/sbx/credentials.yaml` was copied before the run (sha256
   `4998c033b4b70e066939e87ed0f223fea6dee62917823758bc7a58e2ce021008`) and was byte-for-byte the same after the
   first sandbox's `stage down`, with the kapellmeister sandbox still up; every binding the runs needed already
