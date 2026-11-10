@@ -87,8 +87,21 @@ Live runs change state shared by every sandbox on the machine. Before any:
 - Remove every sandbox you create with `stage down`, or with `sbx env rm` (without `--prune-bindings`) for one made
   directly with sbx, and remove any probe secret or binding you added. Never touch a sandbox you did not create.
 - Record the run in `VERIFICATION.md`: the date, sbx version, commit, which credentials were real, and how shared
-  state was restored. This repository is public; describe private repositories and books generically, without
-  their names, hosts or stack.
+  state was restored. Keep the entry generic; see Keep it generic.
+
+## Keep it generic
+
+This repository is public, and anything in it, including its history, PR descriptions and review comments, stays
+public. Write about the people and organisations who use stage only in general terms.
+
+- Never name a company, team, private repository, private book, internal host, AWS account or profile, package
+  feed or internal service in code, tests, docs, examples, commit messages or PR descriptions.
+- Do not describe a user's technology stack, environments or test suites beyond what the point needs. "A private
+  repository with three books and an AWS profile" is enough; which databases or SDK it uses is not.
+- In tests and examples, use neutral names: `acme`, `example`, `team`, and hosts under `example.com`, or a public
+  product's real host when the test is about that product.
+- Before pushing, search the change for names from the private work you were doing, and rewrite what you find.
+  Rewriting a pushed commit is not allowed, so catch it before the push.
 
 ## Checks
 
