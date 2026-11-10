@@ -165,6 +165,9 @@ func ConfigFingerprint(repo, sandbox string) (string, error) {
 var sbxRemoteURL = regexp.MustCompile(`^\turl = git://127\.0\.0\.1:[0-9]{1,5}/src$`)
 
 func withoutSbxRemote(config []byte, sandbox string) []byte {
+	if sandbox == "" {
+		return config
+	}
 	lines := strings.SplitAfter(string(config), "\n")
 	if lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]

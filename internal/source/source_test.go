@@ -164,3 +164,10 @@ func TestConfigFingerprintKeepsASandboxRemoteThatSbxDidNotWrite(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigFingerprintWithoutASandboxHashesTheWholeConfig(t *testing.T) {
+	stopped := fingerprintWithConfig(t, "", baseConfig)
+	if got := fingerprintWithConfig(t, "", baseConfig+sbxRemote("", "49207")); got == stopped {
+		t.Error("an empty sandbox name left a remote out of the hash")
+	}
+}
