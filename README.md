@@ -95,7 +95,9 @@ protected branches. `ship` warns about commits without a `Co-authored-by` traile
 
 Git on the host runs with hooks and fsmonitor off. `stage up` records a hash of the scratch clone's git config
 (`.git/config`, `.git/info/` and related files) after sbx creates the sandbox, and `ship` refuses to run git there
-if it changed, or if it includes other files. The env file asks sbx to clone the scratch clone into the sandbox
+if it changed, or if it includes other files. The hash leaves out the `sandbox-<sandbox>` remote while it has exactly
+the shape sbx writes (`git://127.0.0.1:<port>/src` and its two fetch refspecs), since sbx removes it when the sandbox
+stops and adds it on a new port when it starts. The env file asks sbx to clone the scratch clone into the sandbox
 (`workspace.clone`) rather than share it; `tests/acceptance.sh` checks that the sandbox's writes to its `.git` do not
 reach the host scratch clone, and that the host source mount, if sbx adds one, is read-only.
 

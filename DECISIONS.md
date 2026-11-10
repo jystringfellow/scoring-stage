@@ -97,3 +97,15 @@ generic.
 
 Use an sbx primitive wherever one exists, shape any seam stage owns like the primitive it stands in for, and
 propose the gap upstream. What one organisation or team needs belongs in a book. Evidence: AGENTS.md, Constraints.
+
+## 2026-11-10: ship's config check leaves out the remote sbx manages
+
+sbx removes the `sandbox-<sandbox>` remote from the scratch clone when the sandbox stops and adds it on a new port
+when the sandbox starts, so a hash that included it refused every sandbox that had restarted. The hash leaves the
+remote out only while it has exactly sbx's shape: a loopback `git://` URL on any port, path `/src`, and sbx's two
+fetch refspecs. Any other key in that section, another host, transport or path, or a second copy is still hashed.
+A task recorded before this, with a hash of the whole config, still ships while its config is byte-identical.
+Evidence: TestConfigFingerprintIgnoresTheRemoteSbxAddsOnEachStart,
+TestConfigFingerprintKeepsASandboxRemoteThatSbxDidNotWrite,
+TestShipAllowsSbxToMoveTheSandboxRemoteWhenTheBoxRestarts,
+TestShipAcceptsATaskRecordedWithTheWholeConfigWhileItIsUnchanged.

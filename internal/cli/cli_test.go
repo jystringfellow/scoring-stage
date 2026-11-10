@@ -354,7 +354,7 @@ func (h *harness) pinGitConfig(slug string) {
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	if task.GitConfig, err = source.ConfigFingerprint(task.RepoDir); err != nil {
+	if task.GitConfig, err = source.ConfigFingerprint(task.RepoDir, task.Sandbox); err != nil {
 		h.t.Fatal(err)
 	}
 	if err := writeTask(*task, h.task(slug)); err != nil {
@@ -707,6 +707,56 @@ func TestShipRefusesAScratchCloneWhoseGitConfigChanged(t *testing.T) {
 	}
 }
 
+func TestShipAllowsSbxToMoveTheSandboxRemoteWhenTheBoxRestarts(t *testing.T) {
+	h := setup(t)
+	h.expect(0, "up", h.remote.Checkout, "fix")
+	scratch := filepath.Join(h.task("fix"), "src")
+	task, err := loadTask(h.home, "fix")
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.RunGit(t, scratch, "remote", "add", "sandbox-stage-fix", "git://127.0.0.1:49207/src")
+	testutil.RunGit(t, scratch, "config", "--add", "remote.sandbox-stage-fix.fetch", "+refs/heads/*:refs/sandboxes/stage-fix/*")
+	if err := checkGitConfig(task); err != nil {
+		t.Fatalf("refused the remote sbx added on start: %v", err)
+	}
+	testutil.RunGit(t, scratch, "remote", "set-url", "sandbox-stage-fix", "git://127.0.0.1:49208/src")
+	if err := checkGitConfig(task); err != nil {
+		t.Fatalf("refused the port sbx chose on restart: %v", err)
+	}
+	testutil.RunGit(t, scratch, "remote", "remove", "sandbox-stage-fix")
+	if err := checkGitConfig(task); err != nil {
+		t.Fatalf("refused the config sbx left on stop: %v", err)
+	}
+	testutil.RunGit(t, scratch, "remote", "add", "sandbox-stage-fix", "git://127.0.0.1:49209/src")
+	testutil.RunGit(t, scratch, "config", "remote.sandbox-stage-fix.uploadpack", "touch /tmp/x; git-upload-pack")
+	if err := checkGitConfig(task); err == nil {
+		t.Fatal("allowed a sandbox remote sbx did not write")
+	}
+}
+
+func TestShipAcceptsATaskRecordedWithTheWholeConfigWhileItIsUnchanged(t *testing.T) {
+	h := setup(t)
+	h.expect(0, "up", h.remote.Checkout, "fix")
+	scratch := filepath.Join(h.task("fix"), "src")
+	testutil.RunGit(t, scratch, "remote", "add", "sandbox-stage-fix", "git://127.0.0.1:49207/src")
+	testutil.RunGit(t, scratch, "config", "--add", "remote.sandbox-stage-fix.fetch", "+refs/heads/*:refs/sandboxes/stage-fix/*")
+	task, err := loadTask(h.home, "fix")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.GitConfig, err = source.ConfigFingerprint(task.RepoDir, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkGitConfig(task); err != nil {
+		t.Fatalf("refused an unchanged config: %v", err)
+	}
+	testutil.RunGit(t, scratch, "config", "core.sshCommand", "touch /tmp/x")
+	if err := checkGitConfig(task); err == nil {
+		t.Fatal("allowed a changed config")
+	}
+}
+
 func TestUpRecordsTheScratchClonesGitConfig(t *testing.T) {
 	h := setup(t)
 	h.expect(0, "up", h.remote.Checkout, "fix")
@@ -714,7 +764,7 @@ func TestUpRecordsTheScratchClonesGitConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, _ := source.ConfigFingerprint(task.RepoDir)
+	want, _ := source.ConfigFingerprint(task.RepoDir, task.Sandbox)
 	if task.GitConfig == "" || task.GitConfig != want {
 		t.Fatalf("git_config %q, want %q", task.GitConfig, want)
 	}
