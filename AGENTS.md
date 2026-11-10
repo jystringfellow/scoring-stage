@@ -25,8 +25,10 @@ do, not what they then do.
 
 - **Behavior:** tests.
 - **Why a change was made:** commit messages and PR descriptions.
-- **Why the tool is shaped this way:** `docs/design.md`. Read it before proposing to move a concern between stage
-  and a kit.
+- **Decisions that span many changes:** `DECISIONS.md`, one short entry each, with the date and the evidence. Read
+  it before proposing to reverse one.
+- **How the tool is shaped, and what stage owns:** `docs/design.md`, including its ownership table. Read it before
+  proposing to move a concern between stage and a kit.
 - **What has been checked against a live sbx or GitHub:** `VERIFICATION.md`, dated entries that are added and
   never rewritten. A later run that contradicts one gets a new entry.
 - **How to use `stage`, and its limitations:** `README.md`. It describes, it does not specify; when it disagrees
@@ -117,10 +119,14 @@ CI runs the same on Linux and macOS.
 
 ## Constraints
 
-- Own as little as possible. Use an sbx primitive wherever one exists: egress, credential injection, files and
-  guidance belong in kits, and a sandbox's policy, secrets and bindings are created together from one env file.
-  stage owns only what sbx cannot do: host commands, secret values, which sandbox gets which grant, the AWS broker,
-  the scratch clone and ship. Put anything stage must own behind a narrow seam, and raise the gap with sbx upstream.
+- Own as little as possible; stage is a thin wrapper. Use an sbx primitive wherever one exists: egress,
+  credential injection, files and guidance belong in kits, and a sandbox's policy, secrets and bindings are created
+  together from one env file. stage owns only what sbx cannot do; the ownership table in `docs/design.md` lists what,
+  and `DECISIONS.md` records why. Update both when a concern moves. Put anything stage must own behind a narrow
+  seam shaped like the sbx primitive it stands in for, or would be, so it can be dropped when sbx gains one, and
+  propose the gap upstream at [docker/sbx-releases](https://github.com/docker/sbx-releases/issues).
+- What one organisation or team needs belongs in a book, not in stage. Add to stage only what is general, useful to
+  any team and not tied to one organisation's setup, and that no kit can do; prefer a kit to stage code.
 - Treat sbx's files, such as `credentials.yaml`, as sbx's. Read them to report; never gate on or rewrite them.
 - Fail closed. An unknown kit capability, an unparseable domain or a missing approval is an error, not a warning.
   stage refuses capabilities it does not know in book and repository kits.
