@@ -169,21 +169,21 @@ func TestAnUnreadableManagedFileOrBadPatternRefusesToRun(t *testing.T) {
 	_, err := LoadManaged()
 	expectError(t, err, "refusing to run unmanaged")
 
-	managedFiles(t, "[aws]\ndenied_profiles = [\"arcus_[prod\"]\n")
+	managedFiles(t, "[aws]\ndenied_profiles = [\"team_[prod\"]\n")
 	_, err = LoadManaged()
 	expectError(t, err, "bad pattern")
 }
 
 func TestProfilePatternsIgnoreCase(t *testing.T) {
-	managedFiles(t, "[aws]\ndenied_profiles = [\"*prod*\"]\nallowed_profiles = [\"Arcus*\"]\n")
+	managedFiles(t, "[aws]\ndenied_profiles = [\"*prod*\"]\nallowed_profiles = [\"Team*\"]\n")
 	managed, err := LoadManaged()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, profile := range []string{"Arcus_PROD", "arcus-Prod"} {
+	for _, profile := range []string{"Team_PROD", "team-Prod"} {
 		expectError(t, managed.CheckAWSProfile(profile), "is denied by")
 	}
-	if err := managed.CheckAWSProfile("ARCUS_dev"); err != nil {
+	if err := managed.CheckAWSProfile("TEAM_dev"); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -411,11 +411,11 @@ func TestRepoMatchIsCaseSensitiveGlob(t *testing.T) {
 		kits := composeWith(t, settings, selection).Kits
 		return kits[len(kits)-1].Source
 	}
-	if !strings.HasSuffix(last("Acme.Clients"), "kits/x") {
-		t.Error("Acme.* should match Acme.Clients")
+	if !strings.HasSuffix(last("Acme.Widgets"), "kits/x") {
+		t.Error("Acme.* should match Acme.Widgets")
 	}
-	if strings.HasSuffix(last("acme.clients"), "kits/x") {
-		t.Error("Acme.* should not match acme.clients")
+	if strings.HasSuffix(last("acme.widgets"), "kits/x") {
+		t.Error("Acme.* should not match acme.widgets")
 	}
 }
 
