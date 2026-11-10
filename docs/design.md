@@ -23,7 +23,9 @@ policy, secrets and bindings are created and removed together.
 
 A sandbox carries only the agents someone chose: each agent's mixin widens egress and brings credential
 bindings, so an agent nobody runs is attack surface with no use. Agents come from the user's config, the
-repository's config, a book or `--agent`, and an agent's bindings come with it.
+repository's config, a book or `--agent`, and an agent's bindings come with it. Typing a built-in agent name such as
+`claude` would select Docker's v2 kits, which cannot compose with v3 mixins, so stage always names a v3 workload
+by reference.
 
 Configuration follows kapellmeister's split between the user's directory and the repository's. The repository's
 config is input from whoever can commit to it, so it may only ask for agents by name, things the user has already

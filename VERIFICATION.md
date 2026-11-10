@@ -30,6 +30,7 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
 - The release workflow's refusals: a tag that is not `vX.Y.Z[-suffix]`, and a tagged commit that is not on `main`.
 - Agent sign-ins, and `copy_logins` with a real agy login, on the current code.
 - Books, repository kit approval and managed settings, beyond unit tests.
+- Whether `sbx env create --force` prints the plan it approves.
 - sbx's kit loader: which files it reads from a kit directory, and whether it matches keys case-insensitively.
   stage checks `.yaml`, `.yml` and `.json` files at any depth except under `files/`, and refuses keys that differ
   from `capabilities`, `extends`, `type`, `config`, `service`, `inject` or `domain` only in case.
@@ -72,8 +73,9 @@ Observed:
 - **sbx:** 0.51.0.
 - **stage:** the first version of `tests/acceptance.sh`, against a sandbox made with `stage up`. The commit was not
   recorded.
-- **Credentials:** the user's real agent logins and gh login.
-- **Restoration:** `stage down`.
+- **Credentials:** not recorded; probably the user's real agent logins and gh login.
+- **Restoration:** `stage down`. A global `github` sbx secret and a `localhost` stage-broker binding from this
+  period were left behind; remove them with `sbx secret rm github` and a hand edit of `credentials.yaml`.
 
 Passed: the repository path, that the claude, codex and copilot CLIs start, the git identity and agent guidance,
 fetching from github.com, and that `git push` and an unlisted host are refused.
@@ -94,7 +96,7 @@ Observed:
 
 - Binding domains do not bound injection. A binding only authorises a service name; a kit's `credential@1` inject
   domain decides where the secret goes. A local kit declaring `service: copilot` with an inject domain of another
-  host got the copilot secret injected there with no binding in the env file, because the global
+  host got the probe's dummy copilot secret injected there with no binding in the env file, because the global
   `credentials.yaml` already bound copilot. A service with no binding anywhere is refused ("no binding authorizes
   X").
 - `sbx env plan` runs no secret commands and merges no bindings: a secret command that touches a file did not run.
