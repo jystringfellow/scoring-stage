@@ -609,7 +609,7 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	if err := sbx.Run("env", "create", "--force", "--no-input", directory); err != nil {
 		return 0, errorf("%s; run `stage down %s` to clean up", err, slug)
 	}
-	if task.GitConfig, err = source.ConfigFingerprint(task.RepoDir); err != nil {
+	if task.GitConfig, err = source.ConfigFingerprint(task.RepoDir, task.Sandbox); err != nil {
 		return 0, err
 	}
 	if err := writeTask(task, directory); err != nil {
@@ -964,7 +964,7 @@ func checkGitConfig(task *Task) error {
 	if task.GitConfig == "" {
 		return nil
 	}
-	current, err := source.ConfigFingerprint(task.RepoDir)
+	current, err := source.ConfigFingerprint(task.RepoDir, task.Sandbox)
 	if err != nil {
 		return err
 	}

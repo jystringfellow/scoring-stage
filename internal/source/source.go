@@ -123,7 +123,7 @@ func Prepare(repo, scratch, github, base string) (string, string, error) {
 
 // ConfigFingerprint hashes the parts of a clone's .git that tell git what to
 // run or where to connect, so ship can refuse a clone whose config changed.
-func ConfigFingerprint(repo string) (string, error) {
+func ConfigFingerprint(repo, sandbox string) (string, error) {
 	gitDir := filepath.Join(repo, ".git")
 	hash := sha256.New()
 	var files []string
@@ -152,9 +152,41 @@ func ConfigFingerprint(repo string) (string, error) {
 		case err != nil:
 			return "", err
 		default:
+			if relative == "config" {
+				content = withoutSbxRemote(content, sandbox)
+			}
 			fmt.Fprintf(hash, "%s\x00%d\x00", relative, len(content))
 			hash.Write(content)
 		}
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+var sbxRemoteURL = regexp.MustCompile(`^\turl = git://127\.0\.0\.1:[0-9]{1,5}/src$`)
+
+func withoutSbxRemote(config []byte, sandbox string) []byte {
+	lines := strings.SplitAfter(string(config), "\n")
+	if lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	header := "[remote \"sandbox-" + sandbox + "\"]\n"
+	want := []string{
+		"\tfetch = +refs/heads/*:refs/remotes/sandbox-" + sandbox + "/*\n",
+		"\tfetch = +refs/heads/*:refs/sandboxes/" + sandbox + "/*\n",
+	}
+	for start, line := range lines {
+		if line != header {
+			continue
+		}
+		end := start + 1
+		for end < len(lines) && !strings.HasPrefix(lines[end], "[") {
+			end++
+		}
+		body := lines[start+1 : end]
+		if len(body) == 3 && sbxRemoteURL.MatchString(strings.TrimSuffix(body[0], "\n")) && body[1] == want[0] && body[2] == want[1] {
+			return []byte(strings.Join(append(lines[:start:start], lines[end:]...), ""))
+		}
+		return config
+	}
+	return config
 }
