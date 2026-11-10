@@ -119,13 +119,12 @@ CI runs the same on Linux and macOS.
 
 - Own as little as possible; stage is a thin wrapper. Use an sbx primitive wherever one exists: egress,
   credential injection, files and guidance belong in kits, and a sandbox's policy, secrets and bindings are created
-  together from one env file. stage owns only what sbx cannot do: host commands, secret values, which sandbox gets
-  which grant, the AWS broker, the scratch clone and ship. Put anything stage must own behind a narrow seam shaped
-  like the sbx primitive it stands in for, so it can be dropped when sbx gains one, and propose the gap upstream at
-  [docker/sbx-releases](https://github.com/docker/sbx-releases/issues). The ownership table in `docs/design.md`
-  records what stage owns and why; read it before moving a concern, and update it when one moves.
-- What one organisation or team needs belongs in a book, not in stage. Add to stage only what every user of sbx
-  would need, and prefer a kit to stage code.
+  together from one env file. stage owns only what sbx cannot do; the ownership table in `docs/design.md` lists what
+  and why. Read it before moving a concern, and update it when one moves. Put anything stage must own behind a narrow
+  seam shaped like the sbx primitive it stands in for, or would be, so it can be dropped when sbx gains one, and
+  propose the gap upstream at [docker/sbx-releases](https://github.com/docker/sbx-releases/issues).
+- What one organisation or team needs belongs in a book, not in stage. Add to stage only what is general, useful to
+  any team and not tied to one organisation's setup, and that no kit can do; prefer a kit to stage code.
 - Treat sbx's files, such as `credentials.yaml`, as sbx's. Read them to report; never gate on or rewrite them.
 - Fail closed. An unknown kit capability, an unparseable domain or a missing approval is an error, not a warning.
   stage refuses capabilities it does not know in book and repository kits.
