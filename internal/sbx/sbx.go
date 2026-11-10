@@ -56,22 +56,51 @@ func run(capture bool, stdin io.Reader, args []string) (string, error) {
 	} else {
 		command.Stdout, command.Stderr = os.Stdout, os.Stderr
 	}
-	err := command.Run()
+	if err := failure(command.Run(), args, stderr.String()); err != nil {
+		return "", err
+	}
+	return stdout.String(), nil
+}
+
+func failure(err error, args []string, stderr string) error {
 	if errors.Is(err, exec.ErrNotFound) {
-		return "", &Error{"sbx is not installed or not on PATH"}
+		return &Error{"sbx is not installed or not on PATH"}
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		message := "sbx " + strings.Join(args[:min(2, len(args))], " ") + " failed"
-		if detail := LastLine(stderr.String()); detail != "" {
+		if detail := LastLine(stderr); detail != "" {
 			message += ": " + detail
 		}
-		return "", &Error{message}
+		return &Error{message}
 	}
 	if err != nil {
-		return "", &Error{fmt.Sprintf("cannot run sbx: %v", err)}
+		return &Error{fmt.Sprintf("cannot run sbx: %v", err)}
 	}
-	return stdout.String(), nil
+	return nil
+}
+
+// Stream runs sbx and hands its output to consume as it arrives. When consume
+// fails, sbx is stopped and consume's error is returned.
+func Stream(consume func(io.Reader) error, args ...string) error {
+	command := exec.Command("sbx", args...)
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		return &Error{fmt.Sprintf("cannot run sbx: %v", err)}
+	}
+	if err := failure(command.Start(), args, ""); err != nil {
+		return err
+	}
+	consumeErr := consume(stdout)
+	if consumeErr != nil {
+		command.Process.Kill()
+		command.Wait()
+		return consumeErr
+	}
+	io.Copy(io.Discard, stdout)
+	return failure(command.Wait(), args, stderr.String())
 }
 
 func LastLine(text string) string {

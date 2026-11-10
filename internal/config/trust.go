@@ -49,6 +49,9 @@ func RepoApprovals(composition *Composition) ([]Approval, error) {
 		}
 		approvals = append(approvals, Approval{Label: "book " + book.Name + " (" + book.Path + ")", Fingerprint: fingerprint, Details: summarizeBook(book)})
 	}
+	if len(composition.RepoTakes) > 0 {
+		approvals = append(approvals, Approval{Label: "takes", Fingerprint: takesFingerprint(composition.RepoTakes), Details: takeDetails(composition.RepoTakes)})
+	}
 	for _, approval := range approvals {
 		if HasControl(approval.Label) {
 			return nil, errorf("%s contains control characters; refusing to ask for its approval", Printable(approval.Label))
@@ -307,6 +310,7 @@ func summarizeBook(book Book) []string {
 		}
 		details = append(details, fmt.Sprintf("credential %s sent to %s", service, strings.Join(domains, ", ")))
 	}
+	details = append(details, takeDetails(book.takes)...)
 	for _, entry := range book.kits {
 		kit, err := parseKit(entry, book.Path, "book "+book.Name)
 		if err != nil {

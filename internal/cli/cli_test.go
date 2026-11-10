@@ -615,7 +615,7 @@ func TestARepositoryKitNeedsApprovalUntilItChanges(t *testing.T) {
 		".scoring-stage/kits/rules/kit.yaml": "allow: [example.com]\n",
 	})
 	h.expect(1, "up", h.remote.Checkout, "one")
-	h.expectStderr("asks for kits or books you have not approved")
+	h.expectStderr("asks for kits, books or takes you have not approved")
 	h.expectStderr("not approved; review them")
 	if h.anyCall("env create") {
 		t.Fatal("created a sandbox with an unapproved repository kit")
@@ -626,7 +626,7 @@ func TestARepositoryKitNeedsApprovalUntilItChanges(t *testing.T) {
 
 	h.commitToMain(map[string]string{".scoring-stage/kits/rules/kit.yaml": "allow: [\"**\"]\n"})
 	h.expect(1, "up", h.remote.Checkout, "four")
-	h.expectStderr("asks for kits or books you have not approved")
+	h.expectStderr("asks for kits, books or takes you have not approved")
 }
 
 func boxCommit(t *testing.T, box, path, message string) {

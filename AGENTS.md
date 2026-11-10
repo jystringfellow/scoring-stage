@@ -72,6 +72,8 @@ From stage:
 - **task:** one sandbox's host state under `~/.scoring-stage/tasks/<slug>/`, addressed by its **slug**.
 - **scratch clone:** the host clone a sandbox's workspace is made from, and that `stage ship` pushes from.
 - **broker:** stage's host process that hands each sandbox temporary AWS credentials for the profiles it was granted.
+- **take:** a copy of the sandbox paths a config, book or repository listed, kept on the host under
+  `~/.scoring-stage/takes/<slug>/<time>/`. Takes only leave a sandbox; stage never copies one in.
 - **ship:** reviewing a sandbox's commit on the host and pushing it to `agent/<slug>/<sha>`.
 
 ## Exercising stage live

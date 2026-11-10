@@ -23,7 +23,7 @@ func TestPlanStopsBeforeWritingTheEnvFileWhenApprovalsAreMissing(t *testing.T) {
 		".scoring-stage/kits/rules/kit.yaml": "allow: [example.com]\n",
 	})
 	h.expect(1, "up", h.remote.Checkout, "fix", "--plan")
-	h.expectStderr("asks for kits or books you have not approved")
+	h.expectStderr("asks for kits, books or takes you have not approved")
 	h.expectStderr("  - kit ")
 	h.expectStderr("plan stopped before writing the env file")
 	if h.anyCall("env plan", "env create") {
@@ -76,7 +76,7 @@ func TestALegacyTrustFileIsClearedOnceWithANotice(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(h.home, "trusted-kits"), strings.Repeat("a", 64)+" kit forged\n")
 	h.expect(1, "up", h.remote.Checkout, "two")
 	h.expectStderr(legacyClearedNotice)
-	h.expectStderr("asks for kits or books you have not approved")
+	h.expectStderr("asks for kits, books or takes you have not approved")
 	if got := testutil.ReadFile(t, filepath.Join(h.home, "trusted-kits")); got != "" {
 		t.Fatalf("legacy approvals survived: %q", got)
 	}

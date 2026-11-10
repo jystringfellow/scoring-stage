@@ -23,6 +23,8 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
 - A full kapellmeister score on the current code. A score ran on an earlier stage build (2026-11-09, outside this
   log); on the current code only preflight has run.
 - Managed settings, beyond unit tests.
+- Takes: `stage down` keeping takes before a real removal, a repository's takes approval, and a take near the
+  size or entry limit. `stage take` was checked on 2026-11-10.
 - Book and repository kit refusals: a changed kit asking again, a book claiming a reserved service, and a
   published kit in a book or repository config.
 - Whether `sbx env create --force` prints the plan it approves.
@@ -208,3 +210,23 @@ kapellmeister (`agent/e7125958/scoring-stage` at 77ff6873):
   vendor and used a tool. claude (22 s), codex (10 s), copilot (28 s) and agy (36 s) all did, 36 s in all. Only
   `cao-server`'s own tmux session remained afterwards. This is the first record of claude, codex, copilot and agy,
   including agy's copied login, authenticating and answering inside a sandbox on the current code.
+
+## 2026-11-10: takes copied out of a running sandbox
+
+- **sbx:** 0.51.0, macOS.
+- **stage:** the takes change on top of 974a2e8, built from its working tree before it was committed.
+- **Credentials:** none used. The run had its own `STAGE_HOME` with a hand-written task record naming an existing
+  sandbox and its takes, so no sandbox, secret or binding was created.
+- **Restoration:** the probe directory made in the sandbox was removed. sbx's `credentials.yaml` was not hashed
+  before and after; `stage take` runs only `sbx exec`.
+
+Checked:
+
+- The sandbox's tar (GNU tar 1.35) accepts `--null -T -` and writes an empty archive, exit 0, for an empty list.
+- `stage take` on three listed paths, one of them missing, kept 3 files and reported the one symbolic link it left
+  behind. A 70,000-byte file of random bytes had the same SHA-256 on the host as in the sandbox, so `sbx exec`
+  passes a binary stream through unchanged. Files were mode 600 and directories 700.
+- A task whose only take does not exist in the sandbox printed "has nothing to take", exited 0 and left no new
+  directory.
+- A larger take of 82 files (2.1 MB) from six paths under the sandbox user's home and `/tmp` completed.
+- `sbx exec` started a stopped sandbox by itself before running the command.

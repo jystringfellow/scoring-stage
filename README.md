@@ -71,7 +71,8 @@ stage exec fix-login -- git log -1
 stage ship fix-login [--pr]          # review and push the sandbox's HEAD to agent/fix-login/<sha> from the host
 stage list
 stage login fix-login                # save the sandbox's agy login for future sandboxes (copy_logins)
-stage down fix-login                 # remove the sandbox, its scoped secrets and the scratch clone
+stage take fix-login                 # copy the sandbox's takes to ~/.scoring-stage/takes/fix-login/ now
+stage down fix-login                 # keep the sandbox's takes, then remove it, its scoped secrets and the scratch clone
 stage broker start|stop|status       # the AWS broker (up starts it when a sandbox needs it)
 stage broker serve                   # run the broker in the foreground
 stage token set acme                 # save a fine-grained token for owner acme ([github] mode = "fine-grained")
@@ -105,6 +106,29 @@ reach the host scratch clone, and that the host source mount, if sbx adds one, i
 [sbx environment file](https://docs.docker.com/ai/sandboxes/configuration/environment-files/) next to it and runs
 `sbx env create`. The sandbox sees the repository at the scratch clone's host path. `stage down` deletes the scratch
 clone, so ship anything you want to keep first.
+
+## Takes
+
+A sandbox's files go with it on `stage down`. A **take** is what you keep: list paths inside the sandbox, and stage
+copies them to the host before removing it, and whenever you run `stage take <slug>`.
+
+```toml
+takes = ["~/.tool/runs", "/var/log/tool"]   # in ~/.scoring-stage/config.toml, a book.toml or a repository's config
+```
+
+A path starts with `/` or `~/` (the sandbox user's home) and has no `..`. A path that does not exist in the sandbox
+is passed over. Each copy lands in its own directory, `~/.scoring-stage/takes/<slug>/<UTC time>/`, under the path it
+had in the sandbox, such as `home/agent/.tool/runs/`. A sandbox uses the takes it was created with; a later change
+to a config applies to the next `stage up`.
+
+The files come from a sandbox that ran with prompts off, so stage treats them as untrusted. It keeps regular files
+and directories only, with modes 600 and 700, and says how many links and special files it left behind. An entry
+that would land outside the take's directory, a take over 1 GiB or 100,000 entries, or a sandbox that does not
+answer stops the copy and keeps nothing from it. When that happens during `stage down`, the sandbox is left in
+place; fix the cause and run it again, or pass `--discard-takes` to remove the sandbox without its takes.
+
+Takes are records for you and your tools to read. stage never copies them into a sandbox. A repository's takes
+need your approval like its kits, and `repo_kits = "deny"` in managed settings refuses them.
 
 ## One-time setup
 
@@ -388,7 +412,7 @@ kits = ["./.scoring-stage/kits/rules"]  # inside the repository; approved by you
 ```
 
 A repository is not trusted with anything that acts on the host. It can add agents by name, installed books by
-name, and its own kits, but it cannot set secrets, bindings, AWS profiles, GitHub access or the base. A book it asks
+name, its own kits and [takes](#takes), but it cannot set secrets, bindings, AWS profiles, GitHub access or the base. A book it asks
 for that you have not installed is an error. A repository's kit is a `./` path inside the repository, with no
 symbolic links; published kits are refused.
 
@@ -524,6 +548,9 @@ and what has not been run live yet.
 - stage's defaults are named by tag, not digest: the base `docker.io/sbx/shell:1.1.0` and the agent mixins
   (`claude-mixin:2.1.319`, `codex-mixin:0.167.0`, `copilot-mixin:1.0.86`, `antigravity-mixin:1.0.0`). A tag can be
   repointed without stage noticing.
+- A take is whatever the sandbox chose to put at the listed paths, up to 1 GiB each time. Treat kept files as
+  untrusted input: do not run them, and do not feed them to an agent without reading them. `stage down` deletes
+  the task but never its takes, so `~/.scoring-stage/takes/` grows until you clear it.
 - A book's approval covers the files in its directory. Files its host commands read, and kits it uses from outside the
   directory can change without asking again.
 
