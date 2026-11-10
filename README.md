@@ -513,8 +513,8 @@ and what has not been run live yet.
 - `stage up` checks the global sbx policy only when it creates a sandbox. Allow rules added later widen running
   sandboxes, and so does approving a refused host when sbx offers to, which happens outside stage's view.
 - A credential the proxy injects can do anything it permits on its bound domains. stage restricts methods and paths
-  only for GitHub: a book's binding, such as an Azure DevOps package feed token, is added on every method, so the
-  sandbox can publish or write wherever that credential allows.
+  only for GitHub: a book's binding, such as a package feed token, is added on every method, so the sandbox can
+  publish or write wherever that credential allows.
 - With the `copilot` agent, the `copilot` secret is your gh login (`gh auth token`), in every GitHub mode,
   `fine-grained` and `app` included. The proxy adds it only on Copilot's hosts (`api.githubcopilot.com`, its
   `individual`, `business` and `enterprise` variants, and `copilot.github.com`). Whether any of them accepts that

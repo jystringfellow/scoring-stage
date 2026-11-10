@@ -25,7 +25,7 @@ func TestEveryServiceAnAgentBindsIsReserved(t *testing.T) {
 			t.Errorf("%q is not reserved", service)
 		}
 	}
-	if isReservedService("mindbody-ado-nuget") {
+	if isReservedService("acme-feed") {
 		t.Error("an ordinary service is reserved")
 	}
 }
@@ -119,7 +119,7 @@ func TestABookNameIsLowercaseAndItsDescriptionHasNoControlCharacters(t *testing.
 			t.Errorf("error carries control characters: %q", err)
 		}
 	}
-	for _, name := range []string{"mindbody-dotnet", "a", "0.x_y-z"} {
+	for _, name := range []string{"acme-dotnet", "a", "0.x_y-z"} {
 		dir := t.TempDir()
 		testutil.WriteFile(t, filepath.Join(dir, "book.toml"), "name = \""+name+"\"\ndescription = \".NET SDK and feeds\"\n")
 		if _, err := LoadBook(dir); err != nil {
@@ -298,7 +298,7 @@ func TestABookBindingCannotCoverAReservedServicesHosts(t *testing.T) {
 			t.Errorf("%s: %v", domain, err)
 		}
 	}
-	for _, domain := range []string{"pkgs.dev.azure.com", "mindbody.pkgs.visualstudio.com", "*.example.com", "claude.example.com"} {
+	for _, domain := range []string{"pkgs.dev.azure.com", "acme.pkgs.visualstudio.com", "*.example.com", "claude.example.com"} {
 		body := "[secrets.feed]\ncommand = \"cat /tmp/k\"\n[bindings.feed]\napiKey = { domains = [\"" + domain + "\"] }\n"
 		if _, err := LoadBook(book(t, t.TempDir(), "org", body)); err != nil {
 			t.Errorf("%s: %v", domain, err)
@@ -469,18 +469,18 @@ func TestAKitServiceNameIsNormalisedBeforeItIsChecked(t *testing.T) {
 	}
 }
 
-func TestTheMindbodyDotnetBookShapeStillLoads(t *testing.T) {
-	path := book(t, t.TempDir(), "mindbody-dotnet", dedent(`
-		description = ".NET SDK and the Mindbody NuGet feed"
-		kits = ["./kits/ado-nuget"]
+func TestABookWithAFeedSecretAndItsOwnCredentialKitLoads(t *testing.T) {
+	path := book(t, t.TempDir(), "acme-dotnet", dedent(`
+		description = ".NET SDK and a private package feed"
+		kits = ["./kits/feed"]
 
-		[secrets.mindbody-ado-nuget]
-		command = "python3 -I {book}/host/ado_nuget_auth.py"
+		[secrets.acme-feed]
+		command = "python3 -I {book}/host/feed_token.py"
 
-		[bindings.mindbody-ado-nuget]
-		apiKey = { domains = ["pkgs.dev.azure.com", "mindbody.pkgs.visualstudio.com"] }
+		[bindings.acme-feed]
+		apiKey = { domains = ["pkgs.dev.azure.com", "acme.pkgs.visualstudio.com"] }
 	`))
-	testutil.WriteFile(t, filepath.Join(path, "kits", "ado-nuget", "ado-nuget.yaml"), dedent(`
+	testutil.WriteFile(t, filepath.Join(path, "kits", "feed", "feed.yaml"), dedent(`
 		schemaVersion: "3"
 		kind: mixin
 		capabilities:
@@ -490,12 +490,12 @@ func TestTheMindbodyDotnetBookShapeStillLoads(t *testing.T) {
 		        allow: [pkgs.dev.azure.com:443, "*.vsblob.vsassets.io:443"]
 		  - type: com.docker.sandbox/credential@1
 		    config:
-		      service: mindbody-ado-nuget
+		      service: acme-feed
 		      phase: runtime
 		      apiKey:
 		        inject:
 		          - {domain: pkgs.dev.azure.com, header: Authorization, format: "Basic %s"}
-		          - {domain: mindbody.pkgs.visualstudio.com, header: Authorization, format: "Basic %s"}
+		          - {domain: acme.pkgs.visualstudio.com, header: Authorization, format: "Basic %s"}
 		  - type: com.docker.sandbox/lifecycle@1
 		    config:
 		      files: [{path: /home/agent/.nuget/NuGet/NuGet.Config, content: "<configuration/>"}]
