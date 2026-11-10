@@ -230,8 +230,8 @@ Token refresh:
   - The next command run in it, about 45 minutes after the rewrite, printed that sbx had started it.
   - sbx's audit log records a `filesystem_mount` event for every command run in a sandbox, including the one that
     starts it; another sandbox started by `sbx exec` that day logged one at that second. The kapellmeister sandbox
-    has none between the minutes after login and that later command, assuming sbx starts a sandbox only through a
-    command, which logs a mount event.
+    has none between the minutes after login and that later command; assuming sbx starts a sandbox only through a
+    command, which logs a mount event, it was not started in between.
 - The rewrite came 34 seconds before another stage sandbox's first audit event. That fits its creation running
   `stage github token`, which refreshes a login that has expired or has under 40 minutes left.
 - So a sandbox start refreshed an expired login. A running sandbox re-running the command on `refresh: 30m` was not
