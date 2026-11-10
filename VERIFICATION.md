@@ -9,18 +9,10 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
 
 ## Not yet run live
 
-- The current `tests/acceptance.sh` as a whole. Beyond the first version's checks (see 2026-11-08), it checks that
-  the sandbox's writes to its `.git` do not reach the host scratch clone (`workspace.clone`), that the task
-  directory is hidden, and that the host source mount is read-only (skipped when sbx adds none). Given an AWS
-  profile, it checks that the broker serves that profile and refuses another. It has no CI.
-- The acceptance script's secret scan, which has run only in a local harness. As the sandbox's own user, the
-  sandbox hashes the token-like words in its environment, the environments and command lines of processes that user
-  can see (not root's or the proxy's), its home directory, `/tmp`, the repository and its git history, the strings
-  in binary files under the home directory and repository, and `/etc`. The host checks those hashes against its
-  secrets, as written and base64-encoded. The scan plants a canary in the environment, the home directory, the
-  repository, `/tmp` and a binary file, and adds an end marker; a missing canary fails the run. `/etc` cannot hold
-  a canary, so its coverage is unproven. Matching is by whole token-like word, so a base64 token sitting at an
-  offset inside a longer blob is not found.
+- Parts of the acceptance secret scan that a canary cannot prove. `/etc` cannot hold a canary, so its coverage is
+  unproven. Matching is by whole token-like word, so a base64 token sitting at an offset inside a longer blob is
+  not found. The scan sees only what the sandbox's own user can read, not root's or the proxy's processes.
+- `tests/acceptance.sh` has no CI; each run is recorded here.
 - The GitHub REST write refusals in the stage kit. They are bounded deny entries like the push refusal, but no
   request has been checked against them.
 - `fine-grained` token checks and `stage token set` against GitHub itself.
@@ -124,3 +116,50 @@ Passed:
 - The same command with `--source-ref refs/tags/v9.9.9` failed.
 
 Not exercised: the refusal of a malformed tag and of a tag not on `main`.
+
+## 2026-11-09: acceptance on a private .NET service and on kapellmeister
+
+- **sbx:** 0.51.0.
+- **stage:** `main` at a452ee8, built to a temporary binary; `tests/acceptance.sh` from 9728e55, which fixes the
+  scan bug below.
+- **Credentials:** real. `[github] mode = "gh"` (the maintainer's gh login), the maintainer's agent logins, a saved
+  agy login through `copy_logins`, a package-feed token from a private book's secret command, and one AWS profile
+  through the broker. The leftover global `github` secret from 2026-11-08 was removed with `sbx secret rm github -f`
+  before the run, as `stage up` requires.
+- **Shared state:** `~/.config/sbx/credentials.yaml` was copied before the run (sha256
+  `4998c033b4b70e066939e87ed0f223fea6dee62917823758bc7a58e2ce021008`) and was byte-for-byte the same after the
+  first sandbox's `stage down`; every binding the runs needed already existed. The stale `localhost` entry under
+  `stage-broker` remains, as the `stage setup` audit reports. The first run on this version cleared old-format
+  approvals, and both repository configs were approved with `--approve-repo-config` after review.
+
+**A private .NET Web API repository**, with a repository config naming three private books (the .NET SDK and a
+package feed, AWS access, and platform egress for SQL Server, Postgres, Redis and staging APIs) and one repository
+kit; agents claude, codex and copilot; one AWS profile granted:
+
+- `stage up --plan` with approvals missing listed them and exited 1 without writing the env file or running
+  `sbx env plan`, and printed the bindings audit.
+- The first acceptance run, with the script as merged in #19, failed the secret scan: "missed its canary in: env
+  home repo tmp bin end". Running the scan by hand showed every canary but the binary one was hashed. With
+  `pipefail` on, piping about 84,000 hashes into `grep -q` fails with SIGPIPE when grep matches early, so found
+  canaries read as missing, and the host-secret check, the same pipe under `!`, would have read a found secret as
+  absent. The image has no `strings`, so the binary canary could not be found either. The earlier local-harness
+  runs of the scan did not exercise this path. 9728e55 reads the hashes from a here-string and scans binaries with
+  `grep -a`.
+- With the fix, all 18 checks passed: the repository path, the agent CLIs, git identity and guidance, fetch from
+  github.com, push refused at the proxy and for real, an unlisted host refused, `.git` writes kept out of the host
+  scratch clone, the task directory hidden, the source mount read-only, the scan (83,978 strings, every canary
+  found), the gh login token and broker token absent, and the broker serving the granted profile and refusing an
+  ungranted one.
+- Positive control: the sandbox's own broker token was written to `/tmp` inside the sandbox and the script rerun.
+  "FAIL the broker token is nowhere in the sandbox" was reported, and the gh token check still passed. The file was
+  then removed.
+- The repository's end-to-end tests: 134 passed, 8 skipped by the tests' own attributes, 0 failed.
+- A sample of its contract tests against Postgres, SQL Server and HTTP providers: 269 passed, 11 failed. The 11 are
+  S3 uploads that also fail on the host.
+
+**kapellmeister** (`agent/e7125958/scoring-stage` at 77ff6873; agents agy, claude, codex and copilot from the
+repository config; no AWS profile):
+
+- All 14 checks that apply without AWS passed; the scan hashed 488,784 strings and found every canary.
+- The repository kit's setup worked: `km`, `cao` and `cao-server` were installed, `cao-server` was running in tmux,
+  and the saved agy login was copied in. A `km run` was not attempted.
