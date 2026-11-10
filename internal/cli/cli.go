@@ -440,6 +440,7 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 	if err := checkNoGlobalGitHubSecret(); err != nil {
 		a.warn("%s", err)
 	}
+	a.auditBindings(settings.StageBindings())
 	composition, err := config.Compose(settings, config.Selection{Gh: gh})
 	if err != nil {
 		return 0, err
@@ -493,6 +494,10 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	settings, err := config.LoadSettings(home)
 	if err != nil {
 		return 0, err
+	}
+	auditExpected := settings.StageBindings()
+	if *plan {
+		defer func() { a.auditBindings(auditExpected) }()
 	}
 	owner, _, _ := strings.Cut(github, "/")
 	gh := a.FindGh()
@@ -560,6 +565,7 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	config.AddStageBindings(auditExpected, composition.Bindings, "this sandbox")
 	if err := a.checkRepoApprovals(settings.Home, composition, *approveRepoConfig, *plan); err != nil {
 		return 0, err
 	}
