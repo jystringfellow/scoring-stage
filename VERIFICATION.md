@@ -205,6 +205,6 @@ kapellmeister (`agent/e7125958/scoring-stage` at 77ff6873):
   refresh token and current access token are nowhere in the sandbox (488,877 strings scanned, every canary found).
 - `km preflight` with all four agents, in a throwaway worktree and state directory. Preflight sends each agent a
   prompt to write the word "ready" to a file and reply "ready", so each one made an authenticated call to its
-  vendor and used a tool. claude (22 s), codex (10 s), copilot (28 s) and agy (36 s) all did, 36 s in all. Only `cao-server`'s own tmux session
-  remained afterwards. This is the first record of claude, codex, copilot and agy, including agy's copied login,
-  authenticating and answering inside a sandbox on the current code.
+  vendor and used a tool. claude (22 s), codex (10 s), copilot (28 s) and agy (36 s) all did, 36 s in all. Only
+  `cao-server`'s own tmux session remained afterwards. This is the first record of claude, codex, copilot and agy,
+  including agy's copied login, authenticating and answering inside a sandbox on the current code.
