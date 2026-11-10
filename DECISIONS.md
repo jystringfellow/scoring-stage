@@ -7,7 +7,7 @@ evidence, and add the reversal as a new entry. What stage owns today is in the o
 ## 2026-11-08: Name scoring-stage, binary stage, and call packs books
 
 A scoring stage is where session players record, and a book is the folder of charts a player is handed for a gig.
-"Packs" became books. Rejected: rigs (taken by another agent tool), charts (Helm), stagings and layouts.
+"Packs" became books. Rejected: rigs (clashes with OpenRig), charts (Helm), stagings and layouts.
 
 ## 2026-11-08: One Go binary with embedded kits
 
@@ -45,8 +45,9 @@ user's long-lived keys never reach a sandbox. The keys a sandbox gets stay usabl
 
 `[github] mode` is fine-grained, app, gh or none, with no default, because each trades access against safety
 differently. gh mode is allowed with a warning, since GraphQL lets it write. stage ships no GitHub App; users
-register their own. Managed settings allow fine-grained and none unless they list more. Evidence:
-`TestUpRefusesUntilAGitHubModeIsChosen`, `TestManagedSettingsWithoutAllowedModesRefuseOnlyGhMode`.
+register their own. Under managed settings, app and gh are refused unless `allowed_modes` lists them. Evidence:
+`TestUpRefusesUntilAGitHubModeIsChosen`, `TestManagedSettingsWithoutAllowedModesRefuseOnlyGhMode` (gh),
+`TestManagedSettingsRefuseAppModeUntilAllowedModesListsIt` (app).
 
 ## 2026-11-09: Kits, not bindings, decide where a credential goes
 
@@ -73,7 +74,7 @@ Evidence: `TestSetupStillAuditsBindingsWhenGlobalSecretsAreUnreadable`, `TestUpP
 ## 2026-11-09: Approve repository kits and books by content; installed books are not yet approved
 
 A repository's kits and the books its config turns on are approved by content fingerprint. Books the user turns on
-are not reviewed in v0.0.1; the fence above stops a book from rebinding stage's credentials, but a book's secret
+are not reviewed as of this entry; the fence above stops a book from rebinding stage's credentials, but a book's secret
 commands are still code on the host. Pinning installed books by content is planned. Until then, turn on books only
 from protected, reviewed repositories. Evidence: `TestPlanStopsBeforeWritingTheEnvFileWhenApprovalsAreMissing`,
 `TestALegacyTrustFileIsClearedRatherThanMigrated`.

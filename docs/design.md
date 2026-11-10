@@ -19,7 +19,7 @@ the host, compute a secret, or choose which sandbox gets which grant. Those are 
 | Logins the proxy cannot hold (agy) | `stage`'s opt-in `copy_logins`; see below |
 | Which agents, books and kits a sandbox gets, and what a book or repository may set (local kits only, no reserved services) | `stage`; sbx has no notion of who may ask for what |
 | Approval of a repository's kits and books | `stage`'s trust store, by content fingerprint |
-| Organisation policy (allowed GitHub modes, AWS profiles) | `stage`'s managed settings |
+| Organisation policy (agents, GitHub modes, AWS profiles, repository kits, `copy_logins`, the global policy override) | `stage`'s managed settings |
 | Reporting sbx's global credential bindings | `stage setup`, read-only; `credentials.yaml` stays sbx's |
 
 `stage up` expresses all of it as one sbx environment file and lets `sbx env create` apply it, so a sandbox's
