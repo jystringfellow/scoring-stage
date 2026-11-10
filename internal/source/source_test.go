@@ -155,6 +155,9 @@ func TestConfigFingerprintKeepsASandboxRemoteThatSbxDidNotWrite(t *testing.T) {
 		"an upload-pack command":   baseConfig + sbx + "\tuploadpack = touch /tmp/x; git-upload-pack\n",
 		"a changed refspec":        baseConfig + strings.Replace(sbx, "refs/sandboxes/stage-fix/*", "refs/heads/*", 1),
 		"a second copy":            baseConfig + sbx + sbx,
+		"an indented header":       baseConfig + sbx + " [core]\n\tsshCommand = x\n",
+		"CRLF line endings":        baseConfig + strings.ReplaceAll(sbx, "\n", "\r\n"),
+		"a continuation":           baseConfig + strings.Replace(sbx, "/src\n", "/src\\\n", 1),
 	} {
 		if got := fingerprintWithConfig(t, "stage-fix", config); got == stopped {
 			t.Errorf("fingerprint ignores %s", name)

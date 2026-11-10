@@ -973,6 +973,9 @@ func checkGitConfig(task *Task) error {
 		return errorf("the git config in %s includes other files (%s); refusing to run git there", task.RepoDir, strings.Join(strings.Fields(includes), ", "))
 	}
 	if current != task.GitConfig {
+		if whole, err := source.ConfigFingerprint(task.RepoDir, ""); err == nil && whole == task.GitConfig {
+			return nil
+		}
 		return errorf("the git config in %s changed after stage up created the sandbox; refusing to run git there. "+
 			"Inspect %s and recreate the task", task.RepoDir, filepath.Join(task.RepoDir, ".git"))
 	}

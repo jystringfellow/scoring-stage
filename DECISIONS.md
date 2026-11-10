@@ -104,6 +104,8 @@ sbx removes the `sandbox-<sandbox>` remote from the scratch clone when the sandb
 when the sandbox starts, so a hash that included it refused every sandbox that had restarted. The hash leaves the
 remote out only while it has exactly sbx's shape: a loopback `git://` URL on any port, path `/src`, and sbx's two
 fetch refspecs. Any other key in that section, another host, transport or path, or a second copy is still hashed.
+A task recorded before this, with a hash of the whole config, still ships while its config is byte-identical.
 Evidence: TestConfigFingerprintIgnoresTheRemoteSbxAddsOnEachStart,
 TestConfigFingerprintKeepsASandboxRemoteThatSbxDidNotWrite,
-TestShipAllowsSbxToMoveTheSandboxRemoteWhenTheBoxRestarts.
+TestShipAllowsSbxToMoveTheSandboxRemoteWhenTheBoxRestarts,
+TestShipAcceptsATaskRecordedWithTheWholeConfigWhileItIsUnchanged.

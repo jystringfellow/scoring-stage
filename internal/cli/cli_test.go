@@ -735,6 +735,28 @@ func TestShipAllowsSbxToMoveTheSandboxRemoteWhenTheBoxRestarts(t *testing.T) {
 	}
 }
 
+func TestShipAcceptsATaskRecordedWithTheWholeConfigWhileItIsUnchanged(t *testing.T) {
+	h := setup(t)
+	h.expect(0, "up", h.remote.Checkout, "fix")
+	scratch := filepath.Join(h.task("fix"), "src")
+	testutil.RunGit(t, scratch, "remote", "add", "sandbox-stage-fix", "git://127.0.0.1:49207/src")
+	testutil.RunGit(t, scratch, "config", "--add", "remote.sandbox-stage-fix.fetch", "+refs/heads/*:refs/sandboxes/stage-fix/*")
+	task, err := loadTask(h.home, "fix")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.GitConfig, err = source.ConfigFingerprint(task.RepoDir, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkGitConfig(task); err != nil {
+		t.Fatalf("refused an unchanged config: %v", err)
+	}
+	testutil.RunGit(t, scratch, "config", "core.sshCommand", "touch /tmp/x")
+	if err := checkGitConfig(task); err == nil {
+		t.Fatal("allowed a changed config")
+	}
+}
+
 func TestUpRecordsTheScratchClonesGitConfig(t *testing.T) {
 	h := setup(t)
 	h.expect(0, "up", h.remote.Checkout, "fix")
