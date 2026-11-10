@@ -180,7 +180,7 @@ repository config; no AWS profile):
   read-only repository permissions and no organisation or account permissions, Device Flow on and expiring user
   tokens; the maintainer's agent logins; the saved agy login through `copy_logins`. No AWS profile.
 - **Shared state:** the earlier kapellmeister sandbox, created in gh mode, was removed with `stage down` and
-  recreated. `~/.config/sbx/credentials.yaml` had the same sha256 after the run as before it
+  recreated. `~/.config/sbx/credentials.yaml` had the same sha256 after the run as recorded on 2026-11-09
   (`4998c033b4b70e066939e87ed0f223fea6dee62917823758bc7a58e2ce021008`): the `github` binding on `api.github.com`
   and `github.com` already existed and did not change. `sbx secret ls --global` still listed no `github` secret.
   `stage github login` left the app login on the host, an access token and a refresh token in
@@ -205,6 +205,6 @@ kapellmeister (`agent/e7125958/scoring-stage` at 77ff6873):
   refresh token and current access token are nowhere in the sandbox (488,877 strings scanned, every canary found).
 - `km preflight` with all four agents, in a throwaway worktree and state directory. Preflight sends each agent a
   prompt to write the word "ready" to a file and reply "ready", so each one made an authenticated call to its
-  vendor and used a tool: claude (22 s), codex (10 s), copilot (28 s) and agy (36 s) all did, 36 s in all. Only `cao-server`'s own tmux session
+  vendor and used a tool. claude (22 s), codex (10 s), copilot (28 s) and agy (36 s) all did, 36 s in all. Only `cao-server`'s own tmux session
   remained afterwards. This is the first record of claude, codex, copilot and agy, including agy's copied login,
   authenticating and answering inside a sandbox on the current code.
