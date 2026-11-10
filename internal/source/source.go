@@ -71,6 +71,10 @@ func DefaultBranch(repo, scratch string) (string, error) {
 	if ref, err := Git(repo, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"); err == nil && ref != "" {
 		return strings.TrimPrefix(ref, "origin/"), nil
 	}
+	return remoteDefaultBranch(scratch)
+}
+
+func remoteDefaultBranch(scratch string) (string, error) {
 	listing, err := Git(scratch, "ls-remote", "--symref", "origin", "HEAD")
 	if err != nil {
 		return "", err
@@ -81,6 +85,22 @@ func DefaultBranch(repo, scratch string) (string, error) {
 		}
 	}
 	return "", &Error{"could not determine the default branch; pass --base"}
+}
+
+func removeOriginRefs(scratch string) error {
+	if _, err := Git(scratch, "update-ref", "--no-deref", "-d", "refs/remotes/origin/HEAD"); err != nil {
+		return err
+	}
+	refs, err := Git(scratch, "for-each-ref", "--format=%(refname)", "refs/remotes/origin/")
+	if err != nil {
+		return err
+	}
+	for _, ref := range strings.Fields(refs) {
+		if _, err := Git(scratch, "update-ref", "--no-deref", "-d", ref); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func Prepare(repo, scratch, github, base string) (string, string, error) {
@@ -105,16 +125,31 @@ func Prepare(repo, scratch, github, base string) (string, string, error) {
 	if _, err := Git(scratch, "remote", "set-url", "origin", "https://github.com/"+github+".git"); err != nil {
 		return "", "", err
 	}
+	if err := removeOriginRefs(scratch); err != nil {
+		return "", "", err
+	}
+	defaultBranch := ""
 	if base == "" {
 		var err error
 		if base, err = DefaultBranch(repo, scratch); err != nil {
 			return "", "", err
 		}
+		defaultBranch = base
 	}
-	if _, err := Git(scratch, "fetch", "--quiet", "origin", base); err != nil {
+	if _, err := Git(scratch, "check-ref-format", "refs/heads/"+base); err != nil {
 		return "", "", err
 	}
-	if _, err := Git(scratch, "checkout", "--quiet", "--detach", "FETCH_HEAD"); err != nil {
+	if defaultBranch == "" {
+		defaultBranch, _ = remoteDefaultBranch(scratch)
+	}
+	fetch := []string{"fetch", "--quiet", "origin", "+refs/heads/" + base + ":refs/remotes/origin/" + base}
+	if defaultBranch != "" && defaultBranch != base {
+		fetch = append(fetch, "+refs/heads/"+defaultBranch+":refs/remotes/origin/"+defaultBranch)
+	}
+	if _, err := Git(scratch, fetch...); err != nil {
+		return "", "", err
+	}
+	if _, err := Git(scratch, "checkout", "--quiet", "--detach", "refs/remotes/origin/"+base); err != nil {
 		return "", "", err
 	}
 	head, err := Git(scratch, "rev-parse", "HEAD")
