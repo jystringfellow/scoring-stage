@@ -13,15 +13,15 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
   unproven. Matching is by whole token-like word, so a base64 token sitting at an offset inside a longer blob is
   not found. The scan sees only what the sandbox's own user can read, not root's or the proxy's processes.
 - `tests/acceptance.sh` has no CI; each run is recorded here.
-- The GitHub REST write refusals in the stage kit. They are bounded deny entries like the push refusal, but no
-  request has been checked against them.
+- The GitHub REST write refusals in the stage kit beyond the three requests checked on 2026-11-10.
 - `fine-grained` token checks and `stage token set` against GitHub itself.
-- `app` mode end to end: a registered GitHub App, `stage github login`, the installation check, and sbx re-running
-  `stage github token` at the secret's `refresh` interval.
+- `app` mode's token refresh: whether sbx re-runs `stage github token` on the secret's `refresh` interval, so a
+  sandbox keeps GitHub access after its first access token expires. Also a refresh-token rotation, and whether
+  `/user/installations` reports account permissions (the app checked on 2026-11-10 had none).
 - `stage ship` pushing to GitHub, and `--pr`.
 - The release workflow's refusals: a tag that is not `vX.Y.Z[-suffix]`, and a tagged commit that is not on `main`.
-- An agent using its login inside a sandbox on the current code: claude, codex, copilot or agy authenticating to
-  its vendor, including agy with a login copied in by `copy_logins`. The acceptance check only starts each CLI.
+- A full kapellmeister score on the current code. A score ran on an earlier stage build (2026-11-09, outside this
+  log); on the current code only preflight has run.
 - Managed settings, beyond unit tests.
 - Book and repository kit refusals: a changed kit asking again, a book claiming a reserved service, and a
   published kit in a book or repository config.
@@ -170,3 +170,36 @@ repository config; no AWS profile):
 - The agents' CLIs started, but no agent signed in or made a request in either sandbox.
 - The repository kit's setup worked: `km`, `cao` and `cao-server` were installed, `cao-server` was running in tmux,
   and the saved agy login was copied in. A `km run` was not attempted.
+
+
+## 2026-11-10: GitHub App mode and agent sign-ins on kapellmeister
+
+- **sbx:** 0.51.0.
+- **stage:** `main` at a452ee8, built to a temporary binary, the same build as the 2026-11-09 acceptance entry;
+  `tests/acceptance.sh` from main at d39aee4.
+- **Credentials:** real. `[github] mode = "app"` with an enterprise-owned GitHub App the maintainer registered with
+  read-only repository permissions and no organisation or account permissions, Device Flow on and expiring user
+  tokens; the maintainer's agent logins; the saved agy login through `copy_logins`. No AWS profile.
+- **Shared state:** the earlier kapellmeister sandbox, created in gh mode, was removed with `stage down` and
+  recreated. The sandbox was left running after this entry to check token refresh.
+
+GitHub App:
+
+- `stage github login` showed a device code; after the maintainer authorised it, stage saved the login, reported
+  the access token's expiry (8 hours) and the refresh token's (about 6 months), and listed the app's 11
+  installations. The read-only check passed on all of them.
+- The sandbox's env file had a `github` secret with the command `stage github token` and `refresh: 30m`.
+- Inside the sandbox, `GET /user` returned 200 as the maintainer, and a GraphQL read returned 200. `GH_TOKEN` held a
+  `gho_sbxp…` placeholder whose hash matched neither the gh login token nor the app access token; the proxy
+  supplies the real token.
+- `POST /user/repos`, `PATCH /user` and `DELETE` on a git ref under `/repos/**` were refused by the proxy with 403
+  and the body "Blocked by local rule for api.github.com:443", not by GitHub.
+
+kapellmeister (`agent/e7125958/scoring-stage` at 77ff6873):
+
+- `tests/acceptance.sh`: every check that applies without AWS passed, including the new checks that the app's
+  refresh token and current access token are nowhere in the sandbox (488,877 strings scanned, every canary found).
+- `km preflight` with all four agents, in a throwaway worktree and state directory: claude (22 s), codex (10 s),
+  copilot (28 s) and agy (36 s) each answered ready through CAO, 36 s in all. Only `cao-server`'s own tmux session
+  remained afterwards. This is the first record of claude, codex, copilot and agy, including agy's copied login,
+  authenticating and answering inside a sandbox on the current code.
