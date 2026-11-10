@@ -222,6 +222,26 @@ clone, so ship anything you want to keep first.
    app and webhook-subscription endpoints (the list is in [`kits/stage/stage.yaml`](kits/stage/stage.yaml)).
    GraphQL writes share `POST /graphql` with reads, so only the token's own permissions stop those.
 3. **Agent logins.** See [Agent logins](#agent-logins).
+4. **Global credential bindings.** sbx merges every environment's bindings into the machine-wide
+   `~/.config/sbx/credentials.yaml` (stage assumes `$XDG_CONFIG_HOME/sbx/credentials.yaml` when that is set, as sbx's
+   own messages suggest; only the `~/.config` path is verified) and keeps them after the sandbox is gone. A binding
+   authorises a service by name: any kit that declares `credential@1` for a bound service can have that service's
+   secret injected on any domain the kit names. Outside stage sandboxes, a binding is inert unless its service also
+   has a global secret (`sbx secret ls --global`); that pairing is the standing risk, even under a plain `sbx run`.
+   `stage setup` (and `stage up --plan`) reads that file, never writes it, and lists each bound service with its
+   domains, noting `global secret set` where there is one, and marks it:
+   - `expected`: stage binds it for your agents, `[github]` mode, the AWS broker, or your config and books.
+     Expected does not mean safe. If your agent sign-ins live as global sbx secrets (such as `anthropic` or
+     `openai`), any kit run under a plain `sbx run` outside stage can redirect them, so "run only kits you trust"
+     covers your own agent sign-ins too, not only the secrets stage creates;
+   - `not configured`: stage binds it for an agent or mode you have not configured; remove it only if you
+     no longer use that agent or mode;
+   - `stale`: a stage service listing a domain that is not, as literal text ignoring case, one stage binds, such as
+     `localhost` beside `localhost:9911`;
+   - `other`: anything else. When it has a global secret, `sbx secret rm <service>` removes that secret.
+
+   sbx has no command that withdraws one binding, so edit the file. Never pass `--prune-bindings` to `sbx env rm`
+   for a stage sandbox: it deletes the whole shared service entry machine-wide.
 
 ## What a sandbox gets
 
@@ -461,13 +481,16 @@ and what has not been run live yet.
 - **Books run code on your host.** A book's secret commands run on your machine as you, before the sandbox exists.
   The checks on books stop them from rebinding stage's credentials (agent, sbx built-in, GitHub and broker) and catch
   mistakes. They cannot stop a book whose secret runs a command such as `gh auth token` and whose own kit injects
-  the result on a host the book controls. Turn on only books from protected repositories whose changes are reviewed; see the known gap under
-  [Configuration and books](#configuration-and-books).
+  the result on a host the book controls. Turn on only books from protected repositories whose changes are
+  reviewed; see the known gap under [Configuration and books](#configuration-and-books).
 - **Any kit can send any bound credential anywhere.** A kit that declares a credential for a service with a global
   sbx binding gets that secret injected on whatever hosts the kit names. That holds for published kits you add to
   your own config and for Docker's agent mixins that stage pins in its agent table, which are trusted by design.
   Add only kits you trust as much as stage itself. Books and repository configs may use only local kits, which stage
   checks.
+- **A binding plus a global secret is standing risk outside stage.** If a service has a global sbx secret,
+  including agent sign-ins such as `anthropic` or `openai`, any kit run under a plain `sbx run` can redirect it.
+  `stage setup` lists these as `global secret set`.
 - **`[bindings]` domains do not limit where a credential is injected.** A binding authorises a service; kits decide
   the hosts. Treat the domains as documentation, not as a boundary.
 - **Do not run `sbx env rm --prune-bindings` on stage sandboxes.** Bindings are shared, and pruning one sandbox's
