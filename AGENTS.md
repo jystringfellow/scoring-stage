@@ -94,8 +94,10 @@ Live runs change state shared by every sandbox on the machine. Before any:
 This repository is public, and anything in it, including its history, PR descriptions and review comments, stays
 public. Write about the people and organisations who use stage only in general terms.
 
-- Never name a company, team, private repository, private book, internal host, AWS account or profile, package
-  feed or internal service in code, tests, docs, examples, commit messages or PR descriptions.
+- Never name a user's or employer's company or team, or a private repository, private book, internal host, AWS
+  account or profile, package feed or internal service, in code, tests, docs, examples, commit messages, PR
+  descriptions, review comments or branch names (including `agent/<slug>` slugs). Public products and projects,
+  such as Docker, GitHub or kapellmeister, are fine to name.
 - Do not describe a user's technology stack, environments or test suites beyond what the point needs. "A private
   repository with three books and an AWS profile" is enough; which databases or SDK it uses is not.
 - In tests and examples, use neutral names: `acme`, `example`, `team`, and hosts under `example.com`, or a public
