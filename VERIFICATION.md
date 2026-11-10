@@ -15,8 +15,10 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
 - `tests/acceptance.sh` has no CI; each run is recorded here.
 - The GitHub REST write refusals in the stage kit beyond the three requests checked on 2026-11-10.
 - `fine-grained` token checks and `stage token set` against GitHub itself.
-- `app` mode: whether `/user/installations` reports account permissions (the app checked on 2026-11-10 had none),
-  and which process ran the refresh recorded on 2026-11-10 (see that entry).
+- `app` mode's refresh in a running sandbox: whether sbx re-runs a secret's command on its `refresh` interval, so a
+  sandbox that stays up gets a new access token before the old one expires. On 2026-11-10 only a sandbox start was
+  seen to refresh, after expiry. Also whether a refresh rotates the refresh token, and whether
+  `/user/installations` reports account permissions (the app checked on 2026-11-10 had none).
 - `stage ship` pushing to GitHub, and `--pr`.
 - The release workflow's refusals: a tag that is not `vX.Y.Z[-suffix]`, and a tagged commit that is not on `main`.
 - A full kapellmeister score on the current code. A score ran on an earlier stage build (2026-11-09, outside this
@@ -211,23 +213,29 @@ kapellmeister (`agent/e7125958/scoring-stage` at 77ff6873):
 ## 2026-11-10: app-mode token refresh, and sbx moving the sandbox remote
 
 - **sbx:** 0.51.0.
-- **stage:** the same temporary build and sandbox as the previous entry.
+- **stage:** the same temporary build and kapellmeister sandbox as the previous entry. Other stage sandboxes, created
+  from the same config, ran during the day.
 - **Credentials:** as the previous entry.
-- **Shared state:** no sbx command changed `~/.config/sbx/credentials.yaml`, whose sha256 was still
+- **Shared state:** `~/.config/sbx/credentials.yaml` had the same sha256 afterwards,
   `4998c033b4b70e066939e87ed0f223fea6dee62917823758bc7a58e2ce021008`.
 
 Token refresh:
 
-- The first access token expired eight hours after login. Three minutes after that, stage's saved app login was
-  rewritten. The access token's fingerprint changed, and the new token's expiry was eight hours on.
-- The refresh token's expiry moved to six months from the rewrite, so GitHub rotated the refresh token as well.
-- `stage github token` was not run by hand. The rewrite happened while the sandbox was running, which fits sbx
-  re-running the secret's command on `refresh: 30m`; the host cannot show which process ran it.
-- After the refresh, `GET /user` from inside the sandbox returned 200.
+- The first access token expired eight hours after login. stage's saved app login was rewritten three minutes after
+  expiry, not before it: the access token's fingerprint changed, its new expiry was eight hours on, and the refresh
+  token's expiry moved to six months from the rewrite. No fingerprint of the refresh token was taken at login, so
+  this does not show the refresh token itself changed.
+- Nothing ran `stage github token` by hand. sbx's audit log shows the kapellmeister sandbox active only in the minutes
+  after login, and nothing from it again until it was started about 45 minutes after the rewrite, so it did not
+  refresh the token. The rewrite came 34 seconds before another stage sandbox's first audit event. That fits its
+  creation running `stage github token`, which refreshes a login that has expired or has under 40 minutes left.
+- So a sandbox start refreshed an expired login. A running sandbox re-running the command on `refresh: 30m` was not
+  observed: no app-mode sandbox was running across the expiry.
+- After the kapellmeister sandbox was started again, `GET /user` from inside it returned 200. This shows the
+  restarted sandbox had a working token, not that a running one was refreshed.
 
 Sandbox remote:
 
 - While the sandbox was stopped, the scratch clone's `.git/config` had no `sandbox-<sandbox>` remote. On the next
   start sbx added it again as `git://127.0.0.1:<port>/src` with its two fetch refspecs, on a different port from the
   one it had at `stage up`. Before #29, `stage ship` refused every sandbox that had restarted for this reason.
-
