@@ -125,3 +125,90 @@ func copyableAgents() []string {
 	}
 	return names
 }
+
+var sbxBuiltinServices = []string{"anthropic", "copilot", "cursor", "devin", "droid", "github", "google", "groq", "mistral", "nebius", "openai", "openrouter", "xai"}
+
+var gitHubApexes = []string{"github.com", "github.ai", "githubusercontent.com"}
+
+func reservedServices() []string {
+	reserved := map[string]bool{"copilot": true, GitHubService: true, BrokerService: true}
+	for _, service := range sbxBuiltinServices {
+		reserved[service] = true
+	}
+	for _, spec := range agents {
+		for service := range spec.bindings {
+			reserved[service] = true
+		}
+	}
+	names := make([]string, 0, len(reserved))
+	for service := range reserved {
+		names = append(names, service)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func isReservedService(service string) bool {
+	return contains(reservedServices(), normalizeService(service))
+}
+
+func reservedReason() string {
+	return "books and repository kits cannot touch the credentials of agents, sbx's built-in services, GitHub or the stage broker (reserved: " + strings.Join(reservedServices(), ", ") + ")"
+}
+
+func reservedDomains() []string {
+	targets := append([]string{}, gitHubApexes...)
+	bindings := []map[string]any{{BrokerService: brokerBinding()}}
+	for _, spec := range agents {
+		bindings = append(bindings, spec.bindings)
+	}
+	for _, table := range bindings {
+		for _, binding := range table {
+			domains, _ := bindingDomains(binding)
+			for _, domain := range domains {
+				targets = append(targets, normalizeHost(domain))
+			}
+		}
+	}
+	sort.Strings(targets)
+	return targets
+}
+
+func normalizeHost(domain string) string {
+	host := strings.ToLower(strings.TrimSpace(domain))
+	if index := strings.LastIndex(host, ":"); index >= 0 {
+		host = host[:index]
+	}
+	return strings.TrimSuffix(host, ".")
+}
+
+func hostReaches(host, target string) bool {
+	if star := strings.LastIndex(host, "*"); star >= 0 {
+		tail := host[star+1:]
+		return tail == "" || strings.HasSuffix(target, tail) || strings.HasSuffix(tail, "."+target)
+	}
+	return host == target || strings.HasSuffix(host, "."+target) || strings.HasSuffix(target, "."+host)
+}
+
+const domainGlobReason = "glob characters other than * are refused because stage cannot tell which hosts they match"
+
+func hasDomainGlob(domain string) bool {
+	return strings.ContainsAny(normalizeHost(domain), `?[]{}\`)
+}
+
+func reachesAny(domain string, targets []string) bool {
+	host := normalizeHost(domain)
+	if hasDomainGlob(host) {
+		return true
+	}
+	for _, target := range targets {
+		if hostReaches(host, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func ReachesReserved(domain string) bool {
+	return reachesAny(domain, reservedDomains())
+}

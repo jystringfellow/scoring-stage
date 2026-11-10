@@ -10,8 +10,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 )
 
 // Approval is something a repository asked for that widens its sandbox: one
@@ -46,6 +48,11 @@ func RepoApprovals(composition *Composition) ([]Approval, error) {
 			return nil, err
 		}
 		approvals = append(approvals, Approval{Label: "book " + book.Name + " (" + book.Path + ")", Fingerprint: fingerprint, Details: summarizeBook(book)})
+	}
+	for _, approval := range approvals {
+		if HasControl(approval.Label) {
+			return nil, errorf("%s contains control characters; refusing to ask for its approval", Printable(approval.Label))
+		}
 	}
 	return approvals, nil
 }
@@ -108,23 +115,121 @@ func hashTree(prefix, root string, skipGit bool) (string, error) {
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
-func trusted(home string) (map[string]bool, error) {
-	known := map[string]bool{}
+type trustRecord struct {
+	Fingerprint string `json:"fingerprint"`
+	Label       string `json:"label"`
+}
+
+var fingerprintPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+func readTrust(home string) (records []trustRecord, legacy bool, err error) {
 	file, err := os.Open(trustFile(home))
 	if errors.Is(err, os.ErrNotExist) {
-		return known, nil
+		return nil, false, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer file.Close()
 	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		if fields := strings.Fields(scanner.Text()); len(fields) > 0 {
-			known[fields[0]] = true
+	for number := 1; scanner.Scan(); number++ {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
 		}
+		if !strings.HasPrefix(line, "{") {
+			legacy = true
+			continue
+		}
+		var record trustRecord
+		if err := json.Unmarshal([]byte(line), &record); err != nil || !fingerprintPattern.MatchString(record.Fingerprint) {
+			return nil, false, errorf("%s:%d: not a trust record; fix or remove the line", trustFile(home), number)
+		}
+		records = append(records, record)
 	}
-	return known, scanner.Err()
+	return records, legacy, scanner.Err()
+}
+
+func syncDirectory(dir string) error {
+	directory, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	return errors.Join(directory.Sync(), directory.Close())
+}
+
+func writeTrust(home string, records []trustRecord) error {
+	var content strings.Builder
+	for _, record := range records {
+		line, err := json.Marshal(record)
+		if err != nil {
+			return err
+		}
+		content.Write(line)
+		content.WriteByte('\n')
+	}
+	temporary, err := os.CreateTemp(home, ".trusted-kits-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(temporary.Name())
+	_, writeErr := temporary.WriteString(content.String())
+	if err := errors.Join(writeErr, temporary.Chmod(0o600), temporary.Sync(), temporary.Close()); err != nil {
+		return err
+	}
+	if err := syncDirectory(home); err != nil {
+		return err
+	}
+	if err := os.Rename(temporary.Name(), trustFile(home)); err != nil {
+		return err
+	}
+	return syncDirectory(home)
+}
+
+func lockTrust(home string) (func(), error) {
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		return nil, err
+	}
+	lock, err := os.OpenFile(trustFile(home)+".lock", os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		lock.Close()
+		return nil, err
+	}
+	return func() {
+		syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+		lock.Close()
+	}, nil
+}
+
+func ClearLegacyTrust(home string) (bool, error) {
+	if _, err := os.Stat(trustFile(home)); errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	unlock, err := lockTrust(home)
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+	records, legacy, err := readTrust(home)
+	if err != nil || !legacy {
+		return false, err
+	}
+	return true, writeTrust(home, records)
+}
+
+func trusted(home string) (map[string]bool, error) {
+	records, _, err := readTrust(home)
+	if err != nil {
+		return nil, err
+	}
+	known := map[string]bool{}
+	for _, record := range records {
+		known[record.Fingerprint] = true
+	}
+	return known, nil
 }
 
 // Unapproved returns the approvals the user has not given yet.
@@ -143,24 +248,45 @@ func Unapproved(home string, approvals []Approval) ([]Approval, error) {
 }
 
 func Approve(home string, approvals []Approval) error {
-	if err := os.MkdirAll(home, 0o700); err != nil {
-		return err
+	for _, approval := range approvals {
+		if !fingerprintPattern.MatchString(approval.Fingerprint) || HasControl(approval.Label) {
+			return errorf("cannot record approval of %s", Printable(approval.Label))
+		}
 	}
-	file, err := os.OpenFile(trustFile(home), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	unlock, err := lockTrust(home)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
-	for _, approval := range approvals {
-		if _, err := fmt.Fprintf(file, "%s %s\n", approval.Fingerprint, approval.Label); err != nil {
-			return err
-		}
+	defer unlock()
+	records, _, err := readTrust(home)
+	if err != nil {
+		return err
 	}
-	return nil
+	for _, approval := range approvals {
+		records = append(records, trustRecord{Fingerprint: approval.Fingerprint, Label: approval.Label})
+	}
+	return writeTrust(home, records)
 }
 
 func summarizeBook(book Book) []string {
 	var details []string
+	agentLine := func(entry any, where string) {
+		if name, ok := entry.(string); ok && looksLikeName(name) {
+			if spec, known := agents[name]; known {
+				details = append(details, fmt.Sprintf("%sagent %s pinned to %s", where, name, spec.kit))
+				return
+			}
+		}
+		kit, err := parseKit(entry, book.Path, "book "+book.Name)
+		if err != nil {
+			details = append(details, fmt.Sprintf("%sagent %v: unrecognised; read the book before approving", where, entry))
+			return
+		}
+		details = append(details, fmt.Sprintf("%sagent kit %s", where, kit.Source))
+	}
+	for _, entry := range book.agents {
+		agentLine(entry, "")
+	}
 	if len(book.aws.profiles) > 0 {
 		details = append(details, "AWS profiles: "+strings.Join(book.aws.profiles, " "))
 	}
@@ -196,6 +322,14 @@ func summarizeBook(book Book) []string {
 	}
 	if len(book.repos) > 0 {
 		details = append(details, fmt.Sprintf("%d per-repository rule(s)", len(book.repos)))
+	}
+	for _, r := range book.repos {
+		for _, entry := range r.agents {
+			agentLine(entry, "repos matching "+strings.Join(r.patterns, ", ")+": ")
+		}
+	}
+	for i, detail := range details {
+		details[i] = Printable(detail)
 	}
 	return details
 }

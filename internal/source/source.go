@@ -85,11 +85,21 @@ func DefaultBranch(repo, scratch string) (string, error) {
 
 func Prepare(repo, scratch, github, base string) (string, string, error) {
 	if _, err := os.Stat(filepath.Join(scratch, ".git")); err != nil {
-		var stderr bytes.Buffer
-		clone := exec.Command("git", "clone", "--quiet", "--no-hardlinks", repo, scratch)
-		clone.Stderr = &stderr
-		if err := clone.Run(); err != nil {
-			return "", "", &Error{"git clone failed: " + strings.TrimSpace(stderr.String())}
+		absolute, err := filepath.Abs(scratch)
+		if err != nil {
+			return "", "", err
+		}
+		if err := os.MkdirAll(filepath.Dir(absolute), 0o755); err != nil {
+			return "", "", err
+		}
+		origin := repo
+		if _, err := os.Stat(repo); err == nil {
+			if origin, err = filepath.Abs(repo); err != nil {
+				return "", "", err
+			}
+		}
+		if _, err := Git(filepath.Dir(absolute), "clone", "--quiet", "--no-hardlinks", "--", origin, absolute); err != nil {
+			return "", "", err
 		}
 	}
 	if _, err := Git(scratch, "remote", "set-url", "origin", "https://github.com/"+github+".git"); err != nil {
