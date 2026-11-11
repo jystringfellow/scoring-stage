@@ -28,6 +28,11 @@ var DefaultLimits = Limits{Bytes: 1 << 30, Entries: 100_000, Stream: 2 << 30}
 
 const longestName = 4096
 
+// ManifestName is the file stage writes at a take's root to say what the take
+// belongs to. No entry from the sandbox may be or hold that name there, in any
+// letter case, since a host file system may ignore case.
+const ManifestName = "stage.json"
+
 type Summary struct {
 	Files   int
 	Bytes   int64
@@ -67,6 +72,9 @@ func Extract(archive io.Reader, dir string, limits Limits) (Summary, error) {
 		name, err := inside(header.Name)
 		if err != nil {
 			return summary, err
+		}
+		if root, _, _ := strings.Cut(name, "/"); strings.EqualFold(root, ManifestName) {
+			return summary, fmt.Errorf("the take holds %q at its root; %s, the name of stage's own record of a take, is reserved there", header.Name, ManifestName)
 		}
 		switch header.Typeflag {
 		case tar.TypeDir:

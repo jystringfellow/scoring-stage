@@ -3,6 +3,7 @@ package cli
 import (
 	"archive/tar"
 	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -359,6 +360,105 @@ func TestTheScriptRunInTheSandboxArchivesEachListedPathOnceAndFollowsAListedLink
 	} {
 		if _, err := os.Stat(filepath.Join(dir, kept)); err != nil {
 			t.Errorf("%s was not kept: %v", kept, err)
+		}
+	}
+}
+
+func TestAKeptTakeSaysWhichRepositoryBaseBranchAndShipsItBelongsTo(t *testing.T) {
+	h := takingSandbox(t, "fix")
+	box := h.sandboxCommit("fix")
+	sha := testutil.RunGit(t, box, "rev-parse", "HEAD")
+	h.ghAnswering("https://github.com/acme/api/pull/7\n", 0)
+	h.expect(0, "ship", "fix", "--yes", "--pr")
+	h.sbx.SetTakes(takeArchive(t, takeEntry{name: "home/agent/.tool/runs/result.json", body: "{}"}))
+
+	h.expect(0, "down", "fix")
+
+	kept := h.kept("fix")
+	if len(kept) != 1 {
+		t.Fatalf("kept %v, want one take", kept)
+	}
+	path := filepath.Join(h.home, "takes", "fix", kept[0], "stage.json")
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("manifest mode %v, %v", info, err)
+	}
+	var manifest struct {
+		Slug       string   `json:"slug"`
+		Sandbox    string   `json:"sandbox"`
+		GitHubRepo string   `json:"github_repo"`
+		BaseBranch string   `json:"base_branch"`
+		Agents     []string `json:"agents"`
+		Takes      []string `json:"takes"`
+		TakenAt    string   `json:"taken_at"`
+		Ships      []struct {
+			SHA         string `json:"sha"`
+			Branch      string `json:"branch"`
+			GitHubRepo  string `json:"github_repo"`
+			At          string `json:"at"`
+			PullRequest string `json:"pull_request"`
+		} `json:"ships"`
+	}
+	content := testutil.ReadFile(t, path)
+	if err := json.Unmarshal([]byte(content), &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Slug != "fix" || manifest.Sandbox != "stage-fix" || manifest.GitHubRepo != "acme/api" || manifest.BaseBranch != "main" {
+		t.Errorf("manifest = %s", content)
+	}
+	if len(manifest.Takes) != 1 || manifest.Takes[0] != "~/.tool/runs" {
+		t.Errorf("manifest takes = %v", manifest.Takes)
+	}
+	taken, err := time.Parse(time.RFC3339, manifest.TakenAt)
+	if err != nil || taken.UTC().Format("20060102T150405Z") != kept[0] {
+		t.Errorf("taken_at %q does not match the take %s: %v", manifest.TakenAt, kept[0], err)
+	}
+	if len(manifest.Ships) != 1 {
+		t.Fatalf("manifest ships = %s", content)
+	}
+	ship := manifest.Ships[0]
+	if ship.SHA != sha || ship.Branch != "agent/fix/"+sha[:8] || ship.GitHubRepo != "acme/api" || ship.PullRequest != "https://github.com/acme/api/pull/7" {
+		t.Errorf("manifest ship = %+v", ship)
+	}
+	if _, err := time.Parse(time.RFC3339, ship.At); err != nil {
+		t.Errorf("ship time %q: %v", ship.At, err)
+	}
+}
+
+func TestATakesManifestListsTheTasksAgents(t *testing.T) {
+	h := setup(t)
+	writeGitHubSetup(t, h.home, "takes = [\"~/.tool/runs\"]\n")
+	h.expect(0, "up", h.remote.Checkout, "fix", "--agent", "claude")
+	h.sbx.SetSandboxes("stage-fix\n")
+	h.sbx.SetTakes(takeArchive(t, takeEntry{name: "home/agent/.tool/runs/result.json", body: "{}"}))
+
+	h.expect(0, "take", "fix")
+
+	manifest := testutil.ReadFile(t, filepath.Join(h.home, "takes", "fix", h.kept("fix")[0], "stage.json"))
+	if !strings.Contains(manifest, "\"agents\": [\n    \"claude\"\n  ]") {
+		t.Errorf("manifest = %s", manifest)
+	}
+	if strings.Contains(manifest, "ships") {
+		t.Errorf("manifest names ships for a task that never shipped: %s", manifest)
+	}
+}
+
+func TestASandboxFileNamedLikeTheManifestStopsTheTakeAndKeepsNothing(t *testing.T) {
+	for _, name := range []string{"stage.json", "Stage.JSON", "stage.json/inner"} {
+		h := takingSandbox(t, "fix")
+		h.sbx.SetTakes(takeArchive(t,
+			takeEntry{name: "home/agent/.tool/runs/result.json", body: "{}"},
+			takeEntry{name: name, body: `{"github_repo":"acme/other"}`}))
+
+		h.expect(1, "down", "fix")
+
+		h.expectStderr("stage.json")
+		h.expectStderr("stage-fix is left in place")
+		if kept := h.kept("fix"); len(kept) != 0 {
+			t.Errorf("%s: kept %v", name, kept)
+		}
+		if h.anyCall("env rm", "rm") {
+			t.Errorf("%s: removed the sandbox", name)
 		}
 	}
 }

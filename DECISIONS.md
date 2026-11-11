@@ -127,3 +127,15 @@ Evidence: `TestDownKeepsTheTakesOnTheHostBeforeRemovingTheSandbox`,
 `TestARepositorysTakesAreUsedOnlyAfterApproval`, `TestATaskKeepsTheTakesItWasCreatedWithWhenTheConfigChanges`,
 `TestWhatTheSandboxSendsIsBoundedEvenWhenNoneOfItIsKept`, `TestStreamStopsAnSbxThatDoesNotFinishInTime`,
 `TestDownLeavesTheSandboxWhenItsTakesHoldOnlyLinks`.
+
+## 2026-11-11: A take says what it belongs to
+
+`stage down` deletes the task, so a kept take could not say which repository, base branch, shipped branch or pull
+request it came from. `stage ship` now records each push on the task, with the pull request when `--pr` made one,
+and every take carries a `stage.json` written by stage with the task's identity and its ships. The name is reserved
+at a take's root so a sandbox cannot supply the record of its own work. A push that cannot be recorded is still a
+push: ship warns and exits as the push did. Evidence: `TestShipRecordsEachPushOnTheTask`,
+`TestShipWithPRRecordsThePullRequestURLGhPrints`, `TestShipWarnsAndExitsAsThePushDidWhenItCannotRecordIt`,
+`TestAKeptTakeSaysWhichRepositoryBaseBranchAndShipsItBelongsTo`,
+`TestAnEntryAtTheRootNamedLikeStagesManifestIsRefused`,
+`TestATaskRecordedBeforeBaseBranchAndShipsStillShipsAndTakes`.
