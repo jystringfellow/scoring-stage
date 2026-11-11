@@ -26,6 +26,7 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
 - Takes: `stage down` keeping takes before a real removal, a repository's takes approval, a take near the size,
   entry or stream limit, a sandbox that goes quiet for the 10-minute limit, and overlapping paths on the sandbox's
   tar. `stage take` was checked on 2026-11-10.
+- A take's `stage.json` and the ships `stage ship` records on a task: run only against fakes.
 - Book and repository kit refusals: a changed kit asking again, a book claiming a reserved service, and a
   published kit in a book or repository config.
 - Whether `sbx env create --force` prints the plan it approves.

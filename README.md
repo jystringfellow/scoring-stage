@@ -139,6 +139,16 @@ left behind. The copy stops and keeps nothing when:
 When that happens during `stage down`, the sandbox is left in place; fix the cause and run it again, or pass
 `--discard-takes` to remove the sandbox without its takes.
 
+Each take has a `stage.json` at its root, written by stage, that says what the take belongs to: the slug and
+sandbox, the GitHub repository, the base branch, the agents, the listed paths, the time of the take, and the
+ships recorded on the task so far: each with its commit, branch, time and, when `--pr` made one in the task's
+repository, the pull request. `stage down` deletes the task, so this file is what links a kept record to the branch
+and pull request it produced. The list of ships is a record, not proof that nothing else was pushed; see
+[Limitations](#limitations). A sandbox cannot supply the
+file: an entry named `stage.json` at the root of what it sends, in any letter case, stops the copy.
+If a task's own record cannot be read, `stage down` cannot tell which takes to keep, so it leaves the sandbox in
+place unless you pass `--discard-takes`.
+
 Takes are records for you and your tools to read. stage never copies them into a sandbox. A repository's takes
 need your approval like its kits, and `repo_kits = "deny"` in managed settings refuses them. The approval is for
 that list in that repository: the same list in another repository asks again.
@@ -535,6 +545,15 @@ and what has not been run live yet.
 - **sbx stops a sandbox 30 seconds after its last session ends or disconnects.** A session is a `stage shell`, `stage exec` or
   `sbx exec`. Work left running in the background inside the sandbox, such as under `nohup` or a detached `tmux`,
   stops with it. Keep long-running work in the foreground of a session that stays open.
+- **The ship record can miss a push.** A ship is written to the task after the push returns, and the list reaches a
+  take only when `stage down` or `stage take` keeps one. It misses a ship when:
+  - the push was interrupted after GitHub accepted it, or the record could not be written (ship warns);
+  - two ships finish their writes at the same instant, or a ship pushes while `stage down` is copying takes;
+  - the task has no takes, the sandbox has nothing to take or is already gone, or `--discard-takes` was given: the
+    task is deleted and its ships with it.
+
+  A ship is recorded without its pull request when `gh` does not print one in the task's repository, for example a
+  second `--pr` to a branch that already has one. The same commit shipped twice is recorded twice.
 - **Do not run `sbx env rm --prune-bindings` on stage sandboxes.** Bindings are shared, and pruning one sandbox's
   bindings removes the service's binding for the whole machine. `stage down` never passes it.
 - GraphQL writes are not refused. They share `POST /graphql` with reads, so only the token's permissions stop

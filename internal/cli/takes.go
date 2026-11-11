@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -59,7 +61,11 @@ func (a *App) copyTakes(home string, task *Task) error {
 		a.say("%s has nothing to take", task.Sandbox)
 		return nil
 	}
-	kept, err := publishTake(partial, parent)
+	taken := time.Now().UTC()
+	if err := writeManifest(partial, task, taken); err != nil {
+		return err
+	}
+	kept, err := publishTake(partial, parent, taken)
 	if err != nil {
 		return err
 	}
@@ -70,8 +76,38 @@ func (a *App) copyTakes(home string, task *Task) error {
 	return nil
 }
 
-func publishTake(partial, parent string) (string, error) {
-	stamp := time.Now().UTC().Format("20060102T150405Z")
+type takeManifest struct {
+	Slug       string   `json:"slug"`
+	Sandbox    string   `json:"sandbox"`
+	GitHubRepo string   `json:"github_repo"`
+	BaseBranch string   `json:"base_branch,omitempty"`
+	Agents     []string `json:"agents,omitempty"`
+	Takes      []string `json:"takes"`
+	TakenAt    string   `json:"taken_at"`
+	Ships      []Ship   `json:"ships,omitempty"`
+}
+
+func writeManifest(dir string, task *Task, taken time.Time) error {
+	content, err := json.MarshalIndent(takeManifest{
+		Slug: task.Slug, Sandbox: task.Sandbox, GitHubRepo: task.GitHubRepo, BaseBranch: task.BaseBranch,
+		Agents: task.Agents, Takes: task.Takes, TakenAt: taken.Format(time.RFC3339), Ships: task.Ships,
+	}, "", "  ")
+	if err != nil {
+		return err
+	}
+	file, err := os.OpenFile(filepath.Join(dir, takes.ManifestName), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("the sandbox sent an entry this filesystem treats as %s, which stage writes itself", takes.ManifestName)
+	}
+	if err != nil {
+		return err
+	}
+	_, writeErr := file.Write(append(content, '\n'))
+	return errors.Join(writeErr, file.Close())
+}
+
+func publishTake(partial, parent string, taken time.Time) (string, error) {
+	stamp := taken.Format("20060102T150405Z")
 	for attempt := 1; ; attempt++ {
 		kept := filepath.Join(parent, stamp)
 		if attempt > 1 {

@@ -336,14 +336,19 @@ func TestDownOfAnUnknownTaskStillCleansUpQuietly(t *testing.T) {
 func shippedTask(t *testing.T) (*harness, string) {
 	h := setup(t)
 	h.expect(0, "up", h.remote.Checkout, "fix")
-	box := filepath.Join(t.TempDir(), "box")
-	testutil.RunGit(t, h.remote.Root, "clone", "-q", h.remote.Checkout, box)
-	testutil.WriteFile(t, filepath.Join(box, "change.txt"), "agent work\n")
-	testutil.RunGit(t, box, "add", ".")
-	testutil.RunGit(t, box, "commit", "-q", "-m", "Fix the login redirect")
-	testutil.RunGit(t, filepath.Join(h.task("fix"), "src"), "remote", "add", "sandbox-stage-fix", box)
-	h.pinGitConfig("fix")
-	return h, box
+	return h, h.sandboxCommit("fix")
+}
+
+func (h *harness) sandboxCommit(slug string) string {
+	h.t.Helper()
+	box := filepath.Join(h.t.TempDir(), "box")
+	testutil.RunGit(h.t, h.remote.Root, "clone", "-q", h.remote.Checkout, box)
+	testutil.WriteFile(h.t, filepath.Join(box, "change.txt"), "agent work\n")
+	testutil.RunGit(h.t, box, "add", ".")
+	testutil.RunGit(h.t, box, "commit", "-q", "-m", "Fix the login redirect")
+	testutil.RunGit(h.t, filepath.Join(h.task(slug), "src"), "remote", "add", "sandbox-stage-"+slug, box)
+	h.pinGitConfig(slug)
+	return box
 }
 
 // pinGitConfig records the scratch clone's config as sbx leaves it, with the

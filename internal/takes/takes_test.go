@@ -233,3 +233,32 @@ func TestANameThatCouldRewriteTheTerminalOrIsOverlongIsRefused(t *testing.T) {
 		}
 	}
 }
+
+func TestAnEntryAtTheRootNamedLikeStagesManifestIsRefused(t *testing.T) {
+	for _, refused := range []entry{
+		{name: "stage.json", body: "{}"},
+		{name: "./stage.json", body: "{}"},
+		{name: "home/../stage.json", body: "{}"},
+		{name: "Stage.JSON", body: "{}"},
+		{name: "stage.json/", kind: tar.TypeDir},
+		{name: "stage.json/inner.txt", body: "in"},
+		{name: "stage.json", kind: tar.TypeSymlink, link: "home/agent/forged.json"},
+	} {
+		dir := t.TempDir()
+		_, err := Extract(archive(t, entry{name: "home/agent/ok.txt", body: "fine"}, refused), dir, DefaultLimits)
+		if err == nil || !strings.Contains(err.Error(), "stage.json, the name of stage's own record") {
+			t.Errorf("%q: error %v", refused.name, err)
+		}
+		if _, err := os.Lstat(filepath.Join(dir, ManifestName)); !os.IsNotExist(err) {
+			t.Errorf("%q: the sandbox wrote the manifest: %v", refused.name, err)
+		}
+	}
+}
+
+func TestAFileNamedLikeTheManifestBelowTheRootIsKept(t *testing.T) {
+	dir := t.TempDir()
+	summary, err := Extract(archive(t, entry{name: "home/agent/stage.json", body: "{}"}), dir, DefaultLimits)
+	if err != nil || summary.Files != 1 {
+		t.Fatalf("summary %+v, %v", summary, err)
+	}
+}

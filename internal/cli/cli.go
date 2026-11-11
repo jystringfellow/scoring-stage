@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -79,6 +80,16 @@ type Task struct {
 	Agents     []string `json:"agents,omitempty"`
 	GitConfig  string   `json:"git_config,omitempty"`
 	Takes      []string `json:"takes,omitempty"`
+	BaseBranch string   `json:"base_branch,omitempty"`
+	Ships      []Ship   `json:"ships,omitempty"`
+}
+
+type Ship struct {
+	SHA         string `json:"sha"`
+	Branch      string `json:"branch"`
+	GitHubRepo  string `json:"github_repo"`
+	At          string `json:"at"`
+	PullRequest string `json:"pull_request,omitempty"`
 }
 
 const usage = `usage: stage <command> [options]
@@ -186,12 +197,18 @@ func loadTask(home, slug string) (*Task, error) {
 		return nil, err
 	}
 	content, err := os.ReadFile(filepath.Join(taskDir(home, slug), "task.json"))
-	if err != nil {
+	if os.IsNotExist(err) {
 		return nil, errorf("no task %s; run stage up first", slug)
+	}
+	if err != nil {
+		return nil, errorf("task %s is unreadable: %v", slug, err)
 	}
 	var task Task
 	if err := json.Unmarshal(content, &task); err != nil {
 		return nil, errorf("task %s is unreadable: %v", slug, err)
+	}
+	if task.Slug != slug {
+		return nil, errorf("task %s is unreadable: its record does not name it", slug)
 	}
 	return &task, nil
 }
@@ -536,6 +553,9 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 		}
 	}
 
+	if config.HasHidden(*base) {
+		return 0, errorf("refusing --base %s: it has control or invisible characters", strconv.QuoteToASCII(*base))
+	}
 	directory := taskDir(home, slug)
 	scratch := filepath.Join(directory, envfile.SourceDir)
 	if err := os.MkdirAll(directory, 0o755); err != nil {
@@ -544,6 +564,9 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	branch, head, err := source.Prepare(repo, scratch, github, *base)
 	if err != nil {
 		return 0, err
+	}
+	if config.HasHidden(branch) {
+		return 0, errorf("refusing to start from %s: the branch name has control or invisible characters", strconv.QuoteToASCII(branch))
 	}
 	a.say("source: %s %s at %s", github, branch, head[:min(8, len(head))])
 	repoConfig, err := config.LoadRepoConfig(scratch)
@@ -591,9 +614,15 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	task := Task{Slug: slug, Sandbox: sandbox, RepoDir: config.Resolve(scratch), GitHubRepo: github, SourceRepo: repo, Agents: composition.Agents, Takes: composition.Takes}
-	if err := writeTask(task, directory); err != nil {
-		return 0, err
+	task := Task{Slug: slug, Sandbox: sandbox, RepoDir: config.Resolve(scratch), GitHubRepo: github, SourceRepo: repo, Agents: composition.Agents, Takes: composition.Takes, BaseBranch: branch}
+	_, recordErr := os.Lstat(filepath.Join(directory, "task.json"))
+	if earlier, err := loadTask(home, slug); err == nil {
+		task.Ships = earlier.Ships
+	}
+	if !*plan || os.IsNotExist(recordErr) {
+		if err := writeTask(task, directory); err != nil {
+			return 0, err
+		}
 	}
 
 	if *plan {
@@ -756,12 +785,25 @@ func writeTask(task Task, directory string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(directory, "task.json"), append(content, '\n'), 0o644)
+	pending, err := os.CreateTemp(directory, ".task.json-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(pending.Name())
+	_, writeErr := pending.Write(append(content, '\n'))
+	if err := errors.Join(writeErr, pending.Chmod(0o644), pending.Sync(), pending.Close()); err != nil {
+		return err
+	}
+	return os.Rename(pending.Name(), filepath.Join(directory, "task.json"))
 }
 
 func runInteractive(name string, args ...string) (int, error) {
+	return runShowing(os.Stdout, name, args...)
+}
+
+func runShowing(stdout io.Writer, name string, args ...string) (int, error) {
 	command := exec.Command(name, args...)
-	command.Stdin, command.Stdout, command.Stderr = os.Stdin, os.Stdout, os.Stderr
+	command.Stdin, command.Stdout, command.Stderr = os.Stdin, stdout, os.Stderr
 	err := command.Run()
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
@@ -863,6 +905,9 @@ func (a *App) cmdShip(args []string, home string) (int, error) {
 	if !strings.HasPrefix(branch, "agent/") || branch == "agent/" {
 		return 0, errorf("refusing to push %s: branch must start with agent/", branch)
 	}
+	if config.HasHidden(branch) {
+		return 0, errorf("refusing to push %s: the branch name has control or invisible characters", strconv.QuoteToASCII(branch))
+	}
 	if _, err := source.Git(repo, "check-ref-format", "refs/heads/"+branch); err != nil {
 		return 0, err
 	}
@@ -873,6 +918,8 @@ func (a *App) cmdShip(args []string, home string) (int, error) {
 		return 0, err
 	}
 	a.say("pushed %s to %s %s", sha[:min(8, len(sha))], task.GitHubRepo, branch)
+	ship := Ship{SHA: sha, Branch: branch, GitHubRepo: task.GitHubRepo, At: time.Now().UTC().Format(time.RFC3339)}
+	a.recordShip(home, slug, ship)
 	if !*pr {
 		return 0, nil
 	}
@@ -884,12 +931,56 @@ func (a *App) cmdShip(args []string, home string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	code, err := runInteractive("gh", "pr", "create", "--draft", "--repo", task.GitHubRepo, "--head", branch,
+	var printed bytes.Buffer
+	code, err := runShowing(io.MultiWriter(a.Stdout, &printed), "gh", "pr", "create", "--draft", "--repo", task.GitHubRepo, "--head", branch,
 		"--title", title, "--body", PRBody(slug, sha, settings.PRFooter()))
 	if err == nil && code != 0 {
 		return 0, exitCode(code)
 	}
-	return 0, err
+	if err != nil {
+		return 0, err
+	}
+	url := pullRequestURL(printed.String(), task.GitHubRepo)
+	if url == "" {
+		a.warn("gh did not print the URL of a pull request in %s, so the ship is recorded without a pull request", task.GitHubRepo)
+		return 0, nil
+	}
+	recorded := ship
+	recorded.PullRequest = url
+	a.recordShip(home, slug, recorded)
+	return 0, nil
+}
+
+var pullRequestPattern = regexp.MustCompile(`^https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/[0-9]+$`)
+
+func pullRequestURL(printed, github string) string {
+	lines := strings.Split(strings.TrimSpace(printed), "\n")
+	last := strings.TrimSpace(lines[len(lines)-1])
+	match := pullRequestPattern.FindStringSubmatch(last)
+	if match == nil || !strings.EqualFold(match[1], github) {
+		return ""
+	}
+	return last
+}
+
+func (a *App) recordShip(home, slug string, ship Ship) {
+	err := func() error {
+		task, err := loadTask(home, slug)
+		if err != nil {
+			return err
+		}
+		at := len(task.Ships)
+		for i, known := range task.Ships {
+			if known.SHA == ship.SHA && known.Branch == ship.Branch && known.At == ship.At {
+				at = i
+			}
+		}
+		task.Ships = append(task.Ships[:at:at], append([]Ship{ship}, task.Ships[min(at+1, len(task.Ships)):]...)...)
+		return writeTask(*task, taskDir(home, slug))
+	}()
+	if err != nil {
+		a.warn("the push is made, but stage could not record it on the task, so takes will not name it: %s", err)
+	}
 }
 
 // protectedPaths are files whose changes run with the repository's secrets in
@@ -1034,7 +1125,11 @@ func (a *App) cmdDown(args []string, home string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if task, taskErr := loadTask(home, slug); taskErr == nil && existing[sandbox] {
+	task, taskErr := loadTask(home, slug)
+	if _, recordErr := os.Lstat(filepath.Join(directory, "task.json")); taskErr != nil && !os.IsNotExist(recordErr) && existing[sandbox] && !*discardTakes {
+		return 0, errorf("%s, so stage cannot tell which takes to keep; %s is left in place: pass --discard-takes to remove it without its takes", taskErr, sandbox)
+	}
+	if taskErr == nil && existing[sandbox] {
 		if len(task.Takes) > 0 && !*discardTakes {
 			if err := a.keepTakes(home, task); err != nil {
 				return 0, errorf("%s; %s is left in place: fix that and run stage down again, or pass --discard-takes to remove it without its takes", err, sandbox)
