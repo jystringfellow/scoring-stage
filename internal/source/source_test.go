@@ -189,7 +189,7 @@ func TestPrepareFetchesBothTheBaseAndTheDefaultBranchWhenTheyDiffer(t *testing.T
 }
 
 func TestPrepareRefusesABaseThatCouldWidenTheFetch(t *testing.T) {
-	for _, base := range []string{"*", "a:b", "a b"} {
+	for _, base := range []string{"*", "a:b", "a b", "x..y"} {
 		t.Run(base, func(t *testing.T) {
 			remote := testutil.GitHubRemote(t)
 			scratch := filepath.Join(t.TempDir(), "src")
@@ -255,7 +255,7 @@ func TestPrepareFetchesAnExplicitBaseWhenTheRemoteHasNoDefaultBranch(t *testing.
 func TestPrepareReportsAnUnknownBase(t *testing.T) {
 	remote := testutil.GitHubRemote(t)
 	_, _, err := Prepare(remote.Checkout, filepath.Join(t.TempDir(), "src"), "acme/api", "no-such-branch")
-	if err == nil || !strings.Contains(err.Error(), "git fetch") {
+	if err == nil || !strings.Contains(err.Error(), "--base no-such-branch must be a branch on acme/api") || !strings.Contains(err.Error(), "git fetch") {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -336,5 +336,31 @@ func TestConfigFingerprintWithoutASandboxHashesTheWholeConfig(t *testing.T) {
 	stopped := fingerprintWithConfig(t, "", baseConfig)
 	if got := fingerprintWithConfig(t, "", baseConfig+sbxRemote("", "49207")); got == stopped {
 		t.Error("an empty sandbox name left a remote out of the hash")
+	}
+}
+
+func TestPrepareTakesTheDefaultBranchFromGitHubOverTheLocalCheckoutsOriginHEAD(t *testing.T) {
+	remote := testutil.GitHubRemote(t)
+	advanceRemoteBranch(t, remote, "trunk")
+	testutil.RunGit(t, remote.Bare, "symbolic-ref", "HEAD", "refs/heads/trunk")
+	scratch := filepath.Join(t.TempDir(), "src")
+	base, head, err := Prepare(remote.Checkout, scratch, "acme/api", "")
+	if err != nil || base != "trunk" {
+		t.Fatalf("base = %q, %v", base, err)
+	}
+	if want := testutil.RunGit(t, remote.Bare, "rev-parse", "trunk"); head != want {
+		t.Errorf("HEAD %s, want trunk %s", head, want)
+	}
+}
+
+func TestPrepareTreatsALeadingPlusInTheBaseAsPartOfTheBranchName(t *testing.T) {
+	remote := testutil.GitHubRemote(t)
+	testutil.RunGit(t, remote.Bare, "branch", "+x", "main")
+	scratch := filepath.Join(t.TempDir(), "src")
+	if _, _, err := Prepare(remote.Checkout, scratch, "acme/api", "+x"); err != nil {
+		t.Fatal(err)
+	}
+	if got := originRefs(t, scratch); !strings.Contains(got, "origin/+x") {
+		t.Errorf("origin refs = %q, want origin/+x", got)
 	}
 }

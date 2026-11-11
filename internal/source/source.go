@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -23,11 +24,11 @@ type Error struct{ msg string }
 func (e *Error) Error() string { return e.msg }
 
 func Git(repo string, args ...string) (string, error) {
-	return git(true, repo, args)
+	return git(true, os.Stdin, repo, args)
 }
 
 func GitInteractive(repo string, args ...string) error {
-	_, err := git(false, repo, args)
+	_, err := git(false, os.Stdin, repo, args)
 	return err
 }
 
@@ -40,9 +41,9 @@ var hardened = []string{
 	"-c", "protocol.ext.allow=never",
 }
 
-func git(capture bool, repo string, args []string) (string, error) {
+func git(capture bool, stdin io.Reader, repo string, args []string) (string, error) {
 	command := exec.Command("git", append(append(append([]string{}, hardened...), "-C", repo), args...)...)
-	command.Stdin = os.Stdin
+	command.Stdin = stdin
 	var stdout, stderr bytes.Buffer
 	if capture {
 		command.Stdout, command.Stderr = &stdout, &stderr
@@ -68,10 +69,15 @@ func GitHubRepo(url string) (string, error) {
 }
 
 func DefaultBranch(repo, scratch string) (string, error) {
-	if ref, err := Git(repo, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"); err == nil && ref != "" {
-		return strings.TrimPrefix(ref, "origin/"), nil
+	if branch, err := remoteDefaultBranch(scratch); err == nil {
+		return branch, nil
 	}
-	return remoteDefaultBranch(scratch)
+	if ref, err := Git(repo, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"); err == nil {
+		if branch := strings.TrimPrefix(ref, "origin/"); validBranch(scratch, branch) {
+			return branch, nil
+		}
+	}
+	return "", &Error{"could not determine the default branch; pass --base"}
 }
 
 func remoteDefaultBranch(scratch string) (string, error) {
@@ -80,27 +86,38 @@ func remoteDefaultBranch(scratch string) (string, error) {
 		return "", err
 	}
 	for _, line := range strings.Split(listing, "\n") {
-		if fields := strings.Fields(line); len(fields) > 1 && strings.HasPrefix(line, "ref:") {
-			return strings.TrimPrefix(fields[1], "refs/heads/"), nil
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != "ref:" {
+			continue
+		}
+		if branch, ok := strings.CutPrefix(fields[1], "refs/heads/"); ok && validBranch(scratch, branch) {
+			return branch, nil
 		}
 	}
 	return "", &Error{"could not determine the default branch; pass --base"}
 }
 
-func removeOriginRefs(scratch string) error {
-	if _, err := Git(scratch, "update-ref", "--no-deref", "-d", "refs/remotes/origin/HEAD"); err != nil {
-		return err
+func validBranch(scratch, branch string) bool {
+	if branch == "" {
+		return false
 	}
+	_, err := Git(scratch, "check-ref-format", "refs/heads/"+branch)
+	return err == nil
+}
+
+func removeOriginRefs(scratch string) error {
 	refs, err := Git(scratch, "for-each-ref", "--format=%(refname)", "refs/remotes/origin/")
 	if err != nil {
 		return err
 	}
-	for _, ref := range strings.Fields(refs) {
-		if _, err := Git(scratch, "update-ref", "--no-deref", "-d", ref); err != nil {
-			return err
+	commands := "delete refs/remotes/origin/HEAD\n"
+	for _, ref := range strings.Split(refs, "\n") {
+		if ref != "" && ref != "refs/remotes/origin/HEAD" {
+			commands += "delete " + ref + "\n"
 		}
 	}
-	return nil
+	_, err = git(true, strings.NewReader(commands), scratch, []string{"update-ref", "--no-deref", "--stdin"})
+	return err
 }
 
 func Prepare(repo, scratch, github, base string) (string, string, error) {
@@ -128,25 +145,28 @@ func Prepare(repo, scratch, github, base string) (string, string, error) {
 	if err := removeOriginRefs(scratch); err != nil {
 		return "", "", err
 	}
-	defaultBranch := ""
-	if base == "" {
+	explicit := base != ""
+	var defaultBranch string
+	if explicit {
+		if !validBranch(scratch, base) {
+			return "", "", &Error{"--base " + base + " is not a valid branch name"}
+		}
+		defaultBranch, _ = remoteDefaultBranch(scratch)
+	} else {
 		var err error
 		if base, err = DefaultBranch(repo, scratch); err != nil {
 			return "", "", err
 		}
 		defaultBranch = base
 	}
-	if _, err := Git(scratch, "check-ref-format", "refs/heads/"+base); err != nil {
-		return "", "", err
-	}
-	if defaultBranch == "" {
-		defaultBranch, _ = remoteDefaultBranch(scratch)
-	}
 	fetch := []string{"fetch", "--quiet", "origin", "+refs/heads/" + base + ":refs/remotes/origin/" + base}
 	if defaultBranch != "" && defaultBranch != base {
 		fetch = append(fetch, "+refs/heads/"+defaultBranch+":refs/remotes/origin/"+defaultBranch)
 	}
 	if _, err := Git(scratch, fetch...); err != nil {
+		if explicit {
+			return "", "", &Error{"--base " + base + " must be a branch on " + github + ": " + err.Error()}
+		}
 		return "", "", err
 	}
 	if _, err := Git(scratch, "checkout", "--quiet", "--detach", "refs/remotes/origin/"+base); err != nil {
