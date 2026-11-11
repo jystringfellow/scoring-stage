@@ -125,7 +125,9 @@ next `stage up`. A book's takes apply to every sandbox the book is turned on for
 takes.
 
 The files come from a sandbox that ran with prompts off, so stage treats them as untrusted. It keeps regular files
-and directories only, with modes 600 and 700, and says how many links and special files it left behind. The copy stops and keeps nothing when:
+and directories only, with modes 600 and 700, and says how many links and special files it left behind. A file
+listed twice, which the sandbox's tar sends the second time as a link to itself, is kept once and not counted as
+left behind. The copy stops and keeps nothing when:
 
 - an entry would land outside the take's directory, or its name has control characters, is not UTF-8 or is over
   4,096 bytes;
