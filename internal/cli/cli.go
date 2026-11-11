@@ -585,7 +585,7 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 		return 0, err
 	}
 	config.AddStageBindings(auditExpected, composition.Bindings, "this sandbox")
-	if err := a.checkRepoApprovals(settings.Home, composition, *approveRepoConfig, *plan); err != nil {
+	if err := a.checkRepoApprovals(settings.Home, composition, github, *approveRepoConfig, *plan); err != nil {
 		return 0, err
 	}
 	if len(composition.Agents) == 0 {
@@ -647,7 +647,7 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	return 0, nil
 }
 
-func (a *App) checkRepoApprovals(home string, composition *config.Composition, approve, plan bool) error {
+func (a *App) checkRepoApprovals(home string, composition *config.Composition, github string, approve, plan bool) error {
 	cleared, err := config.ClearLegacyTrust(home)
 	if err != nil {
 		return err
@@ -655,7 +655,7 @@ func (a *App) checkRepoApprovals(home string, composition *config.Composition, a
 	if cleared {
 		a.warn("stage now stores approvals as JSON; earlier approvals were cleared, and you'll be asked again")
 	}
-	approvals, err := config.RepoApprovals(composition)
+	approvals, err := config.RepoApprovals(composition, github)
 	if err != nil {
 		return err
 	}

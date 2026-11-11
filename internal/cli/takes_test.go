@@ -230,6 +230,7 @@ func TestARepositorysTakesAreUsedOnlyAfterApproval(t *testing.T) {
 
 	h.expect(1, "up", h.remote.Checkout, "one")
 	h.expectStderr("asks for kits, books or takes you have not approved")
+	h.expectStderr("takes for acme/api")
 	h.expectStderr("copies ~/.tool/runs from the sandbox to your machine")
 	if h.anyCall("env create") {
 		t.Fatal("created a sandbox with unapproved takes")
