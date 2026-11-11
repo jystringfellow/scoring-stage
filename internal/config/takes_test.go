@@ -65,34 +65,50 @@ func TestATakeIsACleanAbsoluteOrHomePathInTheSandbox(t *testing.T) {
 
 func TestARepositorysTakesNeedApprovalUntilTheListChanges(t *testing.T) {
 	home := t.TempDir()
-	pending := func(takes ...string) []Approval {
-		t.Helper()
-		approvals, err := RepoApprovals(&Composition{RepoTakes: takes})
-		if err != nil {
-			t.Fatal(err)
-		}
-		missing, err := Unapproved(home, approvals)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return missing
-	}
-	if got := pending(); len(got) != 0 {
+	if got := pendingTakes(t, home, "acme/api"); len(got) != 0 {
 		t.Fatalf("no takes still asks for approval: %v", got)
 	}
-	first := pending("~/.tool/runs")
-	if len(first) != 1 || first[0].Label != "takes" || !reflect.DeepEqual(first[0].Details, []string{"copies ~/.tool/runs from the sandbox to your machine before the sandbox is removed"}) {
+	first := pendingTakes(t, home, "acme/api", "~/.tool/runs")
+	if len(first) != 1 || first[0].Label != "takes for acme/api" || !reflect.DeepEqual(first[0].Details, []string{"copies ~/.tool/runs from the sandbox to your machine before the sandbox is removed"}) {
 		t.Fatalf("approval = %+v", first)
 	}
 	if err := Approve(home, first); err != nil {
 		t.Fatal(err)
 	}
-	if got := pending("~/.tool/runs"); len(got) != 0 {
+	if got := pendingTakes(t, home, "acme/api", "~/.tool/runs"); len(got) != 0 {
 		t.Errorf("approved takes ask again: %v", got)
 	}
-	if got := pending("~/.tool/runs", "~/.ssh"); len(got) != 1 {
+	if got := pendingTakes(t, home, "acme/api", "~/.tool/runs", "~/.ssh"); len(got) != 1 {
 		t.Errorf("a longer list did not ask again: %v", got)
 	}
+}
+
+func TestApprovingTakesInOneRepositoryApprovesThemInNoOther(t *testing.T) {
+	home := t.TempDir()
+	if err := Approve(home, pendingTakes(t, home, "acme/api", "~/.tool/runs")); err != nil {
+		t.Fatal(err)
+	}
+	for _, other := range []string{"acme/web", "other/api"} {
+		if got := pendingTakes(t, home, other, "~/.tool/runs"); len(got) != 1 {
+			t.Errorf("%q: the same list was already approved: %v", other, got)
+		}
+	}
+	if got := pendingTakes(t, home, "Acme/API", "~/.tool/runs"); len(got) != 0 {
+		t.Errorf("the same repository in another letter case asks again: %v", got)
+	}
+}
+
+func pendingTakes(t *testing.T, home, repository string, takes ...string) []Approval {
+	t.Helper()
+	approvals, err := RepoApprovals(&Composition{RepoTakes: takes}, repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing, err := Unapproved(home, approvals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return missing
 }
 
 func TestManagedSettingsThatDenyRepositoryKitsAlsoRefuseItsTakes(t *testing.T) {

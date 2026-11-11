@@ -27,7 +27,7 @@ type Approval struct {
 func trustFile(home string) string { return filepath.Join(home, "trusted-kits") }
 
 // RepoApprovals lists what the repository's config asked for that needs the user's approval.
-func RepoApprovals(composition *Composition) ([]Approval, error) {
+func RepoApprovals(composition *Composition, repository string) ([]Approval, error) {
 	var approvals []Approval
 	for _, kit := range composition.RepoKits {
 		fingerprint, err := KitFingerprint(kit)
@@ -50,7 +50,7 @@ func RepoApprovals(composition *Composition) ([]Approval, error) {
 		approvals = append(approvals, Approval{Label: "book " + book.Name + " (" + book.Path + ")", Fingerprint: fingerprint, Details: summarizeBook(book)})
 	}
 	if len(composition.RepoTakes) > 0 {
-		approvals = append(approvals, Approval{Label: "takes", Fingerprint: takesFingerprint(composition.RepoTakes), Details: takeDetails(composition.RepoTakes)})
+		approvals = append(approvals, Approval{Label: "takes for " + repository, Fingerprint: takesFingerprint(repository, composition.RepoTakes), Details: takeDetails(composition.RepoTakes)})
 	}
 	for _, approval := range approvals {
 		if HasControl(approval.Label) {

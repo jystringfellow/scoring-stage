@@ -137,7 +137,8 @@ When that happens during `stage down`, the sandbox is left in place; fix the cau
 `--discard-takes` to remove the sandbox without its takes.
 
 Takes are records for you and your tools to read. stage never copies them into a sandbox. A repository's takes
-need your approval like its kits, and `repo_kits = "deny"` in managed settings refuses them.
+need your approval like its kits, and `repo_kits = "deny"` in managed settings refuses them. The approval is for
+that list in that repository: the same list in another repository asks again.
 
 ## One-time setup
 

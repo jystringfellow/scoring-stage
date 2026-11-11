@@ -671,7 +671,7 @@ func TestAKitIsTrustedOnlyWhileItsFilesAndArgumentsAreUnchanged(t *testing.T) {
 	composition := &Composition{RepoKits: []Kit{{Source: Resolve(dir)}, {Source: "docker.io/org/kit@sha256:" + strings.Repeat("a", 64), Args: map[string]any{"x": "1"}}}}
 	pending := func() []Approval {
 		t.Helper()
-		approvals, err := RepoApprovals(composition)
+		approvals, err := RepoApprovals(composition, "acme/api")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -756,7 +756,7 @@ func TestABookTheRepositoryTurnsOnNeedsApprovalButOneTheUserAsksForDoesNot(t *te
 	}
 	settings := load(t, home)
 	composition := composeWith(t, settings, Selection{Repo: repo})
-	approvals, err := RepoApprovals(composition)
+	approvals, err := RepoApprovals(composition, "acme/api")
 	if err != nil || len(approvals) != 1 || !strings.HasPrefix(approvals[0].Label, "book cloud") {
 		t.Fatalf("approvals %v, %v", approvals, err)
 	}

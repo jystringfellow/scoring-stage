@@ -3,6 +3,7 @@ package config
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"path"
 	"strings"
 )
@@ -36,7 +37,11 @@ func takeDetails(takes []string) []string {
 	return details
 }
 
-func takesFingerprint(takes []string) string {
-	sum := sha256.Sum256([]byte("takes\x00" + strings.Join(takes, "\x00")))
+func takesFingerprint(repository string, takes []string) string {
+	identity, _ := json.Marshal(struct {
+		Repository string
+		Takes      []string
+	}{strings.ToLower(repository), takes})
+	sum := sha256.Sum256(append([]byte("takes\x00"), identity...))
 	return hex.EncodeToString(sum[:])
 }

@@ -137,7 +137,7 @@ func TestABookNameIsLowercaseAndItsDescriptionHasNoControlCharacters(t *testing.
 func TestAnApprovalLabelWithControlCharactersIsRefused(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "kit\n"+strings.Repeat("a", 64)+" x")
 	testutil.WriteFile(t, filepath.Join(dir, "kit.yaml"), "x: 1\n")
-	_, err := RepoApprovals(&Composition{RepoKits: []Kit{{Source: dir}}})
+	_, err := RepoApprovals(&Composition{RepoKits: []Kit{{Source: dir}}}, "acme/api")
 	expectError(t, err, "contains control characters")
 	if strings.Contains(err.Error(), "\n") {
 		t.Errorf("error carries a newline: %q", err)
