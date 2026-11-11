@@ -117,15 +117,23 @@ takes = ["~/.tool/runs", "/var/log/tool"]   # in ~/.scoring-stage/config.toml, a
 ```
 
 A path starts with `/` or `~/` (the sandbox user's home) and has no `..`. A path that does not exist in the sandbox
-is passed over. Each copy lands in its own directory, `~/.scoring-stage/takes/<slug>/<UTC time>/`, under the path it
-had in the sandbox, such as `home/agent/.tool/runs/`. A sandbox uses the takes it was created with; a later change
-to a config applies to the next `stage up`.
+is passed over, and paths that overlap are kept once. Each copy lands in its own directory,
+`~/.scoring-stage/takes/<slug>/<UTC time>/`, under the path it had in the sandbox, such as
+`home/agent/.tool/runs/`. A sandbox uses the takes it was created with; a later change to a config applies to the
+next `stage up`. A book's takes apply to every sandbox the book is turned on for; a `[[repos]]` rule cannot add
+takes.
 
 The files come from a sandbox that ran with prompts off, so stage treats them as untrusted. It keeps regular files
-and directories only, with modes 600 and 700, and says how many links and special files it left behind. An entry
-that would land outside the take's directory, a take over 1 GiB or 100,000 entries, or a sandbox that does not
-answer stops the copy and keeps nothing from it. When that happens during `stage down`, the sandbox is left in
-place; fix the cause and run it again, or pass `--discard-takes` to remove the sandbox without its takes.
+and directories only, with modes 600 and 700, and says how many links and special files it left behind; a listed
+path that is itself a link is not followed. The copy stops and keeps nothing when:
+
+- an entry would land outside the take's directory, or its name has control characters or is over 4,096 bytes;
+- the take is over 1 GiB or 100,000 files and directories, or the sandbox sends more than 2 GiB in all;
+- the sandbox has not finished within 10 minutes;
+- the takes hold only links and special files.
+
+When that happens during `stage down`, the sandbox is left in place; fix the cause and run it again, or pass
+`--discard-takes` to remove the sandbox without its takes.
 
 Takes are records for you and your tools to read. stage never copies them into a sandbox. A repository's takes
 need your approval like its kits, and `repo_kits = "deny"` in managed settings refuses them.

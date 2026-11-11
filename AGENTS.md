@@ -60,7 +60,7 @@ From sbx:
 From stage:
 
 - **book:** a directory with a `book.toml`: local kits plus the host wiring they need (secrets, bindings, AWS
-  profiles, `[[repos]]` rules). A book is installed by the user and applies only when asked for.
+  profiles, `[[repos]]` rules) and the takes to keep. A book is installed by the user and applies only when asked for.
 - **agent:** a coding agent from stage's agent table (`claude`, `codex`, `copilot`, `agy`), which names its mixin
   and the bindings it brings.
 - **repository config:** a repository's `.scoring-stage/config.toml`. It is input from whoever can commit, so it may

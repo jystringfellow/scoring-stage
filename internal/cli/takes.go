@@ -16,9 +16,16 @@ const takeScript = `cd / && for p; do case "$p" in "~/"*) p="$HOME/${p#??}";; es
 
 func takesDir(home, slug string) string { return filepath.Join(home, "takes", slug) }
 
-// keepTakes copies the task's takes out of its sandbox into a new directory
-// under takes/<slug>/, which appears only once every entry has been written.
+var takeTimeout = 10 * time.Minute
+
 func (a *App) keepTakes(home string, task *Task) error {
+	if err := a.copyTakes(home, task); err != nil {
+		return errorf("%s", config.Printable(err.Error()))
+	}
+	return nil
+}
+
+func (a *App) copyTakes(home string, task *Task) error {
 	parent := takesDir(home, task.Slug)
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return err
@@ -36,13 +43,17 @@ func (a *App) keepTakes(home string, task *Task) error {
 
 	var summary takes.Summary
 	command := append([]string{"exec", "-u", "agent", task.Sandbox, "sh", "-c", takeScript, "sh"}, task.Takes...)
-	err = sbx.Stream(func(archive io.Reader) error {
+	err = sbx.Stream(takeTimeout, func(archive io.Reader) error {
 		var err error
 		summary, err = takes.Extract(archive, partial, takes.DefaultLimits)
 		return err
 	}, command...)
 	if err != nil {
 		return err
+	}
+	if summary.Files == 0 && summary.Skipped > 0 {
+		return fmt.Errorf("%s has only %s at its takes, and stage keeps only files and directories; list the paths they point to",
+			task.Sandbox, count(summary.Skipped, "link or special file"))
 	}
 	if summary.Files == 0 {
 		a.say("%s has nothing to take", task.Sandbox)

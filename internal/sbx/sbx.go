@@ -2,6 +2,7 @@ package sbx
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Version [3]int
@@ -80,12 +82,17 @@ func failure(err error, args []string, stderr string) error {
 	return nil
 }
 
-// Stream runs sbx and hands its output to consume as it arrives. When consume
-// fails, sbx is stopped and consume's error is returned.
-func Stream(consume func(io.Reader) error, args ...string) error {
-	command := exec.Command("sbx", args...)
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
+const stderrKept = 4096
+
+// Stream hands sbx's output to consume as it arrives, and consume must read it
+// to the end. sbx is stopped when consume fails or the timeout passes.
+func Stream(timeout time.Duration, consume func(io.Reader) error, args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, "sbx", args...)
+	command.WaitDelay = time.Second
+	stderr := &tail{limit: stderrKept}
+	command.Stderr = stderr
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		return &Error{fmt.Sprintf("cannot run sbx: %v", err)}
@@ -93,14 +100,35 @@ func Stream(consume func(io.Reader) error, args ...string) error {
 	if err := failure(command.Start(), args, ""); err != nil {
 		return err
 	}
+	context.AfterFunc(ctx, func() { stdout.Close() })
 	consumeErr := consume(stdout)
 	if consumeErr != nil {
-		command.Process.Kill()
-		command.Wait()
+		cancel()
+	}
+	waitErr := command.Wait()
+	said := LastLine(string(stderr.kept))
+	switch {
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return &Error{fmt.Sprintf("sbx %s did not finish within %s", strings.Join(args[:min(2, len(args))], " "), timeout)}
+	case consumeErr != nil && said != "":
+		return fmt.Errorf("%w (sbx said: %s)", consumeErr, said)
+	case consumeErr != nil:
 		return consumeErr
 	}
-	io.Copy(io.Discard, stdout)
-	return failure(command.Wait(), args, stderr.String())
+	return failure(waitErr, args, string(stderr.kept))
+}
+
+type tail struct {
+	kept  []byte
+	limit int
+}
+
+func (t *tail) Write(p []byte) (int, error) {
+	t.kept = append(t.kept, p...)
+	if over := len(t.kept) - t.limit; over > 0 {
+		t.kept = append([]byte(nil), t.kept[over:]...)
+	}
+	return len(p), nil
 }
 
 func LastLine(text string) string {

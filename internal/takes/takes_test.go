@@ -3,6 +3,8 @@ package takes
 import (
 	"archive/tar"
 	"bytes"
+	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -99,18 +101,36 @@ func TestLinksAndSpecialFilesAreLeftBehindAndCounted(t *testing.T) {
 
 func TestATakeOverItsSizeOrEntryLimitIsRefused(t *testing.T) {
 	two := []entry{{name: "a", body: "12345"}, {name: "b", body: "67890"}}
-	if _, err := Extract(archive(t, two...), t.TempDir(), Limits{Bytes: 9, Entries: 10}); err == nil || !strings.Contains(err.Error(), "larger than") {
+	if _, err := Extract(archive(t, two...), t.TempDir(), Limits{Bytes: 9, Entries: 10, Stream: 1 << 20}); err == nil || !strings.Contains(err.Error(), "larger than") {
 		t.Errorf("size: error %v", err)
 	}
-	if _, err := Extract(archive(t, two...), t.TempDir(), Limits{Bytes: 100, Entries: 1}); err == nil || !strings.Contains(err.Error(), "more than 1 entries") {
+	if _, err := Extract(archive(t, two...), t.TempDir(), Limits{Bytes: 100, Entries: 1, Stream: 1 << 20}); err == nil || !strings.Contains(err.Error(), "more than 1 entries") {
 		t.Errorf("entries: error %v", err)
 	}
 }
 
-func TestAnArchiveThatNamesAFileTwiceIsRefused(t *testing.T) {
-	_, err := Extract(archive(t, entry{name: "a", body: "first"}, entry{name: "a", body: "second"}), t.TempDir(), DefaultLimits)
+func TestAFileNamedTwiceKeepsOnlyItsFirstCopy(t *testing.T) {
+	dir := t.TempDir()
+	summary, err := Extract(archive(t,
+		entry{name: "runs/a", body: "first"},
+		entry{name: "./runs/a", body: "second!"},
+		entry{name: "runs/b", body: "b"},
+	), dir, DefaultLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary != (Summary{Files: 2, Bytes: 6}) {
+		t.Errorf("summary = %+v", summary)
+	}
+	if content, _ := os.ReadFile(filepath.Join(dir, "runs", "a")); string(content) != "first" {
+		t.Errorf("content %q", content)
+	}
+}
+
+func TestAFileNamedLikeADirectoryAlreadyWrittenIsRefused(t *testing.T) {
+	_, err := Extract(archive(t, entry{name: "a/b", body: "x"}, entry{name: "a", body: "y"}), t.TempDir(), DefaultLimits)
 	if err == nil {
-		t.Fatal("a second copy replaced the first")
+		t.Fatal("a file replaced a directory")
 	}
 }
 
@@ -122,5 +142,76 @@ func TestATruncatedArchiveIsAnError(t *testing.T) {
 	}
 	if _, err := Extract(bytes.NewReader(cut), t.TempDir(), DefaultLimits); err == nil {
 		t.Fatal("kept a truncated take without an error")
+	}
+}
+
+func TestAFileThatClaimsAnImpossibleSizeIsRefusedBeforeAnythingIsWritten(t *testing.T) {
+	var buffer bytes.Buffer
+	writer := tar.NewWriter(&buffer)
+	if err := writer.WriteHeader(&tar.Header{Name: "a", Typeflag: tar.TypeReg, Size: 1}); err != nil {
+		t.Fatal(err)
+	}
+	writer.Write([]byte("x"))
+	huge := &tar.Header{Name: "huge", Typeflag: tar.TypeReg, Size: math.MaxInt64, Format: tar.FormatGNU}
+	if err := writer.WriteHeader(huge); err != nil {
+		t.Fatal(err)
+	}
+	writer.Flush()
+	buffer.WriteString(strings.Repeat("y", 8192))
+	dir := t.TempDir()
+
+	_, err := Extract(&buffer, dir, Limits{Bytes: 1000, Entries: 10, Stream: 1 << 20})
+
+	if err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Fatalf("error %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "huge")); !os.IsNotExist(err) {
+		t.Error("wrote part of a file that was over the limit")
+	}
+}
+
+func TestWhatTheSandboxSendsIsBoundedEvenWhenNoneOfItIsKept(t *testing.T) {
+	limits := Limits{Bytes: 1000, Entries: 10, Stream: 4096}
+	skipped := archive(t, entry{name: "skipped", kind: tar.TypeCont, body: strings.Repeat("x", 64<<10)})
+	if _, err := Extract(skipped, t.TempDir(), limits); err == nil || !strings.Contains(err.Error(), "sent more than 4096 bytes") {
+		t.Errorf("skipped body: error %v", err)
+	}
+	trailing := io.MultiReader(archive(t, entry{name: "a", body: "fine"}), strings.NewReader(strings.Repeat("x", 64<<10)))
+	if _, err := Extract(trailing, t.TempDir(), limits); err == nil || !strings.Contains(err.Error(), "sent more than 4096 bytes") {
+		t.Errorf("after the archive's end: error %v", err)
+	}
+}
+
+func TestEveryDirectoryATakeCreatesCountsTowardsItsEntryLimit(t *testing.T) {
+	deep := strings.Repeat("d/", 50)
+	dir := t.TempDir()
+
+	_, err := Extract(archive(t,
+		entry{name: "one/" + deep, kind: tar.TypeDir},
+		entry{name: "two/" + deep + "file", body: "x"},
+	), dir, Limits{Bytes: 100, Entries: 60, Stream: 1 << 20})
+
+	if err == nil || !strings.Contains(err.Error(), "more than 60 entries") {
+		t.Fatalf("error %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "two", filepath.FromSlash(deep), "file")); !os.IsNotExist(err) {
+		t.Error("wrote past the entry limit")
+	}
+}
+
+func TestANameThatCouldRewriteTheTerminalOrIsOverlongIsRefused(t *testing.T) {
+	for _, name := range []string{"x\x1b]0;owned\x07", "line\nbreak", "bidi‮", strings.Repeat("d/", 3000) + "f"} {
+		dir := t.TempDir()
+		_, err := Extract(archive(t, entry{name: name, body: "x"}), dir, DefaultLimits)
+		if err == nil {
+			t.Errorf("%q was kept", name)
+			continue
+		}
+		if strings.ContainsAny(err.Error(), "\x1b\x07\n‮") || len(err.Error()) > 400 {
+			t.Errorf("the error repeats the name raw: %q", err)
+		}
+		if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+			t.Errorf("%q: wrote %v", name, entries)
+		}
 	}
 }

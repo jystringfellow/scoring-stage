@@ -23,8 +23,9 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
 - A full kapellmeister score on the current code. A score ran on an earlier stage build (2026-11-09, outside this
   log); on the current code only preflight has run.
 - Managed settings, beyond unit tests.
-- Takes: `stage down` keeping takes before a real removal, a repository's takes approval, and a take near the
-  size or entry limit. `stage take` was checked on 2026-11-10.
+- Takes: `stage down` keeping takes before a real removal, a repository's takes approval, a take near the size,
+  entry or stream limit, a sandbox that goes quiet for the 10-minute limit, and overlapping paths on the sandbox's
+  tar. `stage take` was checked on 2026-11-10.
 - Book and repository kit refusals: a changed kit asking again, a book claiming a reserved service, and a
   published kit in a book or repository config.
 - Whether `sbx env create --force` prints the plan it approves.
@@ -230,3 +231,19 @@ Checked:
   directory.
 - A larger take of 82 files (2.1 MB) from six paths under the sandbox user's home and `/tmp` completed.
 - `sbx exec` started a stopped sandbox by itself before running the command.
+
+## 2026-11-10: a larger take, after the copy was bounded in time and stream size
+
+- **sbx:** 0.51.0, macOS.
+- **stage:** the takes change on top of 974a2e8 with its review fixes, built from its working tree before they were
+  committed.
+- **Credentials:** none used. The same hand-written task record and separate `STAGE_HOME` as the entry above.
+- **Restoration:** `sbx exec` started the stopped sandbox, and it was stopped again afterwards. sbx's
+  `credentials.yaml` was not hashed before and after; `stage take` runs only `sbx exec`.
+
+Checked:
+
+- `stage take` on six listed paths kept 15,917 files (157 MB) and reported 63 links and special files left behind,
+  exit 0. One listed directory held a full source checkout, which is where most of the files came from.
+
+Not checked: checksums against the sandbox for this run, and any of the refusals.

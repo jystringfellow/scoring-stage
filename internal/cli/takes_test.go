@@ -4,10 +4,13 @@ import (
 	"archive/tar"
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/jystringfellow/scoring-stage/internal/takes"
 	"github.com/jystringfellow/scoring-stage/internal/testutil"
 )
 
@@ -245,5 +248,114 @@ func TestATaskKeepsTheTakesItWasCreatedWithWhenTheConfigChanges(t *testing.T) {
 	h.expect(0, "take", "fix")
 	if h.anyCallContaining(".ssh") {
 		t.Errorf("a later config change widened a running sandbox's takes: %v", h.sbx.Calls())
+	}
+}
+
+func TestDownLeavesTheSandboxWhenItDoesNotHandOverItsTakesInTime(t *testing.T) {
+	h := takingSandbox(t, "fix")
+	h.sbx.HangTakes()
+	takeTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { takeTimeout = 10 * time.Minute })
+
+	started := time.Now()
+	h.expect(1, "down", "fix")
+	if waited := time.Since(started); waited > 10*time.Second {
+		t.Errorf("waited %s for a sandbox that went quiet", waited)
+	}
+	h.expectStderr("did not finish within 200ms")
+	h.expectStderr("stage-fix is left in place")
+	if h.anyCall("env rm", "rm") {
+		t.Fatal("removed a sandbox whose takes were not kept")
+	}
+}
+
+func TestDownLeavesTheSandboxWhenItsTakesHoldOnlyLinks(t *testing.T) {
+	h := takingSandbox(t, "fix")
+	h.sbx.SetTakes(takeArchive(t, takeEntry{name: "home/agent/.tool/runs", kind: tar.TypeSymlink, link: "/data/runs"}))
+
+	h.expect(1, "down", "fix")
+	h.expectStderr("stage-fix has only 1 link or special file at its takes")
+	h.expectStderr("stage-fix is left in place")
+	if h.anyCall("env rm", "rm") {
+		t.Fatal("removed a sandbox whose takes were not kept")
+	}
+	if kept := h.kept("fix"); len(kept) != 0 {
+		t.Errorf("kept %v", kept)
+	}
+}
+
+func TestWhatASandboxSaysWhenATakeFailsIsEscapedBeforeItIsPrinted(t *testing.T) {
+	h := takingSandbox(t, "fix")
+	h.sbx.FailTakes("gone\x1b]0;owned\x07\x1b[2J")
+
+	h.expect(1, "take", "fix")
+	if strings.ContainsAny(h.stderr.String(), "\x1b\x07") {
+		t.Errorf("stderr carries the sandbox's control characters: %q", h.stderr.String())
+	}
+	h.expectStderr(`gone\x1b]0;owned\x07`)
+}
+
+func TestTakeMakesAnExistingTakesDirectoryPrivate(t *testing.T) {
+	h := takingSandbox(t, "fix")
+	h.sbx.SetTakes(takeArchive(t, takeEntry{name: "home/agent/.tool/runs/result.json", body: "{}"}))
+	slugDir := filepath.Join(h.home, "takes", "fix")
+	if err := os.MkdirAll(slugDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{filepath.Dir(slugDir), slugDir} {
+		if err := os.Chmod(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	h.expect(0, "take", "fix")
+	for _, dir := range []string{filepath.Dir(slugDir), slugDir} {
+		if info, err := os.Stat(dir); err != nil || info.Mode().Perm() != 0o700 {
+			t.Errorf("%s mode %v, %v", dir, info.Mode().Perm(), err)
+		}
+	}
+}
+
+func TestTheScriptRunInTheSandboxArchivesEachListedPathThatExistsOnce(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WriteFile(t, filepath.Join(home, ".tool", "runs", "one", "result.json"), "{}")
+	testutil.WriteFile(t, filepath.Join(home, ".tool", "notes.txt"), "notes")
+	testutil.WriteFile(t, filepath.Join(outside, "log.txt"), "log")
+	if err := os.Symlink(outside, filepath.Join(home, "linked")); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command("sh", "-c", takeScript, "sh", "~/.tool", "~/.tool/runs", "~/missing", "~/linked", filepath.Join(outside, "log.txt"))
+	command.Env = append(os.Environ(), "HOME="+home, "COPYFILE_DISABLE=1")
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	archive, err := command.Output()
+	if err != nil {
+		t.Fatalf("%v: %s", err, stderr.String())
+	}
+	dir := t.TempDir()
+
+	summary, err := takes.Extract(bytes.NewReader(archive), dir, takes.DefaultLimits)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary != (takes.Summary{Files: 3, Bytes: 10, Skipped: 1}) {
+		t.Errorf("summary = %+v", summary)
+	}
+	for _, kept := range []string{
+		filepath.Join(home, ".tool", "runs", "one", "result.json"),
+		filepath.Join(home, ".tool", "notes.txt"),
+		filepath.Join(outside, "log.txt"),
+	} {
+		if _, err := os.Stat(filepath.Join(dir, kept)); err != nil {
+			t.Errorf("%s was not kept: %v", kept, err)
+		}
 	}
 }
