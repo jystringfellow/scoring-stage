@@ -17,12 +17,11 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
 - `fine-grained` token checks and `stage token set` against GitHub itself.
 - `app` mode's refresh in a running sandbox: whether sbx re-runs a secret's command on its `refresh` interval, so a
   sandbox that stays up gets a new access token before the old one expires. On 2026-11-10 only a sandbox start was
-  seen to refresh, after expiry. Also whether a refresh rotates the refresh token, and whether
+  seen to refresh, after expiry. sbx stops a sandbox 30 seconds after its last session ends, so a test needs a
+  session held open across the expiry. Also whether a refresh rotates the refresh token, and whether
   `/user/installations` reports account permissions (the app checked on 2026-11-10 had none).
-- `stage ship` pushing to GitHub, and `--pr`.
+- `stage ship --pr`.
 - The release workflow's refusals: a tag that is not `vX.Y.Z[-suffix]`, and a tagged commit that is not on `main`.
-- A full kapellmeister score on the current code. A score ran on an earlier stage build (2026-11-09, outside this
-  log); on the current code only preflight has run.
 - Managed settings, beyond unit tests.
 - Book and repository kit refusals: a changed kit asking again, a book claiming a reserved service, and a
   published kit in a book or repository config.
@@ -245,3 +244,37 @@ Sandbox remote:
 - While the sandbox was stopped, the scratch clone's `.git/config` had no `sandbox-<sandbox>` remote. On the next
   start sbx added it again as `git://127.0.0.1:<port>/src` with its two fetch refspecs, on a different port from the
   one it had at `stage up`. Before #29, `stage ship` refused every sandbox that had restarted for this reason.
+
+## 2026-11-10: sbx auto-stop, a kapellmeister ensemble and the first push to GitHub
+
+- **sbx:** 0.51.0.
+- **stage:** a temporary build of 974a2e8 (#29), in `app` mode.
+- **Credentials:** real. The agents' saved sign-ins and the GitHub App's token, as the previous entries.
+- **Shared state:** `~/.config/sbx/credentials.yaml` had the same sha256 afterwards,
+  `4998c033b4b70e066939e87ed0f223fea6dee62917823758bc7a58e2ce021008`.
+
+sbx auto-stop:
+
+- sbx stops a sandbox 30 seconds after its last `sbx exec` session ends. Its daemon log records "session
+  disconnected, deferring auto-stop" with a delay of 30 seconds, then "auto-stop grace period expired, stopping
+  runtime". `stage shell` and `stage exec` are such sessions. No sbx setting for the delay was found.
+- Work left running inside the sandbox after the session ends is stopped with it. A kapellmeister run started in
+  a detached `tmux` session inside a sandbox died 40 seconds into planning, at the stop.
+- Running the same command in the foreground of an `sbx exec` session that stayed open kept the sandbox up until it
+  finished.
+- This likely explains the sandboxes found stopped in the previous entry, and the restarts that moved the sandbox
+  remote there. The daemon log was not checked for those sandboxes at the time.
+
+kapellmeister ensemble on this repository:
+
+- `stage up` on this repository, with a temporary local book whose kit built `km` from a pinned kapellmeister commit
+  and the agy, claude, codex and copilot agents.
+- `km run` with kapellmeister's `thorough` ensemble and this repository's tests as its verify step. Its five chairs
+  approved after one round, in 10 minutes 9 seconds. The change became #31, with review follow-ups made by hand.
+
+First push to GitHub:
+
+- `stage ship --branch agent/<session>/origin-refs --yes` pushed the ensemble's commit from the scratch clone to
+  GitHub with host git, after the sandbox had stopped and started several times. The config check passed with sbx's
+  remote on a new port, as #29 intended.
+- `--pr` was not used; the pull request was opened separately.
