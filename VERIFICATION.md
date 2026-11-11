@@ -262,8 +262,9 @@ sbx auto-stop:
   a detached `tmux` session inside a sandbox died 40 seconds into planning, at the stop.
 - Running the same command in the foreground of an `sbx exec` session that stayed open kept the sandbox up until it
   finished.
-- This likely explains the sandboxes found stopped in the previous entry, and the restarts that moved the sandbox
-  remote there. The daemon log was not checked for those sandboxes at the time.
+- This is why the kapellmeister sandbox in the previous entry was stopped across the token's expiry. The daemon log,
+  checked afterwards, shows it auto-stopped at 13:28Z, 30 seconds after its last session following login, and logs
+  no session for it until the command at 22:11Z that started it again, when sbx moved the sandbox remote.
 
 kapellmeister ensemble on this repository:
 
