@@ -462,3 +462,27 @@ func TestASandboxFileNamedLikeTheManifestStopsTheTakeAndKeepsNothing(t *testing.
 		}
 	}
 }
+
+func TestASandboxFileTheFilesystemTreatsAsTheManifestStopsTheTakeAndKeepsNothing(t *testing.T) {
+	alias := string(rune(0xfb06)) + "age.json"
+	probe := t.TempDir()
+	testutil.WriteFile(t, filepath.Join(probe, "stage.json"), "")
+	if _, err := os.Lstat(filepath.Join(probe, alias)); err != nil {
+		t.Skip("this filesystem keeps the two names apart")
+	}
+	h := takingSandbox(t, "fix")
+	h.sbx.SetTakes(takeArchive(t,
+		takeEntry{name: "home/agent/.tool/runs/result.json", body: "{}"},
+		takeEntry{name: alias, body: `{"github_repo":"acme/other"}`}))
+
+	h.expect(1, "down", "fix")
+
+	h.expectStderr("treats as stage.json")
+	h.expectStderr("stage-fix is left in place")
+	if kept := h.kept("fix"); len(kept) != 0 {
+		t.Errorf("kept %v", kept)
+	}
+	if h.anyCall("env rm", "rm") {
+		t.Errorf("removed the sandbox")
+	}
+}

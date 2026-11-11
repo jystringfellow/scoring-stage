@@ -141,6 +141,8 @@ sandbox, the GitHub repository, the base branch, the agents, the listed paths, t
 `stage ship` so far with its commit, branch, time and, with `--pr`, the pull request. `stage down` deletes the task,
 so this file is what links a kept record to the branch and pull request it produced. A sandbox cannot supply the
 file: an entry named `stage.json` at the root of what it sends, in any letter case, stops the copy.
+If a task's own record cannot be read, `stage down` cannot tell which takes to keep, so it leaves the sandbox in
+place unless you pass `--discard-takes`.
 
 Takes are records for you and your tools to read. stage never copies them into a sandbox. A repository's takes
 need your approval like its kits, and `repo_kits = "deny"` in managed settings refuses them.

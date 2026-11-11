@@ -96,6 +96,9 @@ func writeManifest(dir string, task *Task, taken time.Time) error {
 		return err
 	}
 	file, err := os.OpenFile(filepath.Join(dir, takes.ManifestName), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("the sandbox sent an entry this filesystem treats as %s, which stage writes itself", takes.ManifestName)
+	}
 	if err != nil {
 		return err
 	}

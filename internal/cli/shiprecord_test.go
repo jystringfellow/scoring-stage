@@ -146,14 +146,14 @@ func TestShipRecordsNoPullRequestWhenGhPrintsNoPullRequestURL(t *testing.T) {
 
 func TestShipWarnsAndExitsAsThePushDidWhenItCannotRecordIt(t *testing.T) {
 	if os.Geteuid() == 0 {
-		t.Skip("root can write a read-only file")
+		t.Skip("root can write into a read-only directory")
 	}
 	h, box := shippedTask(t)
 	sha := testutil.RunGit(t, box, "rev-parse", "HEAD")
-	record := filepath.Join(h.task("fix"), "task.json")
-	if err := os.Chmod(record, 0o444); err != nil {
+	if err := os.Chmod(h.task("fix"), 0o555); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { os.Chmod(h.task("fix"), 0o755) })
 
 	h.expect(0, "ship", "fix", "--yes")
 
@@ -162,7 +162,112 @@ func TestShipWarnsAndExitsAsThePushDidWhenItCannotRecordIt(t *testing.T) {
 	}
 	h.expectStderr("could not record it")
 	if ships := h.recorded("fix").Ships; len(ships) != 0 {
-		t.Errorf("recorded %+v in a file that cannot be written", ships)
+		t.Errorf("recorded %+v in a directory that cannot be written", ships)
+	}
+}
+
+func TestShipReplacesTheTaskRecordWholeAndNeverWritesIntoTheOldOne(t *testing.T) {
+	h, _ := shippedTask(t)
+	record := filepath.Join(h.task("fix"), "task.json")
+	before := testutil.ReadFile(t, record)
+	old := filepath.Join(t.TempDir(), "old-record")
+	if err := os.Link(record, old); err != nil {
+		t.Skipf("no hard links here: %v", err)
+	}
+
+	h.expect(0, "ship", "fix", "--yes")
+
+	if len(h.recorded("fix").Ships) != 1 {
+		t.Fatalf("the ship is not on record")
+	}
+	if after := testutil.ReadFile(t, old); after != before {
+		t.Errorf("the old record was written into:\n%s", after)
+	}
+	leftovers, err := filepath.Glob(filepath.Join(h.task("fix"), "*task.json*"))
+	if err != nil || len(leftovers) != 1 {
+		t.Errorf("left %v beside the record (%v)", leftovers, err)
+	}
+	if info, err := os.Stat(record); err != nil || info.Mode().Perm() != 0o644 {
+		t.Errorf("record mode = %v (%v), want 0644", info.Mode().Perm(), err)
+	}
+}
+
+func TestShipRefusesABranchNameWithHiddenCharacters(t *testing.T) {
+	h, _ := shippedTask(t)
+	branch := "agent/fix/" + string(rune(0x202e)) + "niam"
+
+	h.expect(1, "ship", "fix", "--yes", "--branch", branch)
+
+	h.expectStderr("control or invisible characters")
+	if ships := h.recorded("fix").Ships; len(ships) != 0 {
+		t.Errorf("recorded %+v", ships)
+	}
+	if heads := testutil.RunGit(t, h.remote.Bare, "for-each-ref", "refs/heads/agent"); heads != "" {
+		t.Errorf("pushed %s", heads)
+	}
+}
+
+func TestShipRecordsOnlyAPullRequestInTheTasksOwnRepository(t *testing.T) {
+	for _, answer := range []string{"https://github.com/other/api/pull/7\n", "https://github.com/acme/api-private/pull/7\n", "https://github.com/../../pull/7\n"} {
+		h, _ := shippedTask(t)
+		h.ghAnswering(answer, 0)
+
+		h.expect(0, "ship", "fix", "--yes", "--pr")
+
+		if ships := h.recorded("fix").Ships; len(ships) != 1 || ships[0].PullRequest != "" {
+			t.Fatalf("after gh printed %q, recorded %+v", answer, ships)
+		}
+		h.expectStderr("recorded without a pull request")
+	}
+	h, _ := shippedTask(t)
+	h.ghAnswering("https://github.com/Acme/API/pull/7\n", 0)
+	h.expect(0, "ship", "fix", "--yes", "--pr")
+	if ships := h.recorded("fix").Ships; len(ships) != 1 || ships[0].PullRequest != "https://github.com/Acme/API/pull/7" {
+		t.Fatalf("recorded %+v, want the pull request whatever case gh prints the repository in", ships)
+	}
+}
+
+func TestUpPlanLeavesALiveTasksRecordAsItWas(t *testing.T) {
+	h, _ := shippedTask(t)
+	h.expect(0, "ship", "fix", "--yes")
+	h.sbx.SetSandboxes("stage-fix\n")
+	before := testutil.ReadFile(t, filepath.Join(h.task("fix"), "task.json"))
+
+	h.expect(0, "up", h.remote.Checkout, "fix", "--plan")
+
+	if after := testutil.ReadFile(t, filepath.Join(h.task("fix"), "task.json")); after != before {
+		t.Errorf("the record changed:\n%s\nwas:\n%s", after, before)
+	}
+}
+
+func TestUpRefusesABaseBranchNameWithHiddenCharacters(t *testing.T) {
+	h := setup(t)
+	base := "rel" + string(rune(0x202e)) + "ease"
+	testutil.RunGit(t, h.remote.Checkout, "push", "-q", h.remote.Bare, "HEAD:refs/heads/"+base)
+
+	h.expect(1, "up", h.remote.Checkout, "fix", "--base", base)
+
+	h.expectStderr("control or invisible characters")
+	if _, err := os.Stat(filepath.Join(h.task("fix"), "task.json")); err == nil {
+		t.Errorf("recorded a task")
+	}
+}
+
+func TestDownLeavesTheSandboxWhenItsTaskRecordCannotBeReadUnlessToldToDiscardItsTakes(t *testing.T) {
+	h := takingSandbox(t, "fix")
+	testutil.WriteFile(t, filepath.Join(h.task("fix"), "task.json"), "")
+
+	h.expect(1, "down", "fix")
+
+	h.expectStderr("unreadable")
+	h.expectStderr("--discard-takes")
+	if h.anyCall("env rm", "rm") {
+		t.Errorf("removed the sandbox without knowing its takes")
+	}
+
+	h.expect(0, "down", "fix", "--discard-takes")
+	if !h.anyCall("env rm", "rm") {
+		t.Errorf("did not remove the sandbox when told to discard its takes")
 	}
 }
 

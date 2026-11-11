@@ -134,8 +134,15 @@ Evidence: `TestDownKeepsTheTakesOnTheHostBeforeRemovingTheSandbox`,
 request it came from. `stage ship` now records each push on the task, with the pull request when `--pr` made one,
 and every take carries a `stage.json` written by stage with the task's identity and its ships. The name is reserved
 at a take's root so a sandbox cannot supply the record of its own work. A push that cannot be recorded is still a
-push: ship warns and exits as the push did. Evidence: `TestShipRecordsEachPushOnTheTask`,
+push: ship warns and exits as the push did. Because ship now rewrites the task's record, the record is replaced
+whole and never written into, `down` leaves a sandbox whose record cannot be read unless told to discard its takes,
+and `up --plan` leaves a live task's record alone. A pull request is recorded only when it is in the task's own
+repository, and branch names with control or invisible characters are refused before they are recorded. Evidence: `TestShipRecordsEachPushOnTheTask`,
 `TestShipWithPRRecordsThePullRequestURLGhPrints`, `TestShipWarnsAndExitsAsThePushDidWhenItCannotRecordIt`,
 `TestAKeptTakeSaysWhichRepositoryBaseBranchAndShipsItBelongsTo`,
 `TestAnEntryAtTheRootNamedLikeStagesManifestIsRefused`,
-`TestATaskRecordedBeforeBaseBranchAndShipsStillShipsAndTakes`.
+`TestATaskRecordedBeforeBaseBranchAndShipsStillShipsAndTakes`,
+`TestShipReplacesTheTaskRecordWholeAndNeverWritesIntoTheOldOne`,
+`TestDownLeavesTheSandboxWhenItsTaskRecordCannotBeReadUnlessToldToDiscardItsTakes`,
+`TestUpPlanLeavesALiveTasksRecordAsItWas`, `TestShipRecordsOnlyAPullRequestInTheTasksOwnRepository`,
+`TestShipRefusesABranchNameWithHiddenCharacters`, `TestUpRefusesABaseBranchNameWithHiddenCharacters`.

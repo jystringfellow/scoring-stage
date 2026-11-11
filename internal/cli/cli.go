@@ -552,9 +552,15 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return 0, err
 	}
+	if config.HasControl(*base) {
+		return 0, errorf("refusing --base %s: it has control or invisible characters", printable(*base))
+	}
 	branch, head, err := source.Prepare(repo, scratch, github, *base)
 	if err != nil {
 		return 0, err
+	}
+	if config.HasControl(branch) {
+		return 0, errorf("refusing to start from %s: the branch name has control or invisible characters", printable(branch))
 	}
 	a.say("source: %s %s at %s", github, branch, head[:min(8, len(head))])
 	repoConfig, err := config.LoadRepoConfig(scratch)
@@ -603,8 +609,11 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 		return 0, err
 	}
 	task := Task{Slug: slug, Sandbox: sandbox, RepoDir: config.Resolve(scratch), GitHubRepo: github, SourceRepo: repo, Agents: composition.Agents, Takes: composition.Takes, BaseBranch: branch}
-	if err := writeTask(task, directory); err != nil {
-		return 0, err
+	_, recordErr := os.Lstat(filepath.Join(directory, "task.json"))
+	if !*plan || os.IsNotExist(recordErr) {
+		if err := writeTask(task, directory); err != nil {
+			return 0, err
+		}
 	}
 
 	if *plan {
@@ -767,7 +776,16 @@ func writeTask(task Task, directory string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(directory, "task.json"), append(content, '\n'), 0o644)
+	pending, err := os.CreateTemp(directory, ".task.json-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(pending.Name())
+	_, writeErr := pending.Write(append(content, '\n'))
+	if err := errors.Join(writeErr, pending.Chmod(0o644), pending.Close()); err != nil {
+		return err
+	}
+	return os.Rename(pending.Name(), filepath.Join(directory, "task.json"))
 }
 
 func runInteractive(name string, args ...string) (int, error) {
@@ -878,6 +896,9 @@ func (a *App) cmdShip(args []string, home string) (int, error) {
 	if !strings.HasPrefix(branch, "agent/") || branch == "agent/" {
 		return 0, errorf("refusing to push %s: branch must start with agent/", branch)
 	}
+	if config.HasControl(branch) {
+		return 0, errorf("refusing to push %s: the branch name has control or invisible characters", printable(branch))
+	}
 	if _, err := source.Git(repo, "check-ref-format", "refs/heads/"+branch); err != nil {
 		return 0, err
 	}
@@ -910,9 +931,9 @@ func (a *App) cmdShip(args []string, home string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	url := pullRequestURL(printed.String())
+	url := pullRequestURL(printed.String(), task.GitHubRepo)
 	if url == "" {
-		a.warn("gh did not print the pull request's URL, so the ship is recorded without a pull request")
+		a.warn("gh did not print the URL of a pull request in %s, so the ship is recorded without a pull request", task.GitHubRepo)
 		return 0, nil
 	}
 	task.Ships[len(task.Ships)-1].PullRequest = url
@@ -920,12 +941,13 @@ func (a *App) cmdShip(args []string, home string) (int, error) {
 	return 0, nil
 }
 
-var pullRequestPattern = regexp.MustCompile(`^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+$`)
+var pullRequestPattern = regexp.MustCompile(`^https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/[0-9]+$`)
 
-func pullRequestURL(printed string) string {
+func pullRequestURL(printed, github string) string {
 	lines := strings.Split(strings.TrimSpace(printed), "\n")
 	last := strings.TrimSpace(lines[len(lines)-1])
-	if !pullRequestPattern.MatchString(last) {
+	match := pullRequestPattern.FindStringSubmatch(last)
+	if match == nil || !strings.EqualFold(match[1], github) {
 		return ""
 	}
 	return last
@@ -1079,7 +1101,11 @@ func (a *App) cmdDown(args []string, home string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if task, taskErr := loadTask(home, slug); taskErr == nil && existing[sandbox] {
+	task, taskErr := loadTask(home, slug)
+	if _, recordErr := os.Lstat(filepath.Join(directory, "task.json")); taskErr != nil && recordErr == nil && existing[sandbox] && !*discardTakes {
+		return 0, errorf("%s, so stage cannot tell which takes to keep; %s is left in place: pass --discard-takes to remove it without its takes", taskErr, sandbox)
+	}
+	if taskErr == nil && existing[sandbox] {
 		if len(task.Takes) > 0 && !*discardTakes {
 			if err := a.keepTakes(home, task); err != nil {
 				return 0, errorf("%s; %s is left in place: fix that and run stage down again, or pass --discard-takes to remove it without its takes", err, sandbox)
