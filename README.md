@@ -106,6 +106,7 @@ reach the host scratch clone, and that the host source mount, if sbx adds one, i
 [sbx environment file](https://docs.docker.com/ai/sandboxes/configuration/environment-files/) next to it and runs
 `sbx env create`. The sandbox sees the repository at the scratch clone's host path. `stage down` deletes the scratch
 clone, so ship anything you want to keep first.
+The scratch clone's `origin/*` refs come from GitHub as of `stage up`.
 
 ## Takes
 
@@ -124,7 +125,9 @@ next `stage up`. A book's takes apply to every sandbox the book is turned on for
 takes.
 
 The files come from a sandbox that ran with prompts off, so stage treats them as untrusted. It keeps regular files
-and directories only, with modes 600 and 700, and says how many links and special files it left behind. The copy stops and keeps nothing when:
+and directories only, with modes 600 and 700, and says how many links and special files it left behind. A file
+listed twice, which the sandbox's tar sends the second time as a link to itself, is kept once and not counted as
+left behind. The copy stops and keeps nothing when:
 
 - an entry would land outside the take's directory, or its name has control characters, is not UTF-8 or is over
   4,096 bytes;
@@ -537,6 +540,9 @@ and what has not been run live yet.
   `stage setup` lists these as `global secret set`.
 - **`[bindings]` domains do not limit where a credential is injected.** A binding authorises a service; kits decide
   the hosts. Treat the domains as documentation, not as a boundary.
+- **sbx stops a sandbox 30 seconds after its last session ends or disconnects.** A session is a `stage shell`, `stage exec` or
+  `sbx exec`. Work left running in the background inside the sandbox, such as under `nohup` or a detached `tmux`,
+  stops with it. Keep long-running work in the foreground of a session that stays open.
 - **Do not run `sbx env rm --prune-bindings` on stage sandboxes.** Bindings are shared, and pruning one sandbox's
   bindings removes the service's binding for the whole machine. `stage down` never passes it.
 - GraphQL writes are not refused. They share `POST /graphql` with reads, so only the token's permissions stop

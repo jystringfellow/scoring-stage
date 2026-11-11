@@ -127,6 +127,24 @@ func TestAFileNamedTwiceKeepsOnlyItsFirstCopy(t *testing.T) {
 	}
 }
 
+func TestAHardLinkFromAFileToItselfIsTheSameFileSentAgainAndNotLeftBehind(t *testing.T) {
+	dir := t.TempDir()
+	summary, err := Extract(archive(t,
+		entry{name: "runs/a", body: "first"},
+		entry{name: "runs/a", kind: tar.TypeLink, link: "runs/a"},
+		entry{name: "runs/b", kind: tar.TypeLink, link: "runs/a"},
+	), dir, DefaultLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary != (Summary{Files: 1, Bytes: 5, Skipped: 1}) {
+		t.Errorf("summary = %+v", summary)
+	}
+	if content, _ := os.ReadFile(filepath.Join(dir, "runs", "a")); string(content) != "first" {
+		t.Errorf("content %q", content)
+	}
+}
+
 func TestAFileNamedLikeADirectoryAlreadyWrittenIsRefused(t *testing.T) {
 	_, err := Extract(archive(t, entry{name: "a/b", body: "x"}, entry{name: "a", body: "y"}), t.TempDir(), DefaultLimits)
 	if err == nil {

@@ -94,6 +94,11 @@ func Extract(archive io.Reader, dir string, limits Limits) (Summary, error) {
 			extraction.written[name] = true
 			summary.Files++
 			summary.Bytes += header.Size
+		case tar.TypeLink:
+			if target, err := inside(header.Linkname); err == nil && target == name && extraction.written[name] {
+				continue
+			}
+			summary.Skipped++
 		default:
 			summary.Skipped++
 		}
