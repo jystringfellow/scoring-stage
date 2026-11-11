@@ -2,6 +2,7 @@ package sbx
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Version [3]int
@@ -56,22 +58,80 @@ func run(capture bool, stdin io.Reader, args []string) (string, error) {
 	} else {
 		command.Stdout, command.Stderr = os.Stdout, os.Stderr
 	}
-	err := command.Run()
+	if err := failure(command.Run(), args, stderr.String()); err != nil {
+		return "", err
+	}
+	return stdout.String(), nil
+}
+
+func failure(err error, args []string, stderr string) error {
 	if errors.Is(err, exec.ErrNotFound) {
-		return "", &Error{"sbx is not installed or not on PATH"}
+		return &Error{"sbx is not installed or not on PATH"}
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		message := "sbx " + strings.Join(args[:min(2, len(args))], " ") + " failed"
-		if detail := LastLine(stderr.String()); detail != "" {
+		if detail := LastLine(stderr); detail != "" {
 			message += ": " + detail
 		}
-		return "", &Error{message}
+		return &Error{message}
 	}
 	if err != nil {
-		return "", &Error{fmt.Sprintf("cannot run sbx: %v", err)}
+		return &Error{fmt.Sprintf("cannot run sbx: %v", err)}
 	}
-	return stdout.String(), nil
+	return nil
+}
+
+const stderrKept = 4096
+
+// Stream hands sbx's output to consume as it arrives, and consume must read it
+// to the end. sbx is stopped when consume fails or the timeout passes.
+func Stream(timeout time.Duration, consume func(io.Reader) error, args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, "sbx", args...)
+	command.WaitDelay = time.Second
+	stderr := &tail{limit: stderrKept}
+	command.Stderr = stderr
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		return &Error{fmt.Sprintf("cannot run sbx: %v", err)}
+	}
+	if err := failure(command.Start(), args, ""); err != nil {
+		return err
+	}
+	context.AfterFunc(ctx, func() { stdout.Close() })
+	consumeErr := consume(stdout)
+	if consumeErr != nil {
+		cancel()
+	}
+	waitErr := command.Wait()
+	if errors.Is(waitErr, exec.ErrWaitDelay) {
+		waitErr = nil
+	}
+	said := LastLine(string(stderr.kept))
+	switch {
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return &Error{fmt.Sprintf("sbx %s did not finish within %s", strings.Join(args[:min(2, len(args))], " "), timeout)}
+	case consumeErr != nil && said != "":
+		return fmt.Errorf("%w (sbx said: %s)", consumeErr, said)
+	case consumeErr != nil:
+		return consumeErr
+	}
+	return failure(waitErr, args, string(stderr.kept))
+}
+
+type tail struct {
+	kept  []byte
+	limit int
+}
+
+func (t *tail) Write(p []byte) (int, error) {
+	t.kept = append(t.kept, p...)
+	if over := len(t.kept) - t.limit; over > 0 {
+		t.kept = append([]byte(nil), t.kept[over:]...)
+	}
+	return len(p), nil
 }
 
 func LastLine(text string) string {

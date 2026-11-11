@@ -23,6 +23,9 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
 - `stage ship --pr`.
 - The release workflow's refusals: a tag that is not `vX.Y.Z[-suffix]`, and a tagged commit that is not on `main`.
 - Managed settings, beyond unit tests.
+- Takes: `stage down` keeping takes before a real removal, a repository's takes approval, a take near the size,
+  entry or stream limit, a sandbox that goes quiet for the 10-minute limit, and overlapping paths on the sandbox's
+  tar. `stage take` was checked on 2026-11-10.
 - Book and repository kit refusals: a changed kit asking again, a book claiming a reserved service, and a
   published kit in a book or repository config.
 - Whether `sbx env create --force` prints the plan it approves.
@@ -279,3 +282,39 @@ First push to GitHub:
   GitHub with host git, after the sandbox had stopped and started several times. The config check passed with sbx's
   remote on a new port, as #29 intended.
 - `--pr` was not used; the pull request was opened separately.
+
+## 2026-11-10: takes copied out of a running sandbox
+
+- **sbx:** 0.51.0, macOS.
+- **stage:** the takes change on top of 974a2e8, built from its working tree before it was committed.
+- **Credentials:** none used. The run had its own `STAGE_HOME` with a hand-written task record naming an existing
+  sandbox and its takes, so no sandbox, secret or binding was created.
+- **Restoration:** the probe directory made in the sandbox was removed. sbx's `credentials.yaml` was not hashed
+  before and after; `stage take` runs only `sbx exec`.
+
+Checked:
+
+- The sandbox's tar (GNU tar 1.35) accepts `--null -T -` and writes an empty archive, exit 0, for an empty list.
+- `stage take` on three listed paths, one of them missing, kept 3 files and reported the one symbolic link it left
+  behind. A 70,000-byte file of random bytes had the same SHA-256 on the host as in the sandbox, so `sbx exec`
+  passes a binary stream through unchanged. Files were mode 600 and directories 700.
+- A task whose only take does not exist in the sandbox printed "has nothing to take", exited 0 and left no new
+  directory.
+- A larger take of 82 files (2.1 MB) from six paths under the sandbox user's home and `/tmp` completed.
+- `sbx exec` started a stopped sandbox by itself before running the command.
+
+## 2026-11-10: a larger take, after the copy was bounded in time and stream size
+
+- **sbx:** 0.51.0, macOS.
+- **stage:** the takes change on top of 974a2e8 with its review fixes, built from its working tree before they were
+  committed.
+- **Credentials:** none used. The same hand-written task record and separate `STAGE_HOME` as the entry above.
+- **Restoration:** `sbx exec` started the stopped sandbox, and it was stopped again afterwards. sbx's
+  `credentials.yaml` was not hashed before and after; `stage take` runs only `sbx exec`.
+
+Checked:
+
+- `stage take` on six listed paths kept 15,917 files (157 MB) and reported 63 links and special files left behind,
+  exit 0. One listed directory held a full source checkout, which is where most of the files came from.
+
+Not checked: checksums against the sandbox for this run, and any of the refusals.

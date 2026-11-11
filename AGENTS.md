@@ -60,7 +60,7 @@ From sbx:
 From stage:
 
 - **book:** a directory with a `book.toml`: local kits plus the host wiring they need (secrets, bindings, AWS
-  profiles, `[[repos]]` rules). A book is installed by the user and applies only when asked for.
+  profiles, `[[repos]]` rules) and the takes to keep. A book is installed by the user and applies only when asked for.
 - **agent:** a coding agent from stage's agent table (`claude`, `codex`, `copilot`, `agy`), which names its mixin
   and the bindings it brings.
 - **repository config:** a repository's `.scoring-stage/config.toml`. It is input from whoever can commit, so it may
@@ -72,6 +72,8 @@ From stage:
 - **task:** one sandbox's host state under `~/.scoring-stage/tasks/<slug>/`, addressed by its **slug**.
 - **scratch clone:** the host clone a sandbox's workspace is made from, and that `stage ship` pushes from.
 - **broker:** stage's host process that hands each sandbox temporary AWS credentials for the profiles it was granted.
+- **take:** a copy of the sandbox paths a config, book or repository listed, kept on the host under
+  `~/.scoring-stage/takes/<slug>/<time>/`. Takes only leave a sandbox; stage never copies one in.
 - **ship:** reviewing a sandbox's commit on the host and pushing it to `agent/<slug>/<sha>`.
 
 ## Exercising stage live

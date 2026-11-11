@@ -1,9 +1,14 @@
 package sbx
 
 import (
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseVersion(t *testing.T) {
@@ -71,5 +76,109 @@ func TestRulesWithoutStatusOrIDAreActiveAndNamedQuestionMark(t *testing.T) {
 func TestEmptyPolicyIsDenyAll(t *testing.T) {
 	if got := GlobalAllowRules(Policy{}); len(got) != 0 {
 		t.Fatalf("got %v", got)
+	}
+}
+
+func fakeSbx(t *testing.T, script string) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "sbx"), []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func readAll(output io.Reader) error {
+	_, err := io.Copy(io.Discard, output)
+	return err
+}
+
+func returnsWithin(t *testing.T, limit time.Duration, stream func() error) error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- stream() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(limit):
+		t.Fatalf("Stream was still waiting after %s", limit)
+		return nil
+	}
+}
+
+func TestStreamHandsOverEverythingSbxWrites(t *testing.T) {
+	fakeSbx(t, `printf 'all of it'`)
+	var got []byte
+	err := Stream(time.Minute, func(output io.Reader) (err error) {
+		got, err = io.ReadAll(output)
+		return err
+	}, "exec", "box")
+	if err != nil || string(got) != "all of it" {
+		t.Fatalf("got %q, %v", got, err)
+	}
+}
+
+func TestStreamStopsAnSbxThatDoesNotFinishInTime(t *testing.T) {
+	fakeSbx(t, `sleep 30`)
+	err := returnsWithin(t, 10*time.Second, func() error {
+		return Stream(200*time.Millisecond, readAll, "exec", "box")
+	})
+	if err == nil || !strings.Contains(err.Error(), "sbx exec box did not finish within 200ms") {
+		t.Fatalf("error %v", err)
+	}
+}
+
+func TestStreamReturnsTheConsumersErrorEvenWhileAChildOfSbxKeepsWriting(t *testing.T) {
+	fakeSbx(t, `head -c 5000000 /dev/zero; sleep 30`)
+	refused := errors.New("refused")
+	err := returnsWithin(t, 10*time.Second, func() error {
+		return Stream(time.Minute, func(output io.Reader) error {
+			io.ReadFull(output, make([]byte, 512))
+			return refused
+		}, "exec", "box")
+	})
+	if !errors.Is(err, refused) {
+		t.Fatalf("error %v", err)
+	}
+}
+
+func TestStreamSaysWhatSbxSaidWhenItsOutputWasCutShort(t *testing.T) {
+	fakeSbx(t, `printf abc; echo 'sandbox stopped' >&2; exit 1`)
+	short := errors.New("unexpected end")
+	err := Stream(time.Minute, func(output io.Reader) error {
+		readAll(output)
+		return short
+	}, "exec", "box")
+	if !errors.Is(err, short) || !strings.Contains(err.Error(), "sandbox stopped") {
+		t.Fatalf("error %v", err)
+	}
+}
+
+func TestStreamReportsAFailedSbxAfterACompleteRead(t *testing.T) {
+	fakeSbx(t, `printf abc; echo 'no such sandbox' >&2; exit 1`)
+	err := Stream(time.Minute, readAll, "exec", "box")
+	if err == nil || err.Error() != "sbx exec box failed: no such sandbox" {
+		t.Fatalf("error %v", err)
+	}
+}
+
+func TestOnlyTheEndOfWhatSbxWritesToStderrIsKept(t *testing.T) {
+	kept := &tail{limit: 16}
+	for range 1000 {
+		kept.Write([]byte("a long line of noise\n"))
+	}
+	kept.Write([]byte("the end"))
+	if len(kept.kept) != 16 || !strings.HasSuffix(string(kept.kept), "the end") {
+		t.Fatalf("kept %q", kept.kept)
+	}
+}
+
+func TestStreamSucceedsWhenSbxExitsCleanlyButAChildKeepsItsStderrOpen(t *testing.T) {
+	fakeSbx(t, `printf done; sleep 30 >/dev/null &`)
+	err := returnsWithin(t, 10*time.Second, func() error {
+		return Stream(time.Minute, readAll, "exec", "box")
+	})
+	if err != nil {
+		t.Fatalf("error %v", err)
 	}
 }

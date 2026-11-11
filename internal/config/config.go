@@ -36,8 +36,8 @@ func domains(kind string, hosts ...string) map[string]any {
 }
 
 var (
-	userKeys      = []string{"books", "base", "agents", "copy_logins", "github", "kits", "aws", "secrets", "bindings", "ship"}
-	bookKeys      = []string{"name", "description", "base", "agents", "kits", "aws", "secrets", "bindings", "repos"}
+	userKeys      = []string{"books", "base", "agents", "copy_logins", "github", "kits", "aws", "secrets", "bindings", "ship", "takes"}
+	bookKeys      = []string{"name", "description", "base", "agents", "kits", "aws", "secrets", "bindings", "repos", "takes"}
 	repoMatchKeys = []string{"match", "agents", "kits", "aws"}
 	awsKeys       = []string{"profiles", "region", "default_profile"}
 	shipKeys      = []string{"pr_footer"}
@@ -80,6 +80,8 @@ type Composition struct {
 	Books             []string
 	RepoKits          []Kit
 	RepoBooks         []Book
+	Takes             []string
+	RepoTakes         []string
 }
 
 func (c *Composition) AllKits() []Kit {
@@ -109,6 +111,7 @@ type Book struct {
 	secrets  map[string]any
 	bindings map[string]any
 	repos    []repo
+	takes    []string
 }
 
 type Settings struct {
@@ -123,6 +126,7 @@ type Settings struct {
 	bindings   map[string]any
 	prFooter   string
 	copyLogins []string
+	takes      []string
 	githubMode string
 	githubApp  string
 }
@@ -201,6 +205,9 @@ func LoadSettings(home string) (*Settings, error) {
 		return nil, err
 	}
 	if settings.copyLogins, err = optionalStrings(data, "copy_logins", path); err != nil {
+		return nil, err
+	}
+	if settings.takes, err = decodeTakes(data, path); err != nil {
 		return nil, err
 	}
 	if settings.Managed, err = LoadManaged(); err != nil {
@@ -293,6 +300,9 @@ func LoadBook(path string) (*Book, error) {
 		return nil, err
 	}
 	if book.bindings, err = optionalTable(data, "bindings", manifest); err != nil {
+		return nil, err
+	}
+	if book.takes, err = decodeTakes(data, manifest); err != nil {
 		return nil, err
 	}
 	where := owner + " (" + manifest + ")"
@@ -662,6 +672,25 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 		Bindings:          bindings,
 		RepoKits:          repoKits,
 		RepoBooks:         booksOnlyTheRepoAskedFor(active, selection),
+	}
+	addTakes := func(takes []string) {
+		for _, take := range takes {
+			if !contains(composition.Takes, take) {
+				composition.Takes = append(composition.Takes, take)
+			}
+		}
+	}
+	for _, book := range active {
+		addTakes(book.takes)
+	}
+	if selection.Repo != nil {
+		composition.RepoTakes = selection.Repo.takes
+		addTakes(selection.Repo.takes)
+	}
+	addTakes(settings.takes)
+	if settings.Managed.RepoKitsDenied() && len(composition.RepoTakes) > 0 {
+		return nil, errorf("%s: the repository's takes are refused by %s (repo_kits = %q); list them in takes in ~/.scoring-stage/config.toml",
+			selection.Repo.Path, settings.Managed.where(), RepoKitsDeny)
 	}
 	if settings.Managed.RepoKitsDenied() && (len(composition.RepoKits) > 0 || len(composition.RepoBooks) > 0) {
 		return nil, errorf("%s: the repository's kits and books are refused by %s (repo_kits = %q); ask for books with --book",

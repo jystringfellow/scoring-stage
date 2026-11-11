@@ -10,7 +10,7 @@ import (
 const RepoConfigPath = ".scoring-stage/config.toml"
 
 var (
-	repoKeys     = []string{"agents", "books", "kits"}
+	repoKeys     = []string{"agents", "books", "kits", "takes"}
 	hostOnlyKeys = []string{"aws", "base", "bindings", "copy_logins", "github", "secrets", "ship"}
 )
 
@@ -23,6 +23,7 @@ type RepoConfig struct {
 	agents []any
 	books  []string
 	kits   []any
+	takes  []string
 }
 
 func LoadRepoConfig(repoDir string) (*RepoConfig, error) {
@@ -55,6 +56,9 @@ func LoadRepoConfig(repoDir string) (*RepoConfig, error) {
 		return nil, err
 	}
 	if repo.books, err = optionalStrings(data, "books", path); err != nil {
+		return nil, err
+	}
+	if repo.takes, err = decodeTakes(data, path); err != nil {
 		return nil, err
 	}
 	for _, name := range repo.books {

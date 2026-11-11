@@ -78,6 +78,7 @@ type Task struct {
 	SourceRepo string   `json:"source_repo"`
 	Agents     []string `json:"agents,omitempty"`
 	GitConfig  string   `json:"git_config,omitempty"`
+	Takes      []string `json:"takes,omitempty"`
 }
 
 const usage = `usage: stage <command> [options]
@@ -96,8 +97,9 @@ commands:
   exec <slug> -- <command> [args]   run a command in the repository
   ship <slug> [--ref R] [--branch B] [--pr]
                                     push the sandbox's commit to agent/<slug>/<sha> from the host
+  take <slug>                       copy the sandbox's takes to ~/.scoring-stage/takes/<slug>/ now
   list                              list scoring-stage sandboxes
-  down <slug>                       remove the sandbox, its secrets and the scratch clone
+  down <slug> [--discard-takes]     keep the sandbox's takes, then remove it, its secrets and the scratch clone
   version                           print the stage version
 `
 
@@ -109,7 +111,7 @@ func (a *App) Main(args []string) int {
 	}
 	commands := map[string]func([]string, string) (int, error){
 		"setup": a.cmdSetup, "broker": a.cmdBroker, "up": a.cmdUp, "shell": a.cmdShell,
-		"exec": a.cmdExec, "ship": a.cmdShip, "list": a.cmdList, "down": a.cmdDown, "login": a.cmdLogin,
+		"exec": a.cmdExec, "ship": a.cmdShip, "list": a.cmdList, "down": a.cmdDown, "login": a.cmdLogin, "take": a.cmdTake,
 		"github": a.cmdGitHub,
 		"token":  a.cmdToken,
 	}
@@ -566,7 +568,7 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 		return 0, err
 	}
 	config.AddStageBindings(auditExpected, composition.Bindings, "this sandbox")
-	if err := a.checkRepoApprovals(settings.Home, composition, *approveRepoConfig, *plan); err != nil {
+	if err := a.checkRepoApprovals(settings.Home, composition, github, *approveRepoConfig, *plan); err != nil {
 		return 0, err
 	}
 	if len(composition.Agents) == 0 {
@@ -589,7 +591,7 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	task := Task{Slug: slug, Sandbox: sandbox, RepoDir: config.Resolve(scratch), GitHubRepo: github, SourceRepo: repo, Agents: composition.Agents}
+	task := Task{Slug: slug, Sandbox: sandbox, RepoDir: config.Resolve(scratch), GitHubRepo: github, SourceRepo: repo, Agents: composition.Agents, Takes: composition.Takes}
 	if err := writeTask(task, directory); err != nil {
 		return 0, err
 	}
@@ -625,7 +627,7 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	return 0, nil
 }
 
-func (a *App) checkRepoApprovals(home string, composition *config.Composition, approve, plan bool) error {
+func (a *App) checkRepoApprovals(home string, composition *config.Composition, github string, approve, plan bool) error {
 	cleared, err := config.ClearLegacyTrust(home)
 	if err != nil {
 		return err
@@ -633,7 +635,7 @@ func (a *App) checkRepoApprovals(home string, composition *config.Composition, a
 	if cleared {
 		a.warn("stage now stores approvals as JSON; earlier approvals were cleared, and you'll be asked again")
 	}
-	approvals, err := config.RepoApprovals(composition)
+	approvals, err := config.RepoApprovals(composition, github)
 	if err != nil {
 		return err
 	}
@@ -641,8 +643,8 @@ func (a *App) checkRepoApprovals(home string, composition *config.Composition, a
 	if err != nil || len(missing) == 0 {
 		return err
 	}
-	fmt.Fprintf(a.Stderr, "stage: the repository's %s asks for kits or books you have not approved. They can widen the\n"+
-		"  sandbox's network access, send credentials or run commands. Review them before approving:\n", config.RepoConfigPath)
+	fmt.Fprintf(a.Stderr, "stage: the repository's %s asks for kits, books or takes you have not approved. They can widen the\n"+
+		"  sandbox's network access, send credentials, run commands or copy files out of the sandbox. Review them before approving:\n", config.RepoConfigPath)
 	for _, approval := range missing {
 		fmt.Fprintf(a.Stderr, "  - %s\n", config.Printable(approval.Label))
 		for _, detail := range approval.Details {
@@ -1016,7 +1018,8 @@ func (a *App) cmdList(args []string, home string) (int, error) {
 }
 
 func (a *App) cmdDown(args []string, home string) (int, error) {
-	fs := a.newFlags("down", "<slug>")
+	fs := a.newFlags("down", "<slug> [--discard-takes]")
+	discardTakes := fs.Bool("discard-takes", false, "remove the sandbox without copying its takes to the host")
 	positional, err := fs.parse(args, "slug")
 	if err != nil {
 		return 0, err
@@ -1032,6 +1035,11 @@ func (a *App) cmdDown(args []string, home string) (int, error) {
 		return 0, err
 	}
 	if task, taskErr := loadTask(home, slug); taskErr == nil && existing[sandbox] {
+		if len(task.Takes) > 0 && !*discardTakes {
+			if err := a.keepTakes(home, task); err != nil {
+				return 0, errorf("%s; %s is left in place: fix that and run stage down again, or pass --discard-takes to remove it without its takes", err, sandbox)
+			}
+		}
 		if settings, err := config.LoadSettings(home); err == nil && len(copiedAgents(settings, task)) > 0 {
 			if err := a.saveLogins(settings, task); err != nil {
 				a.warn("did not save logins: %s", err)

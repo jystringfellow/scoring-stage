@@ -77,6 +77,7 @@ const fakeSbx = `#!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_SBX_LOG"
 if [ "$1" = exec ]; then
   case " $* " in
+    *"tar -cf -"*) if [ -f "$FAKE_SBX_STATE/takes.hang" ]; then sleep 30; fi; if [ -f "$FAKE_SBX_STATE/takes.fail" ]; then cat "$FAKE_SBX_STATE/takes.fail" >&2; exit 1; fi; [ -f "$FAKE_SBX_STATE/takes.tar" ] && cat "$FAKE_SBX_STATE/takes.tar" ;;
     *" -i "*) for last; do :; done; mkdir -p "$FAKE_SBX_STATE/box"; cat > "$FAKE_SBX_STATE/box/$(basename "$last")" ;;
     *" cat "*) for last; do :; done; file="$FAKE_SBX_STATE/box/$(basename "$last")"; [ -s "$file" ] || { echo "cat: No such file or directory" >&2; exit 1; }; cat "$file" ;;
   esac
@@ -147,6 +148,21 @@ func (f *FakeSbx) SetSecrets(json string) {
 
 func (f *FakeSbx) SetSandboxes(lines string) {
 	WriteFile(f.t, filepath.Join(f.State, "sandboxes"), lines)
+}
+
+// SetTakes is the tar stream the fake sandbox answers a take with.
+func (f *FakeSbx) SetTakes(archive string) {
+	WriteFile(f.t, filepath.Join(f.State, "takes.tar"), archive)
+}
+
+// FailTakes makes the fake sandbox fail a take with this message.
+func (f *FakeSbx) FailTakes(message string) {
+	WriteFile(f.t, filepath.Join(f.State, "takes.fail"), message+"\n")
+}
+
+// HangTakes makes the fake sandbox go quiet when asked for a take.
+func (f *FakeSbx) HangTakes() {
+	WriteFile(f.t, filepath.Join(f.State, "takes.hang"), "")
 }
 
 // BoxFile is the fake sandbox's copy of the in-box file with this base name:
