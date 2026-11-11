@@ -147,3 +147,19 @@ repository, and branch names with control or invisible characters are refused be
 `TestDownLeavesTheSandboxWhenItsTaskRecordCannotBeReadUnlessToldToDiscardItsTakes`,
 `TestUpPlanLeavesALiveTasksRecordAsItWas`, `TestShipRecordsOnlyAPullRequestInTheTasksOwnRepository`,
 `TestShipRefusesABranchNameWithHiddenCharacters`, `TestUpRefusesABaseBranchNameWithHiddenCharacters`.
+
+## 2026-11-11: The ship record is kept across another ship and another up, and is not a complete log
+
+A review found a ship could drop another's record: ship read the task once, then wrote that copy back after the
+review prompt, the push and `gh pr create`. Ship now reads the record again immediately before each write and
+changes only its own entry, which leaves a gap of milliseconds, not minutes; there is no lock. `stage up` on a slug
+whose sandbox is gone keeps the ships already recorded. `down` also leaves a sandbox whose record exists but cannot
+be opened or does not name the task. A sandbox with no record at all is still removed, since stage made nothing
+there to keep. Branch names are held to a stricter rule than other text: any Unicode format character, line or
+paragraph separator, filler or invalid UTF-8 is refused, because a branch name is recorded and shown as the proof
+of what was pushed. The record is written to disk before it replaces the old one. What the record can still miss
+is listed under Limitations in the README. Evidence:
+`TestShipKeepsAShipRecordedByAnotherShipWhileItWaitedForThePullRequest`,
+`TestUpAgainOnASlugWhoseSandboxIsGoneKeepsTheShipsAlreadyRecorded`,
+`TestDownLeavesTheSandboxWhenItsTaskRecordCannotBeReadUnlessToldToDiscardItsTakes`,
+`TestShipRefusesABranchNameWithHiddenCharacters`, `TestHiddenCharactersAreFoundWhereControlCharactersAreNot`.

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -194,11 +195,16 @@ func TestShipReplacesTheTaskRecordWholeAndNeverWritesIntoTheOldOne(t *testing.T)
 
 func TestShipRefusesABranchNameWithHiddenCharacters(t *testing.T) {
 	h, _ := shippedTask(t)
-	branch := "agent/fix/" + string(rune(0x202e)) + "niam"
+	for _, hidden := range []string{string(rune(0x202e)), string(rune(0x2060)), string(rune(0x061c)), string(rune(0xe0041)), "\xff"} {
+		h.stderr.Reset()
 
-	h.expect(1, "ship", "fix", "--yes", "--branch", branch)
+		h.expect(1, "ship", "fix", "--yes", "--branch", "agent/fix/"+hidden+"niam")
 
-	h.expectStderr("control or invisible characters")
+		h.expectStderr("control or invisible characters")
+		if strings.Contains(h.stderr.String(), hidden) {
+			t.Errorf("stderr carries the hidden character itself: %q", h.stderr.String())
+		}
+	}
 	if ships := h.recorded("fix").Ships; len(ships) != 0 {
 		t.Errorf("recorded %+v", ships)
 	}
@@ -254,20 +260,77 @@ func TestUpRefusesABaseBranchNameWithHiddenCharacters(t *testing.T) {
 }
 
 func TestDownLeavesTheSandboxWhenItsTaskRecordCannotBeReadUnlessToldToDiscardItsTakes(t *testing.T) {
-	h := takingSandbox(t, "fix")
-	testutil.WriteFile(t, filepath.Join(h.task("fix"), "task.json"), "")
+	for name, record := range map[string]struct {
+		spoil func(path string) error
+		says  string
+	}{
+		"empty":               {func(path string) error { return os.WriteFile(path, nil, 0o644) }, "unreadable"},
+		"null":                {func(path string) error { return os.WriteFile(path, []byte("null\n"), 0o644) }, "does not name it"},
+		"another task's":      {func(path string) error { return os.WriteFile(path, []byte(`{"slug":"other"}`), 0o644) }, "does not name it"},
+		"a directory instead": {func(path string) error { return errors.Join(os.Remove(path), os.Mkdir(path, 0o755)) }, "unreadable"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := takingSandbox(t, "fix")
+			if err := record.spoil(filepath.Join(h.task("fix"), "task.json")); err != nil {
+				t.Fatal(err)
+			}
 
-	h.expect(1, "down", "fix")
+			h.expect(1, "down", "fix")
 
-	h.expectStderr("unreadable")
-	h.expectStderr("--discard-takes")
-	if h.anyCall("env rm", "rm") {
-		t.Errorf("removed the sandbox without knowing its takes")
+			h.expectStderr(record.says)
+			h.expectStderr("--discard-takes")
+			if h.anyCall("env rm", "rm") {
+				t.Errorf("removed the sandbox without knowing its takes")
+			}
+
+			h.expect(0, "down", "fix", "--discard-takes")
+			if !h.anyCall("env rm", "rm") {
+				t.Errorf("did not remove the sandbox when told to discard its takes")
+			}
+		})
 	}
+}
 
-	h.expect(0, "down", "fix", "--discard-takes")
-	if !h.anyCall("env rm", "rm") {
-		t.Errorf("did not remove the sandbox when told to discard its takes")
+func TestShipKeepsAShipRecordedByAnotherShipWhileItWaitedForThePullRequest(t *testing.T) {
+	h, box := shippedTask(t)
+	h.expect(0, "ship", "fix", "--yes", "--branch", "agent/fix/first")
+	record := filepath.Join(h.task("fix"), "task.json")
+	var task map[string]any
+	if err := json.Unmarshal([]byte(testutil.ReadFile(t, record)), &task); err != nil {
+		t.Fatal(err)
+	}
+	task["ships"] = append(task["ships"].([]any), map[string]any{"sha": "feedface", "branch": "agent/fix/other", "github_repo": "acme/api", "at": "2026-01-02T03:04:05Z"})
+	withOther, err := json.Marshal(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	other := testutil.WriteFile(t, filepath.Join(dir, "other.json"), string(withOther))
+	script := "#!/bin/sh\ncp '" + other + "' '" + record + "'\necho https://github.com/acme/api/pull/9\n"
+	if err := os.Chmod(testutil.WriteFile(t, filepath.Join(dir, "gh"), script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	boxCommit(t, box, "more.txt", "Handle the expired session")
+	sha := testutil.RunGit(t, box, "rev-parse", "HEAD")
+
+	h.expect(0, "ship", "fix", "--yes", "--pr", "--branch", "agent/fix/second")
+
+	ships := h.recorded("fix").Ships
+	if len(ships) != 3 || ships[1].Branch != "agent/fix/other" || ships[2].SHA != sha || ships[2].PullRequest != "https://github.com/acme/api/pull/9" {
+		t.Fatalf("recorded %+v", ships)
+	}
+}
+
+func TestUpAgainOnASlugWhoseSandboxIsGoneKeepsTheShipsAlreadyRecorded(t *testing.T) {
+	h, box := shippedTask(t)
+	sha := testutil.RunGit(t, box, "rev-parse", "HEAD")
+	h.expect(0, "ship", "fix", "--yes")
+
+	h.expect(0, "up", h.remote.Checkout, "fix")
+
+	if ships := h.recorded("fix").Ships; len(ships) != 1 || ships[0].SHA != sha {
+		t.Fatalf("recorded %+v", ships)
 	}
 }
 

@@ -21,6 +21,7 @@ the host, compute a secret, or choose which sandbox gets which grant. Those are 
 | Approval of a repository's kits and books | `stage`'s trust store, by content fingerprint |
 | Organisation policy (agents, GitHub modes, AWS profiles, repository kits, `copy_logins`, the global policy override) | `stage`'s managed settings |
 | Keeping files from a sandbox before it is removed (takes) | `stage`: sbx has no copy-out, so stage streams a tar through `sbx exec` and writes only files and directories under `~/.scoring-stage/takes/` |
+| What a kept take belongs to (repository, base branch, ships, pull requests) | `stage`: each `ship` is recorded on the task, and each take carries a `stage.json` stage writes; a sandbox cannot supply it |
 | Reporting sbx's global credential bindings | `stage setup`, read-only; `credentials.yaml` stays sbx's |
 
 `stage up` expresses all of it as one sbx environment file and lets `sbx env create` apply it, so a sandbox's
