@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/jystringfellow/scoring-stage/internal/config"
 )
@@ -95,8 +96,8 @@ func inside(name string) (string, error) {
 	if len(name) > longestName {
 		return "", fmt.Errorf("the take holds a name of %d bytes; the longest allowed is %d", len(name), longestName)
 	}
-	if config.HasControl(name) {
-		return "", fmt.Errorf("the take holds %s, a name with control characters", config.Printable(name))
+	if !utf8.ValidString(name) || config.HasControl(name) {
+		return "", fmt.Errorf("the take holds %s, a name with control characters or invalid UTF-8", config.Printable(name))
 	}
 	cleaned := path.Clean(name)
 	if path.IsAbs(name) || cleaned == ".." || strings.HasPrefix(cleaned, "../") {

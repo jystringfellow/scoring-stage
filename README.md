@@ -117,18 +117,19 @@ takes = ["~/.tool/runs", "/var/log/tool"]   # in ~/.scoring-stage/config.toml, a
 ```
 
 A path starts with `/` or `~/` (the sandbox user's home) and has no `..`. A path that does not exist in the sandbox
-is passed over, and paths that overlap are kept once. Each copy lands in its own directory,
+is passed over, a listed path that is a link is followed, and paths that overlap are kept once. Each copy lands in its own directory,
 `~/.scoring-stage/takes/<slug>/<UTC time>/`, under the path it had in the sandbox, such as
 `home/agent/.tool/runs/`. A sandbox uses the takes it was created with; a later change to a config applies to the
 next `stage up`. A book's takes apply to every sandbox the book is turned on for; a `[[repos]]` rule cannot add
 takes.
 
 The files come from a sandbox that ran with prompts off, so stage treats them as untrusted. It keeps regular files
-and directories only, with modes 600 and 700, and says how many links and special files it left behind; a listed
-path that is itself a link is not followed. The copy stops and keeps nothing when:
+and directories only, with modes 600 and 700, and says how many links and special files it left behind. The copy stops and keeps nothing when:
 
-- an entry would land outside the take's directory, or its name has control characters or is over 4,096 bytes;
-- the take is over 1 GiB or 100,000 files and directories, or the sandbox sends more than 2 GiB in all;
+- an entry would land outside the take's directory, or its name has control characters, is not UTF-8 or is over
+  4,096 bytes;
+- the take is over 1 GiB or 100,000 entries, or the sandbox sends more than 2 GiB in all, where overlapping paths
+  and skipped links count each time they are sent;
 - the sandbox has not finished within 10 minutes;
 - the takes hold only links and special files.
 
@@ -559,6 +560,7 @@ and what has not been run live yet.
 - A take is whatever the sandbox chose to put at the listed paths, up to 1 GiB each time. Treat kept files as
   untrusted input: do not run them, and do not feed them to an agent without reading them. `stage down` deletes
   the task but never its takes, so `~/.scoring-stage/takes/` grows until you clear it.
+- On a host file system that ignores case, a take with two names that differ only by case stops the copy.
 - A book's approval covers the files in its directory. Files its host commands read, and kits it uses from outside the
   directory can change without asking again.
 

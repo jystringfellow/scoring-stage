@@ -316,7 +316,7 @@ func TestTakeMakesAnExistingTakesDirectoryPrivate(t *testing.T) {
 	}
 }
 
-func TestTheScriptRunInTheSandboxArchivesEachListedPathThatExistsOnce(t *testing.T) {
+func TestTheScriptRunInTheSandboxArchivesEachListedPathOnceAndFollowsAListedLink(t *testing.T) {
 	home, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -328,7 +328,9 @@ func TestTheScriptRunInTheSandboxArchivesEachListedPathThatExistsOnce(t *testing
 	testutil.WriteFile(t, filepath.Join(home, ".tool", "runs", "one", "result.json"), "{}")
 	testutil.WriteFile(t, filepath.Join(home, ".tool", "notes.txt"), "notes")
 	testutil.WriteFile(t, filepath.Join(outside, "log.txt"), "log")
-	if err := os.Symlink(outside, filepath.Join(home, "linked")); err != nil {
+	linkedTo := filepath.Join(outside, "elsewhere")
+	testutil.WriteFile(t, filepath.Join(linkedTo, "kept.txt"), "linked")
+	if err := os.Symlink(linkedTo, filepath.Join(home, "linked")); err != nil {
 		t.Fatal(err)
 	}
 	command := exec.Command("sh", "-c", takeScript, "sh", "~/.tool", "~/.tool/runs", "~/missing", "~/linked", filepath.Join(outside, "log.txt"))
@@ -346,13 +348,14 @@ func TestTheScriptRunInTheSandboxArchivesEachListedPathThatExistsOnce(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary != (takes.Summary{Files: 3, Bytes: 10, Skipped: 1}) {
+	if summary != (takes.Summary{Files: 4, Bytes: 16}) {
 		t.Errorf("summary = %+v", summary)
 	}
 	for _, kept := range []string{
 		filepath.Join(home, ".tool", "runs", "one", "result.json"),
 		filepath.Join(home, ".tool", "notes.txt"),
 		filepath.Join(outside, "log.txt"),
+		filepath.Join(linkedTo, "kept.txt"),
 	} {
 		if _, err := os.Stat(filepath.Join(dir, kept)); err != nil {
 			t.Errorf("%s was not kept: %v", kept, err)

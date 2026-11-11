@@ -172,3 +172,13 @@ func TestOnlyTheEndOfWhatSbxWritesToStderrIsKept(t *testing.T) {
 		t.Fatalf("kept %q", kept.kept)
 	}
 }
+
+func TestStreamSucceedsWhenSbxExitsCleanlyButAChildKeepsItsStderrOpen(t *testing.T) {
+	fakeSbx(t, `printf done; sleep 30 >/dev/null &`)
+	err := returnsWithin(t, 10*time.Second, func() error {
+		return Stream(time.Minute, readAll, "exec", "box")
+	})
+	if err != nil {
+		t.Fatalf("error %v", err)
+	}
+}

@@ -12,7 +12,7 @@ import (
 	"github.com/jystringfellow/scoring-stage/internal/takes"
 )
 
-const takeScript = `cd / && for p; do case "$p" in "~/"*) p="$HOME/${p#??}";; esac; [ -e "$p" ] && printf '%s\0' "${p#/}"; done | tar -cf - --null -T -`
+const takeScript = `cd / && for p; do case "$p" in "~/"*) p="$HOME/${p#??}";; esac; [ -L "$p" ] && p=$(readlink -f "$p"); [ -e "$p" ] && printf '%s\0' "${p#/}"; done | tar -cf - --null -T -`
 
 func takesDir(home, slug string) string { return filepath.Join(home, "takes", slug) }
 

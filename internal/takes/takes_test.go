@@ -200,14 +200,14 @@ func TestEveryDirectoryATakeCreatesCountsTowardsItsEntryLimit(t *testing.T) {
 }
 
 func TestANameThatCouldRewriteTheTerminalOrIsOverlongIsRefused(t *testing.T) {
-	for _, name := range []string{"x\x1b]0;owned\x07", "line\nbreak", "bidi‮", strings.Repeat("d/", 3000) + "f"} {
+	for _, name := range []string{"x\x1b]0;owned\x07", "line\nbreak", "bidi\u202e", "raw\x9bbyte", strings.Repeat("d/", 3000) + "f"} {
 		dir := t.TempDir()
 		_, err := Extract(archive(t, entry{name: name, body: "x"}), dir, DefaultLimits)
 		if err == nil {
 			t.Errorf("%q was kept", name)
 			continue
 		}
-		if strings.ContainsAny(err.Error(), "\x1b\x07\n‮") || len(err.Error()) > 400 {
+		if strings.ContainsAny(err.Error(), "\x1b\x07\n\u202e") || strings.Contains(err.Error(), "\x9b") || len(err.Error()) > 400 {
 			t.Errorf("the error repeats the name raw: %q", err)
 		}
 		if entries, _ := os.ReadDir(dir); len(entries) != 0 {

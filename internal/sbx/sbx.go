@@ -106,6 +106,9 @@ func Stream(timeout time.Duration, consume func(io.Reader) error, args ...string
 		cancel()
 	}
 	waitErr := command.Wait()
+	if errors.Is(waitErr, exec.ErrWaitDelay) {
+		waitErr = nil
+	}
 	said := LastLine(string(stderr.kept))
 	switch {
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
