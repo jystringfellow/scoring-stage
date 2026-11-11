@@ -496,6 +496,9 @@ and what has not been run live yet.
   `stage setup` lists these as `global secret set`.
 - **`[bindings]` domains do not limit where a credential is injected.** A binding authorises a service; kits decide
   the hosts. Treat the domains as documentation, not as a boundary.
+- **sbx stops a sandbox 30 seconds after its last session ends or disconnects.** A session is a `stage shell`, `stage exec` or
+  `sbx exec`. Work left running in the background inside the sandbox, such as under `nohup` or a detached `tmux`,
+  stops with it. Keep long-running work in the foreground of a session that stays open.
 - **Do not run `sbx env rm --prune-bindings` on stage sandboxes.** Bindings are shared, and pruning one sandbox's
   bindings removes the service's binding for the whole machine. `stage down` never passes it.
 - GraphQL writes are not refused. They share `POST /graphql` with reads, so only the token's permissions stop
