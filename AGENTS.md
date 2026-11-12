@@ -93,6 +93,20 @@ Live runs change state shared by every sandbox on the machine. Before any:
 - Record the run in `VERIFICATION.md`: the date, sbx version, commit, which credentials were real, and how shared
   state was restored. Keep the entry generic; see Keep it generic.
 
+## Developing stage from inside a stage sandbox
+
+- Run `sbx` and `tests/acceptance.sh` only on the host. They act on the host's sandboxes and shared sbx state, and
+  the script checks a sandbox from outside. Inside, `go test ./...` with its fakes is the whole check; say in your
+  report what still needs a live run.
+- Keep work in the foreground of the session that started it. sbx stops the sandbox 30 seconds after its last
+  session ends, and a `nohup`, `&` or detached `tmux` job stops with it.
+- Never depend on the URL of the scratch clone's `sandbox-stage-<slug>` remote, in code, tests or instructions.
+  sbx removes the remote when the sandbox stops and adds it again on a new port at the next start.
+- Commit locally and stop there. The maintainer ships from the host, to `agent/<slug>/<sha>` by default, and `ship`
+  refuses any branch outside `agent/`, so do not create or expect another branch name.
+- Say so when a commit touches `.github/` or `.scoring-stage/`. `ship` refuses those paths unless the maintainer
+  passes `--allow-protected-paths`.
+
 ## Keep it generic
 
 This repository is public, and anything in it, including its history, PR descriptions and review comments, stays

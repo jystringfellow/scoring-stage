@@ -17,6 +17,9 @@ Organizations adapt it with **books**: a directory of [kits](https://github.com/
 host-side wiring they need (secrets, credential bindings, AWS profiles, per-repository additions). Like the book a
 session player is handed for a gig, a book holds what the stage needs for one kind of work.
 
+stage works with repositories on GitHub.com only: `stage up` refuses a repository whose `origin` is anywhere else,
+and `stage ship` pushes to `https://github.com/`. It runs on Unix hosts: macOS, Linux, and Windows through WSL.
+
 > Status: early. Some of it has been checked against live sandboxes on sbx 0.51; much is covered only by unit tests
 > with fakes. [VERIFICATION.md](VERIFICATION.md) says which. The command line and book format may still change.
 
@@ -107,6 +110,41 @@ reach the host scratch clone, and that the host source mount, if sbx adds one, i
 `sbx env create`. The sandbox sees the repository at the scratch clone's host path. `stage down` deletes the scratch
 clone, so ship anything you want to keep first.
 The scratch clone's `origin/*` refs come from GitHub as of `stage up`.
+
+## First task
+
+One agent, no orchestrator, from an empty sandbox to a pushed branch. It assumes [one-time setup](#one-time-setup)
+is done, here with `stage setup --agent claude --github fine-grained` and a token saved with `stage token set`.
+
+```
+stage up ~/src/api fix-login         # on the host: scratch clone and sandbox stage-fix-login
+stage shell fix-login                # a login shell in the sandbox, in the repository
+  claude                             # in the sandbox: run the agent; the first run asks you to sign in
+  git log -1                         # in the sandbox: the agent's work must be committed to be shipped
+  exit
+stage ship fix-login --pr            # on the host: review the commits, push agent/fix-login/<sha>, open a draft PR
+stage down fix-login                 # on the host: remove the sandbox and the scratch clone
+```
+
+- **Commit inside the sandbox.** `ship` pushes a commit, by default the sandbox's `HEAD`; uncommitted changes stay
+  behind and are deleted by `stage down`. The sandbox cannot push, so nothing leaves it until you ship.
+- **A sandbox stops shortly after its last session ends.** sbx stops it 30 seconds after the last `stage shell` or
+  `stage exec` exits. A stopped sandbox keeps its files, and the next `stage exec` or `stage shell` starts it again.
+- **`ship` needs the sandbox running.** It fetches the commit from the sandbox over a git remote that sbx removes
+  when the sandbox stops, and it does not start the sandbox. If `ship` says there is no `sandbox-stage-<slug>`
+  remote, keep a `stage shell` open in another terminal while you ship.
+- **Trailers.** `ship` warns about commits without a `Co-authored-by` trailer. If your agent does not add one by
+  default, ask it to, or expect the warning.
+
+To run an agent without a terminal, give its non-interactive command to `stage exec`, for example:
+
+```
+stage exec fix-login -- claude -p "Fix the login redirect and commit the change"
+```
+
+The command runs in the repository as the sandbox user. Keep it in the foreground: the sandbox stops 30 seconds
+after `stage exec` returns, and anything the command left running in the background stops with it; see
+[Limitations](#limitations).
 
 ## Takes
 
@@ -340,8 +378,8 @@ Docker's Antigravity kit has no proxy-managed Google sign-in, so agy's token is 
   `~/.scoring-stage/logins/agy/` (mode 600), copies it into each new sandbox that has agy, and saves it again on
   `stage down` so a refreshed token is kept. Every sandbox with agy then holds a live copy of your Google sign-in.
   stage also carries agy's record that its first-run setup (color scheme and terms) is done,
-  `~/.gemini/antigravity-cli/cache/onboarding.json`, once you have finished that setup in a sandbox. Without it an agy
-  chair under kapellmeister or any other orchestrator waits on that setup screen.
+  `~/.gemini/antigravity-cli/cache/onboarding.json`, once you have finished that setup in a sandbox. Without it
+  agy stops at that setup screen in every new sandbox, which an unattended run cannot get past.
 
 The kit also has a Gemini API-key mode that would keep a key on the host: a `google` secret plus
 `[bindings.google]` with `apiKey = { domains = ["generativelanguage.googleapis.com"] }` in your config. It uses the
@@ -350,8 +388,9 @@ tested with stage.
 
 ## Configuration and books
 
-Configuration has two levels, like kapellmeister's: yours in `~/.scoring-stage/config.toml`, and a repository's
-in its `.scoring-stage/config.toml`.
+Configuration has two levels: yours in `~/.scoring-stage/config.toml`, which applies to every sandbox you create
+and may set everything below, and a repository's in its `.scoring-stage/config.toml`, which travels with the code and may
+only ask for agents, installed books, its own kits and takes.
 
 `~/.scoring-stage/config.toml` (all keys optional):
 
@@ -383,7 +422,7 @@ A book is a directory with a `book.toml`:
 ```toml
 name = "backend"
 agents = ["claude"]                                       # agents this book's work needs
-kits = ["./kits/toolchain", "./kits/mise"]               # local kits only, starting with ./ or ../
+kits = ["./kits/go"]                                      # local kits only, starting with ./ or ../
 
 [aws]
 profiles = ["dev", "staging"]
@@ -405,6 +444,12 @@ aws = { profiles = ["api-dev"] }
 An installed book applies to a sandbox when the repository's config names it, when `--book` names it, or when one
 of its `[[repos]]` entries matches the repository; the `[[repos]]` rules are for repositories you cannot add a
 config to. `--book ./dir` also uses a book that is not installed.
+
+The `book.toml` above shows every kind of entry; its feed, profiles and `[[repos]]` kit are placeholders.
+[`examples/books/go`](examples/books/go) is a complete book you can run: one local kit that installs a Go toolchain
+and allows the hosts `apt` and the Go module proxy need. Try it with
+`stage up <repo> <slug> --book ./examples/books/go`, or copy it as the start of your own. It passes stage's checks
+on a book; its install steps follow a kit that runs in a sandbox, but this copy has not been run in one.
 
 A book's `name` matches `^[a-z0-9][a-z0-9._-]*$`, and its `description` has no control characters. A book cannot
 set `base`. It cannot set a secret or binding for a reserved service: any service an agent binds (`anthropic`,
@@ -429,7 +474,7 @@ That review is the real control. See [Limitations](#limitations).
 A repository's `.scoring-stage/config.toml`, read from the branch the sandbox starts from:
 
 ```toml
-agents = ["claude", "codex"]     # for example, the agents its .kapellmeister ensembles seat
+agents = ["claude", "codex"]     # the agents this repository's contributors run
 books = ["backend"]              # installed books, by name
 kits = ["./.scoring-stage/kits/rules"]  # inside the repository; approved by you before use
 ```
@@ -463,6 +508,20 @@ grants a profile from your host AWS config to that one sandbox and makes it the 
 A kit that a book adds for its own service declares a `credential@1` entry for that service and names the hosts it is
 injected on; the book's `secrets` entry supplies the value for each sandbox, and its `bindings` entry authorises the
 service.
+
+### Writing a kit
+
+[`examples/books/go/kits/go/go.yaml`](examples/books/go/kits/go/go.yaml) is a small kit to start from. Two things
+about the sandbox have caught kits in use; both come from one kit's notes and have not been checked again for
+this README:
+
+- **Install Python tools with pip in a venv, not with uv.** uv aborts on the sandbox's 16 KB memory pages.
+  `python3 -m venv <dir>` and that venv's `pip install` work.
+- **Start a long-running server from a `startup` command inside a `tmux` session.** A process started straight
+  from the hook has no terminal; one started with `tmux new-session -d -s <name> <command>` gets a full terminal
+  environment from the tmux server. Set `TERM`, `SHELL` and `LANG` first, and guard with `tmux has-session` so a
+  second start does not fail. The kit has to install `tmux`. Like everything else in the sandbox, the server stops
+  when the sandbox does, and the `startup` command runs again on the next start.
 
 ## Managed settings
 
