@@ -47,7 +47,7 @@ func TestATakeIsACleanAbsoluteOrHomePathInTheSandbox(t *testing.T) {
 	}
 	for file, write := range map[string]func(t *testing.T) error{
 		"book": func(t *testing.T) error {
-			_, err := LoadBook(book(t, t.TempDir(), "records", "takes = [\"../up\"]\n"))
+			_, err := LoadBook(BuiltinAgents(), book(t, t.TempDir(), "records", "takes = [\"../up\"]\n"))
 			return err
 		},
 		"repository": func(t *testing.T) error {
@@ -123,11 +123,11 @@ func TestManagedSettingsThatDenyRepositoryKitsAlsoRefuseItsTakes(t *testing.T) {
 }
 
 func TestABooksApprovalSummaryListsItsTakes(t *testing.T) {
-	loaded, err := LoadBook(book(t, t.TempDir(), "records", "takes = [\"~/.tool/runs\"]\n"))
+	loaded, err := LoadBook(BuiltinAgents(), book(t, t.TempDir(), "records", "takes = [\"~/.tool/runs\"]\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := summarizeBook(*loaded); !reflect.DeepEqual(got, []string{"copies ~/.tool/runs from the sandbox to your machine before the sandbox is removed"}) {
+	if got := summarizeBook(BuiltinAgents(), *loaded); !reflect.DeepEqual(got, []string{"copies ~/.tool/runs from the sandbox to your machine before the sandbox is removed"}) {
 		t.Errorf("summary = %v", got)
 	}
 }

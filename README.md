@@ -362,7 +362,63 @@ each with its own egress and credentials:
 | `copilot` | `docker.io/sbx/copilot-mixin` | `copilot`, from `gh auth token`, sent only to Copilot's API hosts |
 | `agy` | `docker.io/sbx/antigravity-mixin` | none; see [Agent logins](#agent-logins) |
 
-A kit reference works wherever a name does, for another agent or another version of one of these.
+A kit reference works wherever a name does in your own config and `--agent`, for another agent or another version
+of one of these. A bare reference brings no bindings, secrets or login files unless it is another version of a kit
+an agent already has.
+
+### Defining an agent
+
+These four are defaults. Your `~/.scoring-stage/config.toml` can define more, or redefine one of them, in an
+`[agent.<name>]` table. A defined agent is used like a built-in one: in `agents`, in a book's or repository's
+`agents`, with `--agent`, with `stage setup --agent` and in `copy_logins`.
+
+```toml
+agents = ["claude", "example"]
+copy_logins = ["example"]                            # only if you want its login files copied; see Agent logins
+
+[agent.example]
+kit = "registry.example.com/sbx/example-mixin:1.2.3" # required: a published kit, or a ./ directory under ~/.scoring-stage
+login_files = [                                      # files in the sandbox that hold its sign-in
+  "/home/agent/.example/token",
+  { path = "/home/agent/.example/onboarding.json", optional = true },
+]
+
+[agent.example.bindings.example]                     # written like [bindings.<service>]
+apiKey = { domains = ["api.example.com"] }
+
+[agent.example.secrets.example]                      # the default secret; [secrets.example] replaces it
+command = "{gh} auth token"                          # {gh} is the gh CLI stage found
+```
+
+- `kit` is the only required key. A name is lower-case letters, digits, `-` and `_`.
+- A published kit reference, here and anywhere else stage reads one, is written in lower case up to its tag. A
+  registry reads an upper-case first part as a host, so stage refuses upper case there and does not guess.
+- Service names are lower case with no spaces around them, in an agent's tables and in your own `[secrets]` and
+  `[bindings]`; any other spelling is refused with the one to use.
+- Defining a built-in name replaces that agent. `bindings`, `secrets` and `login_files` you leave out keep the
+  built-in values, so `[agent.claude]` with only `kit = "docker.io/sbx/claude-mixin:<version>"` moves Claude Code to
+  another version of its mixin. An empty table or list clears the built-in value.
+- A kit belongs to one agent: two agents cannot use the same kit, whatever its version.
+- A secret is `command`, a host command that prints the value, with an optional `refresh`. In a command, `{gh}`
+  stands for the gh CLI stage found on your machine. Write it unquoted as a word of its own, as in
+  `{gh} auth token`: stage puts gh's shell-quoted path in its place, and refuses a command that has `{gh}` inside
+  quotes, escaped or joined to other text. When gh is not found, `stage up` leaves that secret out and says so; the
+  agent then has its binding but no credential.
+- When two agents in one sandbox set the same service differently, `stage up` stops, with or without gh, unless
+  your own `[bindings.<service>]` or `[secrets.<service>]` settles it.
+- A login file is an absolute path in the sandbox. stage reads and writes it as the sandbox's user, and it need not
+  be under that user's home. stage keeps it in `~/.scoring-stage/logins/<name>/` under its file name, so two login
+  files of one agent cannot share a file name, whatever its letter case. A file marked `optional` is carried when
+  the sandbox has it.
+- An agent cannot set the `github` or `stage-broker` service, however the name is cased or spaced, and its bindings
+  cannot cover GitHub's hosts.
+- Only your own config defines agents. A book or a repository that has an `agent` table is refused; both can only
+  name agents. The services an agent you define binds or supplies are reserved like a built-in agent's, so no book or
+  repository kit can claim them.
+- Under [managed settings](#managed-settings), an agent list (`allowed_agents` or `denied_agents`) refuses every
+  definition except one that only sets `kit`, to another version of a built-in agent's own kit. A `copy_logins`
+  list refuses any definition that sets `login_files`, and any definition that puts a name in that list on another
+  kit. The names an administrator lists therefore keep their meaning.
 
 The `github` binding (in `fine-grained`, `app` and `gh` modes), an agent's bindings and, with AWS, `stage-broker` are written to sbx's
 `~/.config/sbx/credentials.yaml`. A binding only authorises a service's credential for use; it does not limit

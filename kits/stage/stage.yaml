@@ -49,8 +49,9 @@ capabilities:
       content: |
         ## scoring-stage sandbox
 
-        You are running in a scoring-stage sandbox with permission prompts off.
-        The sandbox is the boundary, so work freely inside it, and keep within these rules:
+        You are running in a scoring-stage sandbox. The sandbox is the boundary on what
+        your work can reach, however you were launched and whether or not you ask before
+        acting. Keep within these rules:
 
         - Commit your work locally and make no changes on GitHub: no pushes, branches,
           comments, issues, pull requests or merges, by git, gh, the REST API or GraphQL.

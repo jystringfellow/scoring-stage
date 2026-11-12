@@ -278,7 +278,7 @@ func TestConfigAndBooksCannotSupplyTheGitHubCredential(t *testing.T) {
 
 	dir := t.TempDir()
 	testutil.WriteFile(t, filepath.Join(dir, "book.toml"), "name = \"b\"\n[bindings.github]\napiKey = { domains = [\"api.github.com\"] }\n")
-	_, err = LoadBook(dir)
+	_, err = LoadBook(BuiltinAgents(), dir)
 	expectError(t, err, "the github secret and binding come only from [github] mode")
 }
 
@@ -860,7 +860,7 @@ func TestOnlyAgentsWithAnInSandboxLoginCanBeCopied(t *testing.T) {
 	if !settings.CopiesLogin("agy") || settings.CopiesLogin("claude") {
 		t.Fatal("copy_logins not honoured")
 	}
-	files := LoginFiles("agy")
+	files := settings.Agents.LoginFiles("agy")
 	if len(files) != 2 || !files[0].Required || files[1].Required {
 		t.Fatalf("agy login files = %v", files)
 	}

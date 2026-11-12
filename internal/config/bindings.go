@@ -24,8 +24,8 @@ func (s *Settings) StageBindings() map[string]*StageBinding {
 		}
 	}
 	for _, entry := range entries {
-		if name, known := agentNamed(entry); known {
-			AddStageBindings(expected, agents[name].bindings, "agent "+name)
+		if name, known := s.Agents.named(entry); known {
+			AddStageBindings(expected, s.Agents.specs[name].bindings, "agent "+name)
 		}
 	}
 	AddStageBindings(expected, s.bindings, "config.toml [bindings]")
@@ -58,23 +58,23 @@ func AddStageBindings(expected map[string]*StageBinding, bindings map[string]any
 	}
 }
 
-func agentNamed(entry any) (string, bool) {
+func (a Agents) named(entry any) (string, bool) {
 	source := kitSource(entry)
 	if source == "" {
 		return "", false
 	}
 	if looksLikeName(source) {
-		return source, IsAgentName(source)
+		return source, a.Has(source)
 	}
-	return agentFor(source)
+	return a.forKit(source)
 }
 
-func KnownStageBindings() map[string]*StageBinding {
+func (s *Settings) KnownStageBindings() map[string]*StageBinding {
 	known := map[string]*StageBinding{}
 	AddStageBindings(known, map[string]any{BrokerService: brokerBinding()}, "the AWS broker")
 	AddStageBindings(known, map[string]any{GitHubService: gitHubBinding()}, "[github] mode")
-	for _, name := range AgentNames() {
-		AddStageBindings(known, agents[name].bindings, "agent "+name)
+	for _, name := range s.Agents.Names() {
+		AddStageBindings(known, s.Agents.specs[name].bindings, "agent "+name)
 	}
 	return known
 }

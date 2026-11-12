@@ -31,7 +31,9 @@ policy, secrets and bindings are created and removed together.
 
 A sandbox carries only the agents someone chose: each agent's mixin widens egress and brings credential
 bindings, so an agent nobody runs is attack surface with no use. Agents come from the user's config, the
-repository's config, a book or `--agent`, and an agent's bindings come with it. Typing a built-in agent name such as
+repository's config, a book or `--agent`, and an agent's bindings come with it. The agent table has built-in
+defaults, and only the user's config can add to it or redefine an entry: a definition chooses a kit, credentials and
+the files copied between sandboxes, which are the user's decisions, so a book or repository can only name an agent. Typing a built-in agent name such as
 `claude` would select Docker's v2 kits, which cannot compose with v3 mixins, so stage always names a v3 workload
 by reference.
 
@@ -53,7 +55,7 @@ Claude Code, Codex and Copilot sign in through credentials the proxy keeps on th
 declares only an optional Gemini API key, so an agy sign-in is a token file inside the sandbox. `copy_logins` is the
 opt-in exception to credentials staying on the host: stage saves that file from a sandbox (`stage login`, and again
 on `stage down` to keep a refreshed token) and copies it into new ones through `sbx exec -i`, so it never appears on
-a command line or in the env file. It applies only to agents with a known login file, and only from the user's
+a command line or in the env file. It applies only to agents whose definition lists login files, and only from the user's
 config.
 
 ## One binary

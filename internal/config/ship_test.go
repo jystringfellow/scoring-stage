@@ -113,17 +113,15 @@ func TestOnlyTheUserConfigSetsShipSettings(t *testing.T) {
 
 	dir := filepath.Join(t.TempDir(), "org")
 	testutil.WriteFile(t, filepath.Join(dir, "book.toml"), "name = \"org\"\n\n[ship]\nbranch_prefix = \"main\"\n")
-	_, err = LoadBook(dir)
+	_, err = LoadBook(BuiltinAgents(), dir)
 	expectError(t, err, "unknown keys ship")
 }
 
 func TestTheCopyLoginsRefusalNamesTheAgentsWithoutALoginFileFromTheAgentTable(t *testing.T) {
-	agents["example"] = agentSpec{kit: "docker.io/sbx/example-mixin:1.0.0"}
-	t.Cleanup(func() { delete(agents, "example") })
 	home := filepath.Join(t.TempDir(), "home")
-	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "copy_logins = [\"example\"]\n")
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "copy_logins = [\"example\"]\n[agent.example]\nkit = \"docker.io/sbx/example-mixin:1.0.0\"\n")
 	_, err := LoadSettings(home)
-	expectError(t, err, "copy_logins: example cannot be copied (copyable: agy); claude, codex, copilot and example sign in through the proxy")
+	expectError(t, err, "copy_logins: example cannot be copied (copyable: agy); claude, codex, copilot, example have no login files")
 }
 
 func TestAShipBranchPrefixIsANamespaceOfLegalRefComponentsEndingInASlash(t *testing.T) {

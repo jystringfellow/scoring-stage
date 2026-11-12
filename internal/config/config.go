@@ -37,7 +37,7 @@ func domains(kind string, hosts ...string) map[string]any {
 }
 
 var (
-	userKeys      = []string{"books", "base", "agents", "copy_logins", "github", "kits", "aws", "secrets", "bindings", "ship", "takes"}
+	userKeys      = []string{"books", "base", "agents", "agent", "copy_logins", "github", "kits", "aws", "secrets", "bindings", "ship", "takes"}
 	bookKeys      = []string{"name", "description", "base", "agents", "kits", "aws", "secrets", "bindings", "repos", "takes"}
 	repoMatchKeys = []string{"match", "agents", "kits", "aws"}
 	awsKeys       = []string{"profiles", "region", "default_profile"}
@@ -83,6 +83,8 @@ type Composition struct {
 	RepoBooks         []Book
 	Takes             []string
 	RepoTakes         []string
+	Warnings          []string
+	agents            Agents
 }
 
 func (c *Composition) AllKits() []Kit {
@@ -118,6 +120,7 @@ type Book struct {
 type Settings struct {
 	Home       string
 	Managed    *Managed
+	Agents     Agents
 	Books      []Book
 	base       any
 	agents     []any
@@ -277,6 +280,9 @@ func LoadSettings(home string) (*Settings, error) {
 	}
 	settings := &Settings{Home: home, base: data["base"]}
 	var err error
+	if settings.Agents, err = decodeAgents(data["agent"], path, home); err != nil {
+		return nil, err
+	}
 	if settings.agents, err = optionalList(data, "agents", path); err != nil {
 		return nil, err
 	}
@@ -307,6 +313,9 @@ func LoadSettings(home string) (*Settings, error) {
 	if err := refuseGitHubService(settings.secrets, settings.bindings, path); err != nil {
 		return nil, err
 	}
+	if err := refuseUncanonicalServices(settings.secrets, settings.bindings, path); err != nil {
+		return nil, err
+	}
 	if settings.copyLogins, err = optionalStrings(data, "copy_logins", path); err != nil {
 		return nil, err
 	}
@@ -316,9 +325,14 @@ func LoadSettings(home string) (*Settings, error) {
 	if settings.Managed, err = LoadManaged(); err != nil {
 		return nil, err
 	}
+	for _, definition := range settings.Agents.defined {
+		if err := settings.Managed.CheckAgentDefinition(definition); err != nil {
+			return nil, errorf("%s: %v", path, err)
+		}
+	}
 	for _, agent := range settings.copyLogins {
-		if !contains(copyableAgents(), agent) {
-			return nil, errorf("%s: copy_logins: %s cannot be copied (copyable: %s); %s sign in through the proxy", path, agent, strings.Join(copyableAgents(), ", "), listed(agentsWithoutLogin()))
+		if !contains(settings.Agents.copyable(), agent) {
+			return nil, errorf("%s: copy_logins: %s cannot be copied (copyable: %s); %s have no login files", path, agent, strings.Join(settings.Agents.copyable(), ", "), strings.Join(settings.Agents.withoutLoginFiles(), ", "))
 		}
 		if err := settings.Managed.CheckCopyLogin(agent); err != nil {
 			return nil, errorf("%s: %v", path, err)
@@ -330,7 +344,7 @@ func LoadSettings(home string) (*Settings, error) {
 	}
 	installed := map[string]string{}
 	for _, bookPath := range bookPaths {
-		book, err := LoadBook(bookDirectory(home, bookPath))
+		book, err := LoadBook(settings.Agents, bookDirectory(home, bookPath))
 		if err != nil {
 			return nil, err
 		}
@@ -343,23 +357,6 @@ func LoadSettings(home string) (*Settings, error) {
 	return settings, nil
 }
 
-func agentsWithoutLogin() []string {
-	var names []string
-	for _, name := range AgentNames() {
-		if len(LoginFiles(name)) == 0 {
-			names = append(names, name)
-		}
-	}
-	return names
-}
-
-func listed(names []string) string {
-	if len(names) < 2 {
-		return strings.Join(names, "")
-	}
-	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
-}
-
 func bookDirectory(home, entry string) string {
 	path := ExpandUser(entry)
 	if !filepath.IsAbs(path) {
@@ -370,7 +367,7 @@ func bookDirectory(home, entry string) string {
 
 var bookName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
-func LoadBook(path string) (*Book, error) {
+func LoadBook(agents Agents, path string) (*Book, error) {
 	path = Resolve(path)
 	manifest := filepath.Join(path, "book.toml")
 	if info, err := os.Stat(manifest); err != nil || !info.Mode().IsRegular() {
@@ -379,6 +376,9 @@ func LoadBook(path string) (*Book, error) {
 	data, err := readTOML(manifest)
 	if err != nil {
 		return nil, err
+	}
+	if _, present := data["agent"]; present {
+		return nil, errorf("%s: books cannot define agents; a book names agents in agents, and an agent is defined in config.toml", manifest)
 	}
 	if err := checkKeys(data, bookKeys, manifest); err != nil {
 		return nil, err
@@ -432,10 +432,10 @@ func LoadBook(path string) (*Book, error) {
 	if err := refuseGitHubService(book.secrets, book.bindings, manifest); err != nil {
 		return nil, err
 	}
-	if err := refuseReservedServices(book.secrets, book.bindings, where); err != nil {
+	if err := refuseReservedServices(agents, book.secrets, book.bindings, where); err != nil {
 		return nil, err
 	}
-	if err := refuseForeignBindings(book.secrets, book.bindings, where); err != nil {
+	if err := refuseForeignBindings(agents, book.secrets, book.bindings, where); err != nil {
 		return nil, err
 	}
 	repos, ok := asList(data["repos"])
@@ -475,7 +475,7 @@ func LoadBook(path string) (*Book, error) {
 		}
 		book.repos = append(book.repos, r)
 	}
-	if err := checkBookKits(book, owner); err != nil {
+	if err := checkBookKits(agents, book, owner); err != nil {
 		return nil, err
 	}
 	return book, nil
@@ -492,7 +492,7 @@ func refuseControlKeys(secrets, bindings map[string]any, where string) error {
 	return nil
 }
 
-func refuseForeignBindings(secrets, bindings map[string]any, owner string) error {
+func refuseForeignBindings(agents Agents, secrets, bindings map[string]any, owner string) error {
 	for _, service := range sortedKeys(bindings) {
 		if _, owned := secrets[service]; !owned {
 			return errorf("%s: binding %s has no [secrets.%s] in the book; a book may bind only credentials it supplies", owner, service, service)
@@ -505,23 +505,23 @@ func refuseForeignBindings(secrets, bindings map[string]any, owner string) error
 			if hasDomainGlob(domain) {
 				return errorf("%s: binding %s covers %s; %s", owner, service, Printable(domain), domainGlobReason)
 			}
-			if ReachesReserved(domain) {
-				return errorf("%s: binding %s covers %s, a host a reserved service uses; %s", owner, service, Printable(domain), reservedReason())
+			if agents.ReachesReserved(domain) {
+				return errorf("%s: binding %s covers %s, a host a reserved service uses; %s", owner, service, Printable(domain), agents.reservedReason())
 			}
 		}
 	}
 	return nil
 }
 
-func refuseReservedServices(secrets, bindings map[string]any, owner string) error {
+func refuseReservedServices(agents Agents, secrets, bindings map[string]any, owner string) error {
 	for _, service := range sortedKeys(secrets) {
-		if isReservedService(service) {
-			return errorf("%s: secret %s is reserved; %s", owner, Printable(service), reservedReason())
+		if agents.isReservedService(service) {
+			return errorf("%s: secret %s is reserved; %s", owner, Printable(service), agents.reservedReason())
 		}
 	}
 	for _, service := range sortedKeys(bindings) {
-		if isReservedService(service) {
-			return errorf("%s: binding %s is reserved; %s", owner, Printable(service), reservedReason())
+		if agents.isReservedService(service) {
+			return errorf("%s: binding %s is reserved; %s", owner, Printable(service), agents.reservedReason())
 		}
 	}
 	return nil
@@ -529,7 +529,7 @@ func refuseReservedServices(secrets, bindings map[string]any, owner string) erro
 
 const publishedKitReason = "published kits in books and repository configs cannot be inspected, and a kit can send any credential sbx holds to any host; use a local kit"
 
-func checkBookKits(book *Book, owner string) error {
+func checkBookKits(agents Agents, book *Book, owner string) error {
 	entries := append(append([]any{}, book.kits...), book.agents...)
 	for _, r := range book.repos {
 		entries = append(append(entries, r.kits...), r.agents...)
@@ -545,7 +545,7 @@ func checkBookKits(book *Book, owner string) error {
 		if !kit.IsLocal() {
 			return errorf("%s: kit %s is published; %s", owner, kit.Source, publishedKitReason)
 		}
-		if err := checkUntrustedKit(kit.Source, owner, book.secrets); err != nil {
+		if err := checkUntrustedKit(agents, kit.Source, owner, book.secrets); err != nil {
 			return err
 		}
 	}
@@ -564,6 +564,7 @@ type Selection struct {
 }
 
 func Compose(settings *Settings, selection Selection) (*Composition, error) {
+	agents := settings.Agents
 	active, err := activeBooks(settings, selection)
 	if err != nil {
 		return nil, err
@@ -612,14 +613,14 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 	}
 	addAgents := func(entries []any, dir, owner string) error {
 		for _, entry := range entries {
-			kit, err := parseAgent(entry, dir, owner)
+			kit, err := agents.parse(entry, dir, owner)
 			if err != nil {
 				return err
 			}
 			if containsKit(agentKits, kit) {
 				continue
 			}
-			name, known := agentFor(kit.Source)
+			name, known := agents.forKit(kit.Source)
 			if err := settings.Managed.CheckAgent(name, known, kit.Source); err != nil {
 				return errorf("%s: %v", owner, err)
 			}
@@ -678,7 +679,7 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 	if repo := selection.Repo; repo != nil {
 		for _, entry := range repo.agents {
 			if name, ok := entry.(string); !ok || !looksLikeName(name) {
-				return nil, errorf("%s: agents are named (%s), not given as kits; a repository's own kits go in kits", repo.Path, strings.Join(AgentNames(), ", "))
+				return nil, errorf("%s: agents are named (%s), not given as kits; a repository's own kits go in kits", repo.Path, strings.Join(agents.Names(), ", "))
 			}
 		}
 		if err := addAgents(repo.agents, repo.dir, repo.Path); err != nil {
@@ -703,7 +704,7 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 			if err := refuseLinks(kit.Source, repo.Path); err != nil {
 				return nil, err
 			}
-			if err := checkUntrustedKit(kit.Source, repo.Path, nil); err != nil {
+			if err := checkUntrustedKit(agents, kit.Source, repo.Path, nil); err != nil {
 				return nil, err
 			}
 		}
@@ -762,16 +763,45 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 		return nil, err
 	}
 
+	agentBinding, agentSecretOwner := map[string]string{}, map[string]string{}
+	agentBindings, agentSecrets := map[string]any{}, map[string]any{}
+	var warnings []string
 	for _, name := range agentNames {
-		for service, binding := range agents[name].bindings {
+		spec := agents.specs[name]
+		for _, service := range sortedKeys(spec.bindings) {
+			if _, own := settings.bindings[service]; own {
+				continue
+			}
+			if other, taken := agentBinding[service]; taken {
+				if !reflect.DeepEqual(agentBindings[service], spec.bindings[service]) {
+					return nil, errorf("agent %s sets binding %s differently from agent %s", name, service, other)
+				}
+				continue
+			}
+			agentBinding[service], agentBindings[service] = name, spec.bindings[service]
 			if _, set := bindings[service]; !set {
-				bindings[service] = binding
+				bindings[service] = spec.bindings[service]
 			}
 		}
-	}
-	if selection.Gh != "" && contains(agentNames, "copilot") {
-		if _, set := secrets["copilot"]; !set {
-			secrets["copilot"] = map[string]any{"command": ShellQuote(selection.Gh) + " auth token"}
+		for _, service := range sortedKeys(spec.secrets) {
+			if _, own := settings.secrets[service]; own {
+				continue
+			}
+			if other, taken := agentSecretOwner[service]; taken {
+				if !reflect.DeepEqual(agentSecrets[service], spec.secrets[service]) {
+					return nil, errorf("agent %s sets secret %s differently from agent %s", name, service, other)
+				}
+				continue
+			}
+			agentSecretOwner[service], agentSecrets[service] = name, spec.secrets[service]
+			if _, set := secrets[service]; set {
+				continue
+			}
+			if secret, usable := agentSecret(spec.secrets[service], selection.Gh); usable {
+				secrets[service] = secret
+			} else {
+				warnings = append(warnings, fmt.Sprintf("agent %s's secret %s needs the gh CLI, which was not found, so the sandbox has no %s secret", name, service, service))
+			}
 		}
 	}
 	settings.gitHubCredential(selection, secrets, bindings)
@@ -792,6 +822,8 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 		Bindings:          bindings,
 		RepoKits:          repoKits,
 		RepoBooks:         booksOnlyTheRepoAskedFor(active, selection),
+		Warnings:          warnings,
+		agents:            agents,
 	}
 	addTakes := func(takes []string) {
 		for _, take := range takes {
@@ -829,7 +861,7 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 		if kit.IsLocal() {
 			continue
 		}
-		name, known := agentFor(kit.Source)
+		name, known := agents.forKit(kit.Source)
 		if known || looksLikeAgentMixin(kit.Source) {
 			if err := settings.Managed.CheckAgent(name, known, kit.Source); err != nil {
 				return nil, err
@@ -863,7 +895,7 @@ func activeBooks(settings *Settings, selection Selection) ([]Book, error) {
 			wanted[ref] = true
 			continue
 		}
-		book, err := LoadBook(ExpandUser(ref))
+		book, err := LoadBook(settings.Agents, ExpandUser(ref))
 		if err != nil {
 			return nil, err
 		}
@@ -953,11 +985,11 @@ func booksOnlyTheRepoAskedFor(active []Book, selection Selection) []Book {
 	return books
 }
 
-func parseAgent(entry any, dir, owner string) (Kit, error) {
+func (a Agents) parse(entry any, dir, owner string) (Kit, error) {
 	if name, ok := entry.(string); ok && looksLikeName(name) {
-		spec, known := agents[name]
+		spec, known := a.specs[name]
 		if !known {
-			return Kit{}, errorf("%s: unknown agent %s (known: %s, or a kit reference)", owner, name, strings.Join(AgentNames(), ", "))
+			return Kit{}, errorf("%s: unknown agent %s (known: %s, or a kit reference)", owner, Printable(name), strings.Join(a.Names(), ", "))
 		}
 		return Kit{Source: spec.kit}, nil
 	}
@@ -1003,14 +1035,20 @@ func parseKit(entry any, baseDir, owner string) (Kit, error) {
 	case strings.HasPrefix(kit.Source, "~"):
 		kit.Source = Resolve(ExpandUser(kit.Source))
 	}
+	if repository := withoutVersion(kit.Source); !kit.IsLocal() && repository != strings.ToLower(repository) {
+		return kit, errorf("%s: kit %s has upper-case letters before its tag; write the registry and repository in lower case, since a registry reads an upper-case first part as a host and not as a docker.io path",
+			owner, Printable(kit.Source))
+	}
 	return kit, nil
 }
 
 func refuseGitHubService(secrets, bindings map[string]any, where string) error {
-	_, secret := secrets[GitHubService]
-	_, binding := bindings[GitHubService]
-	if secret || binding {
-		return errorf("%s: the %s secret and binding come only from [github] mode", where, GitHubService)
+	for _, table := range []map[string]any{secrets, bindings} {
+		for service := range table {
+			if normalizeService(service) == GitHubService {
+				return errorf("%s: the %s secret and binding come only from [github] mode", where, GitHubService)
+			}
+		}
 	}
 	for _, service := range sortedKeys(bindings) {
 		domains, err := bindingDomains(bindings[service])
@@ -1053,7 +1091,7 @@ func bindingDomains(binding any) ([]string, error) {
 }
 
 func ReachesGitHub(domain string) bool {
-	if normalizeHost(domain) == "copilot.github.com" {
+	if contains(hostsBesideGitHub, normalizeHost(domain)) {
 		return false
 	}
 	return reachesAny(domain, gitHubApexes)
@@ -1276,9 +1314,13 @@ func (s *Settings) AgentEntries() []string {
 // SaveAgents writes agents as the first line of config.toml, where a
 // top-level key stays outside any table.
 func SaveAgents(home string, names []string) error {
+	agents, err := LoadAgents(home)
+	if err != nil {
+		return err
+	}
 	for _, name := range names {
-		if !IsAgentName(name) {
-			return errorf("unknown agent %s (known: %s)", name, strings.Join(AgentNames(), ", "))
+		if !agents.Has(name) {
+			return errorf("unknown agent %s (known: %s)", Printable(name), strings.Join(agents.Names(), ", "))
 		}
 	}
 	path := filepath.Join(home, "config.toml")

@@ -61,14 +61,15 @@ From stage:
 
 - **book:** a directory with a `book.toml`: local kits plus the host wiring they need (secrets, bindings, AWS
   profiles, `[[repos]]` rules) and the takes to keep. A book is installed by the user and applies only when asked for.
-- **agent:** a coding agent from stage's agent table (`claude`, `codex`, `copilot`, `agy`), which names its mixin
-  and the bindings it brings.
+- **agent:** a coding agent from stage's agent table, which names its mixin, the bindings and default secret it
+  brings and its login files. `claude`, `codex`, `copilot` and `agy` are built in; only the user's config can
+  define another or redefine one.
 - **repository config:** a repository's `.scoring-stage/config.toml`. It is input from whoever can commit, so it may
   ask only for agents by name, installed books by name and its own `./` kits.
 - **approval:** the user's consent to a repository's kits and books, stored by content fingerprint in the trust
   store.
 - **reserved service:** a service a book or repository cannot set or claim: agents' services, sbx's built-ins,
-  `github`, `copilot` and `stage-broker`. A book's bindings and kits also cannot cover a reserved service's hosts.
+  `github` and `stage-broker`. A book's bindings and kits also cannot cover a reserved service's hosts.
 - **task:** one sandbox's host state under `~/.scoring-stage/tasks/<slug>/`, addressed by its **slug**.
 - **scratch clone:** the host clone a sandbox's workspace is made from, and that `stage ship` pushes from.
 - **broker:** stage's host process that hands each sandbox temporary AWS credentials for the profiles it was granted.
