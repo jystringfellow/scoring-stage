@@ -19,8 +19,9 @@ the host, compute a secret, or choose which sandbox gets which grant. Those are 
 | Logins the proxy cannot hold (agy) | `stage`'s opt-in `copy_logins`; see below |
 | Which agents, books and kits a sandbox gets, and what a book or repository may set (local kits only, no reserved services) | `stage`; sbx has no notion of who may ask for what |
 | Approval of a repository's kits and books | `stage`'s trust store, by content fingerprint |
-| Organisation policy (agents, GitHub modes, AWS profiles, repository kits, `copy_logins`, the global policy override) | `stage`'s managed settings |
+| Organisation policy (agents, GitHub modes, AWS profiles, repository kits, `copy_logins`, gear, the global policy override) | `stage`'s managed settings |
 | Keeping files from a sandbox before it is removed (takes) | `stage`: sbx has no copy-out, so stage streams a tar through `sbx exec` and writes only files and directories under `~/.scoring-stage/takes/` |
+| The user's own files in every sandbox (gear) | `stage`, from the user's config only: sbx has no copy-in for an existing sandbox and a kit cannot read the host, so stage streams a tar through `sbx exec -i` after `sbx env create`, as it does a saved login |
 | What a kept take belongs to (repository, base branch, ships, pull requests) | `stage`: each `ship` is recorded on the task, and each take carries a `stage.json` stage writes; a sandbox cannot supply it |
 | Reporting sbx's global credential bindings | `stage setup`, read-only; `credentials.yaml` stays sbx's |
 

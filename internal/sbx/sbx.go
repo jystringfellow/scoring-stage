@@ -49,6 +49,21 @@ func Feed(input io.Reader, args ...string) error {
 	return err
 }
 
+func FeedWithin(timeout time.Duration, input io.Reader, args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, "sbx", args...)
+	command.WaitDelay = time.Second
+	command.Stdin = input
+	stderr := &tail{limit: stderrKept}
+	command.Stderr = stderr
+	err := command.Run()
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return &Error{fmt.Sprintf("sbx %s did not finish within %s", strings.Join(args[:min(2, len(args))], " "), timeout)}
+	}
+	return failure(err, args, string(stderr.kept))
+}
+
 func run(capture bool, stdin io.Reader, args []string) (string, error) {
 	command := exec.Command("sbx", args...)
 	command.Stdin = stdin

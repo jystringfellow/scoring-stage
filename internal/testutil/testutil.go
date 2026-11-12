@@ -78,7 +78,7 @@ printf '%s\n' "$*" >> "$FAKE_SBX_LOG"
 if [ "$1" = exec ]; then
   case " $* " in
     *"tar -cf -"*) if [ -f "$FAKE_SBX_STATE/takes.hang" ]; then sleep 30; fi; if [ -f "$FAKE_SBX_STATE/takes.fail" ]; then cat "$FAKE_SBX_STATE/takes.fail" >&2; exit 1; fi; [ -f "$FAKE_SBX_STATE/takes.tar" ] && cat "$FAKE_SBX_STATE/takes.tar" ;;
-    *" -i "*) for last; do :; done; mkdir -p "$FAKE_SBX_STATE/box"; cat > "$FAKE_SBX_STATE/box/$(basename "$last")" ;;
+    *" -i "*) for last; do :; done; if [ -f "$FAKE_SBX_STATE/feed.fail" ]; then cat > /dev/null; cat "$FAKE_SBX_STATE/feed.fail" >&2; exit 1; fi; mkdir -p "$FAKE_SBX_STATE/box"; cat > "$FAKE_SBX_STATE/box/$(basename "$last")" ;;
     *" cat "*) for last; do :; done; file="$FAKE_SBX_STATE/box/$(basename "$last")"; [ -s "$file" ] || { echo "cat: No such file or directory" >&2; exit 1; }; cat "$file" ;;
   esac
   exit 0
@@ -163,6 +163,10 @@ func (f *FakeSbx) FailTakes(message string) {
 // HangTakes makes the fake sandbox go quiet when asked for a take.
 func (f *FakeSbx) HangTakes() {
 	WriteFile(f.t, filepath.Join(f.State, "takes.hang"), "")
+}
+
+func (f *FakeSbx) FailFeeds(message string) {
+	WriteFile(f.t, filepath.Join(f.State, "feed.fail"), message+"\n")
 }
 
 // BoxFile is the fake sandbox's copy of the in-box file with this base name:

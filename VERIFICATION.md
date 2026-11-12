@@ -26,6 +26,10 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
 - Takes: `stage down` keeping takes before a real removal, a repository's takes approval, a take near the size,
   entry or stream limit, a sandbox that goes quiet for the 10-minute limit, and overlapping paths on the sandbox's
   tar. `stage take` was checked on 2026-11-10.
+- Gear: nothing about it has run against a live sandbox. Unchecked are the copy itself (a tar stream into
+  `sbx exec -i -u agent ... tar -xf -`), that the sandbox's tar replaces an existing file or link and merges into
+  an existing directory, the modes and owner the files end up with, a destination the sandbox user cannot write,
+  the 5-minute limit, and whether a kit's `startup` command has already run when `sbx env create` returns.
 - A take's `stage.json` and the ships `stage ship` records on a task: run only against fakes.
 - Book and repository kit refusals: a changed kit asking again, a book claiming a reserved service, and a
   published kit in a book or repository config.
