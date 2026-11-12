@@ -138,7 +138,6 @@ func TestAgentPolicyCannotBeSidesteppedByReferenceAliasesOrPlainKits(t *testing.
 		"agents = [\"sbx/codex-mixin:0.167.0\"]\n",
 		"agents = [\"index.docker.io/sbx/codex-mixin\"]\n",
 		"agents = [\"registry-1.docker.io/sbx/codex-mixin:1\"]\n",
-		"agents = [\"docker.io/SBX/Codex-Mixin:1\"]\n",
 		"kits = [\"docker.io/sbx/codex-mixin:0.167.0\"]\n",
 	} {
 		home := filepath.Join(t.TempDir(), "home")

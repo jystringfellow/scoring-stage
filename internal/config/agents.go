@@ -236,7 +236,31 @@ func checkAgentCredentials(secrets, bindings map[string]any, where string) error
 			}
 		}
 	}
-	return refuseGitHubService(secrets, bindings, where)
+	if err := refuseGitHubService(secrets, bindings, where); err != nil {
+		return err
+	}
+	return refuseUncanonicalServices(secrets, bindings, where)
+}
+
+// refuseUncanonicalServices keeps every service name in the one spelling
+// that the reserved, conflict and override checks compare.
+func refuseUncanonicalServices(secrets, bindings map[string]any, where string) error {
+	for _, kind := range []string{"binding", "secret"} {
+		table := secrets
+		if kind == "binding" {
+			table = bindings
+		}
+		for _, service := range sortedKeys(table) {
+			canonical := normalizeService(service)
+			switch {
+			case canonical == "":
+				return errorf("%s: %s %q has no name", where, kind, Printable(service))
+			case canonical != service:
+				return errorf("%s: %s %q must be written %q: service names are lower case with no spaces around them", where, kind, Printable(service), Printable(canonical))
+			}
+		}
+	}
+	return nil
 }
 
 func decodeLoginFiles(value any, where string) ([]LoginFile, error) {
@@ -317,15 +341,21 @@ func sameKit(one, other string) bool {
 	return isLocalKit(one) == isLocalKit(other) && kitIdentity(one) == kitIdentity(other)
 }
 
-// repositoryOf normalises a kit reference to registry/path without tag or
-// digest, so docker.io's aliases and letter case name the same repository.
-func repositoryOf(source string) string {
-	source = strings.ToLower(source)
+// withoutVersion drops the tag and digest from a published kit reference.
+func withoutVersion(source string) string {
 	slash := strings.LastIndex(source, "/")
 	head, last := source[:slash+1], source[slash+1:]
 	last, _, _ = strings.Cut(last, "@")
 	last, _, _ = strings.Cut(last, ":")
-	repository := head + last
+	return head + last
+}
+
+// repositoryOf normalises a kit reference to registry/path without tag or
+// digest, so docker.io's aliases name the same repository. Letter case is
+// left alone: a registry reads an upper-case first component as a host, so
+// parseKit refuses upper case rather than fold it.
+func repositoryOf(source string) string {
+	repository := withoutVersion(source)
 	first, rest, nested := strings.Cut(repository, "/")
 	switch {
 	case !nested:
@@ -348,6 +378,16 @@ func looksLikeAgentMixin(source string) bool {
 
 func (a Agents) LoginFiles(agent string) []LoginFile {
 	return a.specs[agent].login
+}
+
+func (a Agents) withoutLoginFiles() []string {
+	var names []string
+	for _, name := range a.Names() {
+		if len(a.specs[name].login) == 0 {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 func (a Agents) copyable() []string {

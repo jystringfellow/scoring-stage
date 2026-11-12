@@ -341,6 +341,10 @@ command = "{gh} auth token"                          # {gh} is the gh CLI stage 
 ```
 
 - `kit` is the only required key. A name is lower-case letters, digits, `-` and `_`.
+- A published kit reference, here and anywhere else stage reads one, is written in lower case up to its tag. A
+  registry reads an upper-case first part as a host, so stage refuses upper case there and does not guess.
+- Service names are lower case with no spaces around them, in an agent's tables and in your own `[secrets]` and
+  `[bindings]`; any other spelling is refused with the one to use.
 - Defining a built-in name replaces that agent. `bindings`, `secrets` and `login_files` you leave out keep the
   built-in values, so `[agent.claude]` with only `kit = "docker.io/sbx/claude-mixin:<version>"` moves Claude Code to
   another version of its mixin. An empty table or list clears the built-in value.
@@ -350,8 +354,8 @@ command = "{gh} auth token"                          # {gh} is the gh CLI stage 
   `{gh} auth token`: stage puts gh's shell-quoted path in its place, and refuses a command that has `{gh}` inside
   quotes, escaped or joined to other text. When gh is not found, `stage up` leaves that secret out and says so; the
   agent then has its binding but no credential.
-- When two agents in one sandbox set the same service differently, `stage up` stops unless your own
-  `[bindings.<service>]` or `[secrets.<service>]` settles it.
+- When two agents in one sandbox set the same service differently, `stage up` stops, with or without gh, unless
+  your own `[bindings.<service>]` or `[secrets.<service>]` settles it.
 - A login file is an absolute path in the sandbox. stage reads and writes it as the sandbox's user, and it need not
   be under that user's home. stage keeps it in `~/.scoring-stage/logins/<name>/` under its file name, so two login
   files of one agent cannot share a file name, whatever its letter case. A file marked `optional` is carried when

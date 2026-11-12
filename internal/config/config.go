@@ -210,6 +210,9 @@ func LoadSettings(home string) (*Settings, error) {
 	if err := refuseGitHubService(settings.secrets, settings.bindings, path); err != nil {
 		return nil, err
 	}
+	if err := refuseUncanonicalServices(settings.secrets, settings.bindings, path); err != nil {
+		return nil, err
+	}
 	if settings.copyLogins, err = optionalStrings(data, "copy_logins", path); err != nil {
 		return nil, err
 	}
@@ -226,7 +229,7 @@ func LoadSettings(home string) (*Settings, error) {
 	}
 	for _, agent := range settings.copyLogins {
 		if !contains(settings.Agents.copyable(), agent) {
-			return nil, errorf("%s: copy_logins: %s cannot be copied (copyable: %s); claude, codex and copilot sign in through the proxy", path, agent, strings.Join(settings.Agents.copyable(), ", "))
+			return nil, errorf("%s: copy_logins: %s cannot be copied (copyable: %s); %s have no login files", path, agent, strings.Join(settings.Agents.copyable(), ", "), strings.Join(settings.Agents.withoutLoginFiles(), ", "))
 		}
 		if err := settings.Managed.CheckCopyLogin(agent); err != nil {
 			return nil, errorf("%s: %v", path, err)
@@ -658,6 +661,7 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 	}
 
 	agentBinding, agentSecretOwner := map[string]string{}, map[string]string{}
+	agentBindings, agentSecrets := map[string]any{}, map[string]any{}
 	var warnings []string
 	for _, name := range agentNames {
 		spec := agents.specs[name]
@@ -665,21 +669,35 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 			if _, own := settings.bindings[service]; own {
 				continue
 			}
-			if err := addAgentDefault(bindings, agentBinding, service, spec.bindings[service], name, "binding"); err != nil {
-				return nil, err
+			if other, taken := agentBinding[service]; taken {
+				if !reflect.DeepEqual(agentBindings[service], spec.bindings[service]) {
+					return nil, errorf("agent %s sets binding %s differently from agent %s", name, service, other)
+				}
+				continue
+			}
+			agentBinding[service], agentBindings[service] = name, spec.bindings[service]
+			if _, set := bindings[service]; !set {
+				bindings[service] = spec.bindings[service]
 			}
 		}
 		for _, service := range sortedKeys(spec.secrets) {
 			if _, own := settings.secrets[service]; own {
 				continue
 			}
-			secret, usable := agentSecret(spec.secrets[service], selection.Gh)
-			if !usable {
-				warnings = append(warnings, fmt.Sprintf("agent %s's secret %s needs the gh CLI, which was not found, so the sandbox has no %s secret", name, service, service))
+			if other, taken := agentSecretOwner[service]; taken {
+				if !reflect.DeepEqual(agentSecrets[service], spec.secrets[service]) {
+					return nil, errorf("agent %s sets secret %s differently from agent %s", name, service, other)
+				}
 				continue
 			}
-			if err := addAgentDefault(secrets, agentSecretOwner, service, secret, name, "secret"); err != nil {
-				return nil, err
+			agentSecretOwner[service], agentSecrets[service] = name, spec.secrets[service]
+			if _, set := secrets[service]; set {
+				continue
+			}
+			if secret, usable := agentSecret(spec.secrets[service], selection.Gh); usable {
+				secrets[service] = secret
+			} else {
+				warnings = append(warnings, fmt.Sprintf("agent %s's secret %s needs the gh CLI, which was not found, so the sandbox has no %s secret", name, service, service))
 			}
 		}
 	}
@@ -914,6 +932,10 @@ func parseKit(entry any, baseDir, owner string) (Kit, error) {
 	case strings.HasPrefix(kit.Source, "~"):
 		kit.Source = Resolve(ExpandUser(kit.Source))
 	}
+	if repository := withoutVersion(kit.Source); !kit.IsLocal() && repository != strings.ToLower(repository) {
+		return kit, errorf("%s: kit %s has upper-case letters before its tag; write the registry and repository in lower case, since a registry reads an upper-case first part as a host and not as a docker.io path",
+			owner, Printable(kit.Source))
+	}
 	return kit, nil
 }
 
@@ -985,22 +1007,6 @@ func bookSecret(spec any, bookPath, owner string) (map[string]any, error) {
 		copied["command"] = strings.ReplaceAll(command, "{book}", ShellQuote(bookPath))
 	}
 	return copied, nil
-}
-
-// addAgentDefault adds a chosen agent's binding or secret unless a book or
-// the broker already set that service, and refuses two agents that disagree.
-func addAgentDefault(target map[string]any, owners map[string]string, service string, value any, agent, kind string) error {
-	if other, taken := owners[service]; taken {
-		if !reflect.DeepEqual(target[service], value) {
-			return errorf("agent %s sets %s %s differently from agent %s", agent, kind, service, other)
-		}
-		return nil
-	}
-	if _, set := target[service]; !set {
-		target[service] = value
-		owners[service] = agent
-	}
-	return nil
 }
 
 func mergeOnce(target map[string]any, owners map[string]string, key string, value any, owner, kind string) error {

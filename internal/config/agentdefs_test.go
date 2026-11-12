@@ -293,15 +293,147 @@ func TestNoBuiltInAgentsHostCountsAsGitHubs(t *testing.T) {
 	}
 }
 
-func TestAGitHubHostInABuiltInAgentsBindingWouldStillCountAsGitHubs(t *testing.T) {
-	original := builtinAgents["claude"]
-	widened := original
-	widened.bindings = map[string]any{"anthropic": domains("oauth", "api.anthropic.com", "api.github.com")}
-	builtinAgents["claude"] = widened
-	t.Cleanup(func() { builtinAgents["claude"] = original })
-	if !ReachesGitHub("api.github.com") {
-		t.Error("a GitHub host was exempted because a built-in agent binds it")
+func TestOnlyTheListedHostsBesideGitHubAreExemptAndABuiltInAgentBindsEachOne(t *testing.T) {
+	bound := map[string]bool{}
+	for _, spec := range builtinAgents {
+		for _, binding := range spec.bindings {
+			hosts, _ := bindingDomains(binding)
+			for _, host := range hosts {
+				bound[normalizeHost(host)] = true
+			}
+		}
 	}
+	for _, host := range hostsBesideGitHub {
+		if !bound[host] {
+			t.Errorf("%s is exempt from the GitHub rule but no built-in agent binds it", host)
+		}
+		for _, wider := range []string{"x." + host, "*." + host, strings.SplitN(host, ".", 2)[1]} {
+			if !ReachesGitHub(wider) {
+				t.Errorf("%s was exempted along with %s", wider, host)
+			}
+		}
+	}
+	for _, host := range []string{"api.github.com", "github.com", "uploads.github.com", "*.github.com", "raw.githubusercontent.com", "models.github.ai"} {
+		if !ReachesGitHub(host) {
+			t.Errorf("%s was not treated as reaching GitHub", host)
+		}
+		_, err := LoadSettings(homeWith(t, "[agent.claude]\nkit = \"docker.io/sbx/claude-mixin:9.9.9\"\n[agent.claude.bindings.anthropic]\noauth = { domains = [\"api.anthropic.com\", \""+host+"\"] }\n"))
+		expectError(t, err, "GitHub credentials come only from [github] mode")
+	}
+}
+
+func TestGhMayStandNextToAShellSeparatorButNotNextToOtherText(t *testing.T) {
+	definition := func(command string) string {
+		return "[agent.example]\nkit = \"docker.io/org/kit:1\"\n[agent.example.secrets.example]\ncommand = '" + command + "'\n"
+	}
+	for command, want := range map[string]string{
+		"true;{gh} auth token":        "true;/usr/bin/gh auth token",
+		"echo $({gh} auth token)":     "echo $(/usr/bin/gh auth token)",
+		"({gh} auth token)":           "(/usr/bin/gh auth token)",
+		"{gh};true":                   "/usr/bin/gh;true",
+		"true && {gh} auth token|cat": "true && /usr/bin/gh auth token|cat",
+	} {
+		composition := composeWith(t, load(t, homeWith(t, definition(command))), Selection{Agents: []string{"example"}, Gh: "/usr/bin/gh"})
+		if got := composition.Secrets["example"]; !reflect.DeepEqual(got, map[string]any{"command": want}) {
+			t.Errorf("%s: secret = %v", command, got)
+		}
+	}
+	for _, command := range []string{"{gh}x auth token", "x{gh} auth token", "{gh}{gh}", "a={gh} auth token", "{gh}/../other"} {
+		_, err := LoadSettings(homeWith(t, definition(command)))
+		if err == nil || !strings.Contains(err.Error(), "{gh} must stand unquoted") {
+			t.Errorf("%s: got %v", command, err)
+		}
+	}
+}
+
+func TestAPublishedKitReferenceIsWrittenInLowerCaseBeforeItsTag(t *testing.T) {
+	const fragment = "has upper-case letters"
+	for _, reference := range []string{"SBX/claude-mixin:1", "Docker.io/sbx/claude-mixin:1", "docker.io/SBX/claude-mixin:1", "docker.io/sbx/Claude-mixin:1", "Registry.example.com/org/kit@sha256:abc"} {
+		for name, body := range map[string]string{
+			"definition": "[agent.claude]\nkit = \"" + reference + "\"\n",
+			"agents":     "agents = [\"" + reference + "\"]\n",
+			"kits":       "kits = [{ source = \"" + reference + "\" }]\n",
+			"base":       "base = \"" + reference + "\"\n",
+		} {
+			settings, err := LoadSettings(homeWith(t, body))
+			if err == nil {
+				_, err = Compose(settings, Selection{})
+			}
+			if err == nil || !strings.Contains(err.Error(), fragment) {
+				t.Errorf("%s %s: got %v", name, reference, err)
+			}
+		}
+		_, err := Compose(load(t, homeWith(t, "")), Selection{Agents: []string{reference}})
+		expectError(t, err, fragment)
+		_, err = LoadBook(BuiltinAgents(), book(t, t.TempDir(), "org", "kits = [\""+reference+"\"]\n"))
+		expectError(t, err, fragment)
+	}
+	composeWith(t, load(t, homeWith(t, "agents = [\"docker.io/sbx/claude-mixin:1.0-RC1\"]\nkits = [\"registry.example.com/org/kit:Latest\"]\n")), Selection{})
+}
+
+func TestManagedSettingsJudgeADefinitionsKitByTheRegistryAndPathARegistryWouldRead(t *testing.T) {
+	for policy, agent := range map[string]string{"allowed_agents = [\"claude\", \"agy\"]\n": "claude", "copy_logins = [\"agy\"]\n": "agy"} {
+		managedFiles(t, policy)
+		mixin := strings.TrimPrefix(repositoryOf(builtinAgents[agent].kit), "docker.io/sbx/")
+		for _, reference := range []string{"sbx/" + mixin + ":1", "docker.io/sbx/" + mixin + ":1", "index.docker.io/sbx/" + mixin + ":1", "registry-1.docker.io/sbx/" + mixin + "@sha256:abc", "docker.io/sbx/" + mixin + ":1.0-RC1"} {
+			if _, err := LoadSettings(homeWith(t, "[agent."+agent+"]\nkit = \""+reference+"\"\n")); err != nil {
+				t.Errorf("%s%s: %v", policy, reference, err)
+			}
+		}
+		for reference, fragment := range map[string]string{
+			"SBX/" + mixin + ":1":                       "has upper-case letters",
+			"Docker.io/sbx/" + mixin + ":1":             "has upper-case letters",
+			"docker.io/Sbx/" + mixin + ":1":             "has upper-case letters",
+			"registry.example.com/sbx/" + mixin + ":1":  "agent " + agent + " is defined",
+			"localhost/sbx/" + mixin + ":1":             "agent " + agent + " is defined",
+			"localhost:5000/sbx/" + mixin + ":1":        "agent " + agent + " is defined",
+			"docker.io.example.com/sbx/" + mixin + ":1": "agent " + agent + " is defined",
+			"docker.io/library/sbx/" + mixin + ":1":     "agent " + agent + " is defined",
+			"docker.io/sbx/" + mixin + "-x:1":           "agent " + agent + " is defined",
+			mixin + ":1":                                "agent " + agent + " is defined",
+		} {
+			_, err := LoadSettings(homeWith(t, "[agent."+agent+"]\nkit = \""+reference+"\"\n"))
+			if err == nil || !strings.Contains(err.Error(), fragment) {
+				t.Errorf("%s%s: got %v, want %q", policy, reference, err, fragment)
+			}
+		}
+	}
+}
+
+func TestServiceNamesAreWrittenInTheirCanonicalForm(t *testing.T) {
+	kit := "[agent.example]\nkit = \"docker.io/org/kit:1\"\n"
+	for body, fragment := range map[string]string{
+		kit + "[agent.example.bindings.OpenAI]\napiKey = { domains = [\"x.example.com\"] }\n": `binding "OpenAI" must be written "openai"`,
+		kit + "[agent.example.secrets.\" copilot\"]\ncommand = \"cat /tmp/k\"\n":              `secret " copilot" must be written "copilot"`,
+		kit + "[agent.example.secrets.\" \"]\ncommand = \"cat /tmp/k\"\n":                     `secret " " has no name`,
+		"[secrets.Copilot]\ncommand = \"cat /tmp/k\"\n":                                       `secret "Copilot" must be written "copilot"`,
+		"[bindings.\"openai \"]\napiKey = { domains = [\"x.example.com\"] }\n":                `binding "openai " must be written "openai"`,
+	} {
+		_, err := LoadSettings(homeWith(t, body))
+		if err == nil || !strings.Contains(err.Error(), fragment) {
+			t.Errorf("%q: got %v, want %s", body, err, fragment)
+		}
+	}
+}
+
+func TestTwoAgentsThatDisagreeOnASecretAreRefusedWithOrWithoutGh(t *testing.T) {
+	home := homeWith(t, "[agent.example]\nkit = \"docker.io/org/kit:1\"\n[agent.example.secrets.copilot]\ncommand = \"cat /tmp/k\"\n")
+	for _, gh := range []string{"", "/usr/bin/gh"} {
+		for _, chosen := range [][]string{{"copilot", "example"}, {"example", "copilot"}} {
+			_, err := Compose(load(t, home), Selection{Agents: chosen, Gh: gh})
+			expectError(t, err, "agent "+chosen[1]+" sets secret copilot differently from agent "+chosen[0])
+		}
+	}
+	same := homeWith(t, "[agent.example]\nkit = \"docker.io/org/kit:1\"\n[agent.example.secrets.copilot]\ncommand = \"{gh} auth token\"\n")
+	composition := composeWith(t, load(t, same), Selection{Agents: []string{"copilot", "example"}})
+	if _, set := composition.Secrets["copilot"]; set || len(composition.Warnings) != 1 {
+		t.Errorf("secrets %v warnings %v", composition.Secrets, composition.Warnings)
+	}
+}
+
+func TestCopyLoginsNamesTheAgentsThatHaveNoLoginFilesFromTheTable(t *testing.T) {
+	_, err := LoadSettings(homeWith(t, "copy_logins = [\"example\"]\n[agent.example]\nkit = \"docker.io/org/kit:1\"\n"))
+	expectError(t, err, "copy_logins: example cannot be copied (copyable: agy); claude, codex, copilot, example have no login files")
 }
 
 func TestAnEmptyTableOrListClearsWhatTheBuiltInAgentHad(t *testing.T) {

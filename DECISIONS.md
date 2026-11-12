@@ -177,7 +177,9 @@ command, which runs on the host; and login files, which are credentials copied i
 a book may do only inside the fence and a repository not at all, so a book or repository with an `agent` table is
 refused and both still only name agents. The services a defined agent binds or supplies, and its bindings' hosts,
 are reserved against books and repository kits exactly as a built-in agent's are. A definition is held to the same
-checks as other config, and cannot set `github` or `stage-broker`. Managed settings name agents, so a definition
+checks as other config, and cannot set `github` or `stage-broker`. So that every comparison of kits and services
+agrees, a published kit reference with upper-case letters before its tag is refused wherever stage reads one, and
+a service name that is not lower case and unpadded is refused in the user's config. Managed settings name agents, so a definition
 must not change what a listed name means: with an agent list, a definition may set only `kit`, to another version
 of a built-in agent's own kit; with a `copy_logins` list, no definition may set login files or move a listed name
 to another kit. Rejected: letting a book define an agent, since a book could then supply a published kit and bind a
