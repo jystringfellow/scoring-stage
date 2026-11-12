@@ -145,9 +145,24 @@ secret_absent() {
 }
 
 check "the repository is the sandbox's clone at the host path" "git rev-parse HEAD >/dev/null && test \"\$PWD\" = '$repo_dir'"
-check "agent CLIs run" "claude --version && codex --version && copilot --version"
+agents="$(jq -r '.agents // [] | .[]' "$task")"
+[ -n "$agents" ] || echo "skip agent CLIs run (the task records no agents)"
+guidance_dirs=""
+for agent in $agents; do
+  case "$agent" in
+    claude) check "the claude CLI runs" "claude --version"; guidance_dirs="$guidance_dirs ~/.claude" ;;
+    codex) check "the codex CLI runs" "codex --version"; guidance_dirs="$guidance_dirs ~/.codex" ;;
+    copilot) check "the copilot CLI runs" "copilot --version" ;;
+    agy) check "the agy CLI is installed" "command -v agy" ;;
+    *) echo "skip the $agent CLI runs (not an agent this script knows)" ;;
+  esac
+done
 check "commits carry the user's git identity" "test -n \"\$(git config --global user.name)\" && test -n \"\$(git config --global user.email)\""
-check "the agent is told how the sandbox behaves" "grep -rqs 'scoring-stage sandbox' ~/.claude ~/.codex"
+if [ -n "$guidance_dirs" ]; then
+  check "the agent is told how the sandbox behaves" "grep -rqs 'scoring-stage sandbox'$guidance_dirs"
+else
+  echo "skip the agent is told how the sandbox behaves (this script knows where only claude and codex keep guidance)"
+fi
 check "git fetch from github.com works" "git ls-remote https://github.com/octocat/Hello-World.git HEAD >/dev/null"
 check "git push is refused at the proxy" "test \"\$($(code -X POST https://github.com/octocat/Hello-World.git/git-receive-pack))\" = 403"
 check "a real git push fails" "! git push -q origin HEAD:refs/heads/stage-acceptance-must-not-exist 2>/dev/null"

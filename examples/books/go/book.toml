@@ -1,0 +1,3 @@
+name = "go"
+description = "A Go toolchain for repositories written in Go"
+kits = ["./kits/go"]
