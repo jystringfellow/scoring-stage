@@ -18,7 +18,7 @@ const (
 	RepoKitsDeny = "deny"
 )
 
-var managedKeys = []string{"allowed_agents", "denied_agents", "aws", "github", "repo_kits", "copy_logins", "allow_global_policy"}
+var managedKeys = []string{"allowed_agents", "denied_agents", "aws", "github", "repo_kits", "copy_logins", "allow_global_policy", "allow_gear"}
 var managedAWSKeys = []string{"allowed_profiles", "denied_profiles"}
 var managedGitHubKeys = []string{"allowed_modes", "app_client_id"}
 var managedDefaultGitHubModes = []string{GitHubFineGrained, GitHubNone}
@@ -49,6 +49,7 @@ type Managed struct {
 	copyLogins        []string
 	copyLoginsSet     bool
 	allowGlobalPolicy bool
+	refusesGear       bool
 	gitHubModes       []string
 	gitHubModesSet    bool
 	appClientID       string
@@ -168,6 +169,13 @@ func LoadManaged() (*Managed, error) {
 				return nil, errorf("%s: allow_global_policy must be true or false", file)
 			}
 			managed.allowGlobalPolicy = managed.allowGlobalPolicy && allowed
+		}
+		if value, present := data["allow_gear"]; present {
+			allowed, ok := value.(bool)
+			if !ok {
+				return nil, errorf("%s: allow_gear must be true or false", file)
+			}
+			managed.refusesGear = managed.refusesGear || !allowed
 		}
 	}
 	return managed, nil
@@ -322,6 +330,14 @@ func (m *Managed) CheckCopyLogin(agent string) error {
 	return nil
 }
 
+func (m *Managed) CheckGear() error {
+	m = m.orUnmanaged()
+	if m.refusesGear {
+		return errorf("gear is refused by %s (allow_gear = false)", m.where())
+	}
+	return nil
+}
+
 func (m *Managed) AllowsGlobalPolicy() bool { return m.orUnmanaged().allowGlobalPolicy }
 
 func (m *Managed) AllowedGitHubModes() []string {
@@ -406,6 +422,9 @@ func (m *Managed) Summary() []string {
 	}
 	if !m.allowGlobalPolicy {
 		lines = append(lines, "  --allow-global-policy: refused")
+	}
+	if m.refusesGear {
+		lines = append(lines, "  gear: refused")
 	}
 	return lines
 }

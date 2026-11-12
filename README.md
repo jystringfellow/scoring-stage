@@ -199,9 +199,97 @@ file: an entry named `stage.json` at the root of what it sends, in any letter ca
 If a task's own record cannot be read, `stage down` cannot tell which takes to keep, so it leaves the sandbox in
 place unless you pass `--discard-takes`.
 
-Takes are records for you and your tools to read. stage never copies them into a sandbox. A repository's takes
+Takes are records for you and your tools to read. stage never copies them into a sandbox; only [gear](#gear),
+which you list yourself, goes in. A repository's takes
 need your approval like its kits, and `repo_kits = "deny"` in managed settings refuses them. The approval is for
 that list in that repository: the same list in another repository asks again.
+
+## Gear
+
+Takes leave a sandbox; **gear** goes in. Gear is your own files on this machine, such as a tool's personal config
+or a directory of presets, that stage copies into every new sandbox at `stage up`, so the sandbox uses your setup
+instead of whatever a repository or kit would default to.
+
+```toml
+gear = [                                                 # in ~/.scoring-stage/config.toml only
+  "~/.tool/config.toml",                                 # the same path under your home and the sandbox user's
+  { from = "~/presets/sandbox", to = "~/.tool/presets" },  # or a different place on either side
+]
+```
+
+**Everything you list is readable by the agent, which runs with prompts off.** List only what you would hand to
+it. Credentials stay on the host, behind secrets and bindings, so stage refuses gear that is, is inside or holds:
+
+- stage's own directory (`~/.scoring-stage`, or `STAGE_HOME`), which keeps tokens, saved logins and broker grants;
+- a known credential location under your home: `.ssh`, `.aws`, `.azure`, `.gnupg`, `.kube`, `.netrc`, `.npmrc`,
+  `.pypirc`, `.git-credentials`, `.vault-token`, `.pgpass`, `.my.cnf`, `.password-store`, `.terraform.d`,
+  `.docker/config.json`, `.cargo/credentials` and `.cargo/credentials.toml`, `.gem/credentials`,
+  `.m2/settings.xml`, `.claude/.credentials.json`, `.codex/auth.json`, `.config/git/credentials`, `.config/gh`,
+  `.config/github-copilot`, `.config/gcloud`, `.config/sbx`, `.config/rclone`, `.config/op`,
+  `.config/containers/auth.json`, `.local/share/keyrings`, `Library/Keychains`, the shell histories
+  `.bash_history`, `.zsh_history` and `.local/share/fish/fish_history`, and every agent's login files;
+- where these variables move one, when they are set: `AWS_SHARED_CREDENTIALS_FILE`, `AWS_CONFIG_FILE`,
+  `KUBECONFIG` (each file in the list), `GNUPGHOME`, `DOCKER_CONFIG` (its `config.json`), `HISTFILE`, and
+  `XDG_CONFIG_HOME` for the `.config` entries, in addition to the places above;
+- anything outside one of those directories that a link inside it points to, such as the file behind
+  `~/.aws/credentials` when a dotfiles manager links it.
+
+So `~/.config`, `~/.docker`, `~/.cargo` and `~/.local/share` are refused whole; list the files or directories
+beside the credential that you mean. The comparison follows links and ignores letter case. If stage cannot find
+your home directory, cannot read one of these directories, or finds more than 100,000 entries in one, it refuses
+all gear, since it could not make the check.
+
+**The list is a guard against mistakes, not a guarantee.** stage does not look inside your files, so a token
+written into a config file you list, or kept anywhere the list does not name, is copied like anything else. A
+hard link to a credential is not detected. Everything that is copied is readable by the agent.
+
+A `to` is refused when it is, is inside or holds one of an agent's login files, which stage copies and saves
+itself with `copy_logins`, or the sandbox's workspace, where `stage ship` would find your files among the agent's
+work.
+
+These checks run at `stage up`, and `stage setup` reports what they would refuse. They do not stop other
+commands, so a gear entry stage refuses never keeps you from `stage down`, `stage take` or `stage ship` on a
+sandbox you already have.
+
+Only your own config may list gear. A repository's config, a book and a `[[repos]]` rule that list it are refused,
+since any of them could otherwise have stage hand your files to an agent. There is no flag to leave gear out of
+one sandbox; remove the entry before `stage up`.
+
+A string entry starts with `~/`. In `{ from, to }`, each path starts with `/` or `~/` and has no `..`; `from` is on
+your machine and `to` is in the sandbox, where `~/` is the sandbox user's home. Two entries cannot share a `to`.
+What is copied:
+
+- A regular file, or a directory with the regular files and directories under it. A listed path that is a link is
+  followed. Links and special files inside a listed directory are never followed or copied, wherever they point,
+  and `stage up` says how many it left out.
+- A path that is not on this machine is passed over with one line. A listed path that is neither a file nor a
+  directory, or a file or directory stage cannot read, stops `stage up` before the sandbox is created.
+- At most 100 MiB and 10,000 files and directories across all gear. More stops `stage up` before the sandbox is
+  created. A file that changes size, or turns into a link, between that check and its copy fails the copy.
+  stage holds each listed directory open from the check to the copy, so a directory under it that is swapped for
+  a link in between cannot bring in a file from outside.
+- Files keep their owner's permission bits, so an executable stays one, and get none for group or others.
+  Directories gear creates are mode 700; a directory that is already there, such as `~/.config`, keeps its mode.
+  Everything is owned by the sandbox user, and written as that user, so a destination that user cannot write
+  stops `stage up`.
+
+Your copy wins. Gear is unpacked over whatever is at the destination, so a file a kit wrote there is replaced, and
+a directory is merged: your files replace those of the same name, and files only the kit wrote stay. Entries are
+copied in the order listed, so a later entry wins over an earlier one it overlaps.
+
+stage can first reach a sandbox when `sbx env create` returns, so that is when gear lands: through `sbx exec`, the
+way saved logins are copied, before those logins and before stage says the sandbox is up. By then sbx has run
+the kits' install commands, and may have run their `startup` commands for the first time, so a kit must not expect
+your gear in either. A kit that needs a file there ships its own default, which your gear then replaces. Whatever
+runs later sees your gear: `stage shell`, `stage exec`, the agent, and a `startup` command on a later start. Gear
+is copied once: a later change on your machine reaches the next sandbox, not this one. None of this has been run
+against a live sandbox yet; see [VERIFICATION.md](VERIFICATION.md).
+
+The copy of all gear together has 5 minutes. If it runs out, if a copy fails, or if sbx finishes without the
+sandbox confirming that it unpacked what stage sent, `stage up` fails: the sandbox is created and may hold only
+part of your gear. It is still a working sandbox, but stage does not call it up; fix the cause, then run
+`stage down <slug>` and `stage up` again. `stage up --plan` shows what would be copied, and `stage setup` shows the
+setting. An administrator can refuse gear with `allow_gear = false` in [managed settings](#managed-settings).
 
 ## One-time setup
 
@@ -458,7 +546,8 @@ tested with stage.
 
 Configuration has two levels: yours in `~/.scoring-stage/config.toml`, which applies to every sandbox you create
 and may set everything below, and a repository's in its `.scoring-stage/config.toml`, which travels with the code and may
-only ask for agents, installed books, its own kits and takes.
+only ask for agents, installed books, its own kits and takes. [Gear](#gear) is yours alone: neither a repository
+nor a book may list it.
 
 `~/.scoring-stage/config.toml` (all keys optional):
 
@@ -467,6 +556,8 @@ agents = ["claude", "codex"]                       # the agents you use; names o
 books = ["~/Code/my-org-books/backend"]            # installed books, relative to ~/.scoring-stage; each applies only when asked for
 base = "docker.io/sbx/shell:1.1.0"                 # the workload kit
 kits = ["./kits/personal"]                         # extra kits, relative to ~/.scoring-stage
+takes = ["~/.tool/runs"]                           # sandbox paths kept on your machine; see Takes
+gear = ["~/.tool/config.toml"]                     # your files copied into every new sandbox; see Gear
 
 [github]
 mode = "fine-grained"                              # or "app" (with app_client_id), "gh" (your gh login, which can write) or "none"
@@ -552,7 +643,7 @@ kits = ["./.scoring-stage/kits/rules"]  # inside the repository; approved by you
 ```
 
 A repository is not trusted with anything that acts on the host. It can add agents by name, installed books by
-name, its own kits and [takes](#takes), but it cannot set secrets, bindings, AWS profiles, GitHub access or the base. A book it asks
+name, its own kits and [takes](#takes), but it cannot set secrets, bindings, AWS profiles, GitHub access, [gear](#gear) or the base. A book it asks
 for that you have not installed is an error. A repository's kit is a `./` path inside the repository, with no
 symbolic links; published kits are refused.
 
@@ -615,6 +706,7 @@ denied_agents = ["agy"]
 repo_kits = "deny"                       # "ask" (default) or "deny": refuse kits and books a repository asks for
 copy_logins = []                         # agents whose logins may be copied between sandboxes
 allow_global_policy = false              # refuse stage up --allow-global-policy
+allow_gear = false                       # refuse gear: no user files are copied into sandboxes
 
 [aws]
 allowed_profiles = ["dev-*", "sandbox"]  # glob patterns a granted profile must match
@@ -638,6 +730,11 @@ that differs from the pin is ignored with a warning, and a saved login for any o
 Without a pin, users under managed settings can point app mode at any app, and only stage's read-only installation
 check stands between them and an app that can write; `stage setup` warns when `allowed_modes` allows `"app"` without
 a pin, and when a pin is set but app mode is not allowed.
+
+`allow_gear = false` refuses [gear](#gear): `stage up` refuses while the user's config lists any, and
+`stage setup` warns. Other commands still run, so existing sandboxes can be shipped, taken from and removed.
+Without the key gear is allowed, and a `false` in any managed file wins. It is all or nothing; managed settings
+cannot allow some paths and refuse others.
 
 `stage setup` shows the managed settings in effect and warns about a managed file or directory that is not owned by
 root or that its group or others can write. A managed file stage cannot read stops stage rather than being skipped. They only
@@ -693,6 +790,10 @@ and what has not been run live yet.
   appear there, and GraphQL can use them.
 - agy's Google sign-in is a token file inside the sandbox that the agent can read. With `copy_logins`, every
   sandbox with agy holds a live copy.
+- [Gear](#gear) is copied into the sandbox as files the agent can read, and stage does not look inside them. The
+  refused credential locations are a fixed list that guards against mistakes; a secret kept anywhere else,
+  written into a config file you list, or reached by a hard link, goes in. Gear arrives after kit install commands have run, and is not
+  refreshed while the sandbox lives. The copy has run only against fakes.
 - AWS keys from the broker enter the sandbox and stay usable until they expire, up to about 12 hours, even after
   `stage down`.
 - Bindings are shared by every sandbox. One written for a sandbox stays after `stage down` and approves that service

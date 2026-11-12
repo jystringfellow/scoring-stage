@@ -26,6 +26,13 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
 - Takes: `stage down` keeping takes before a real removal, a repository's takes approval, a take near the size,
   entry or stream limit, a sandbox that goes quiet for the 10-minute limit, and overlapping paths on the sandbox's
   tar. `stage take` was checked on 2026-11-10.
+- Gear: `stage up` with gear has not run against a live sandbox. On 2026-11-12 the sandbox side was run alone on
+  sbx 0.51 (GNU tar 1.35): archives built by the gear package were piped into `sbx exec -i -u agent` with the
+  unpack script. An existing file was replaced, a directory merged with what was there, existing directories kept
+  mode 755, new directories and files came out 700 and 600 owned by `agent`, a name with non-ASCII letters and
+  spaces arrived intact, the confirmation line came back on stdout, and a destination the sandbox user could not
+  create exited non-zero without it. Unchecked are the full `stage up` path, the 5-minute limit, and whether a
+  kit's `startup` command has already run when `sbx env create` returns.
 - A take's `stage.json` and the ships `stage ship` records on a task: run only against fakes.
 - Book and repository kit refusals: a changed kit asking again, a book claiming a reserved service, and a
   published kit in a book or repository config.

@@ -38,6 +38,9 @@ func LoadRepoConfig(repoDir string) (*RepoConfig, error) {
 	if _, present := data["agent"]; present {
 		return nil, errorf("%s: a repository cannot define agents; it names them in agents, and an agent is defined in ~/.scoring-stage/config.toml", path)
 	}
+	if err := refuseGear(data, path+": a repository"); err != nil {
+		return nil, err
+	}
 	var refused []string
 	for _, key := range hostOnlyKeys {
 		if _, present := data[key]; present {

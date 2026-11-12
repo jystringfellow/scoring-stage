@@ -447,6 +447,11 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 		bookNames = []string{"none"}
 	}
 	a.say("installed books: %s", strings.Join(bookNames, ", "))
+	if _, err := settings.CheckedGear(); err != nil {
+		a.warn("%s; stage up will refuse", err)
+	} else if len(settings.Gear) > 0 {
+		a.say("gear, copied into every new sandbox for the agent to read: %s", config.GearSummary(settings.Gear))
+	}
 	gh := a.FindGh()
 	ghLoggedIn := gh != "" && exec.Command(gh, "auth", "token").Run() == nil
 	if err := a.reportGitHub(settings, gh, ghLoggedIn); err != nil {
@@ -604,6 +609,12 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 		a.warn("no agents chosen, so the sandbox has only a shell; use --agent, agents in config.toml or %s", config.RepoConfigPath)
 	}
 
+	carry, err := a.surveyGear(settings, config.Resolve(scratch))
+	if err != nil {
+		return 0, err
+	}
+	defer carry.Close()
+
 	if len(composition.AWSProfiles) > 0 {
 		tokenFile, err := broker.Grants{Path: grantsDir(home)}.Issue(slug, composition.AWSProfiles)
 		if err != nil {
@@ -635,6 +646,7 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 		if err := sbx.Run("env", "plan", directory); err != nil {
 			return 0, err
 		}
+		a.planGear(carry)
 		a.say("plan only; env file %s", envPath)
 		return 0, nil
 	}
@@ -650,6 +662,9 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 		return 0, err
 	}
 	if err := writeTask(task, directory); err != nil {
+		return 0, err
+	}
+	if err := a.copyGear(carry, &task); err != nil {
 		return 0, err
 	}
 	a.restoreLogins(settings, &task)
