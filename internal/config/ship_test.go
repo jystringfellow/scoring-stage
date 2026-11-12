@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -57,6 +58,13 @@ func TestAnEmptyPRBodyLeavesOnlyWhatStageAlwaysWrites(t *testing.T) {
 	}
 	if settings.Ship.PRBody != "" {
 		t.Fatalf("body = %q", settings.Ship.PRBody)
+	}
+	settings, err = shipConfig(t, "pr_body = \"  Checked.\\n\"\npr_footer = \"\\n Sent by a robot. \\n\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Ship.PRBody != "Checked." || settings.Ship.PRFooter != "Sent by a robot." {
+		t.Fatalf("body %q footer %q, want both trimmed", settings.Ship.PRBody, settings.Ship.PRFooter)
 	}
 }
 
@@ -116,4 +124,71 @@ func TestTheCopyLoginsRefusalNamesTheAgentsWithoutALoginFileFromTheAgentTable(t 
 	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "copy_logins = [\"example\"]\n")
 	_, err := LoadSettings(home)
 	expectError(t, err, "copy_logins: example cannot be copied (copyable: agy); claude, codex, copilot and example sign in through the proxy")
+}
+
+func TestAShipBranchPrefixIsANamespaceOfLegalRefComponentsEndingInASlash(t *testing.T) {
+	for _, prefix := range []string{
+		"ma", "agent", "/", "/agent/", "agent//", "agent /", ".x/", "a/.x/", "a..b/", "-agent/", "refs/", "refs/heads/agent/",
+		"@/", "a/@/", "a.lock/", "a~b/", "a^b/", "a:b/", "a?b/", "a*b/", "a[b/", `a\\b/`, "a@{b/",
+	} {
+		_, err := shipConfig(t, `branch_prefix = "`+prefix+`"`+"\n")
+		if err == nil || !strings.Contains(err.Error(), "branch_prefix") {
+			t.Errorf("branch_prefix %q: error %v, want it refused", prefix, err)
+		}
+	}
+	for _, prefix := range []string{"agent/", "bot/", "team/agents/", "a.b/", "agent-1/", "a@b/"} {
+		if _, err := shipConfig(t, `branch_prefix = "`+prefix+`"`+"\n"); err != nil {
+			t.Errorf("branch_prefix %q: %v", prefix, err)
+		}
+	}
+}
+
+func TestEveryShipBranchPrefixStageAcceptsGitAcceptsAsTheStartOfABranch(t *testing.T) {
+	for _, prefix := range []string{
+		"agent/", "bot/", "team/agents/", "a.b/", "a@b/", "/", "agent//", "agent /", ".x/", "a..b/", "-agent/", "a.lock/",
+		"a~b/", "a^b/", "a:b/", "a?b/", "a*b/", "a[b/", "a@{b/", "a./", "@/", "a/.x/",
+	} {
+		if checkShipBranchPrefix(prefix) != nil {
+			continue
+		}
+		if out, err := exec.Command("git", "check-ref-format", "--branch", prefix+"x").CombinedOutput(); err != nil {
+			t.Errorf("stage accepts branch_prefix %q, git refuses a branch under it: %s", prefix, out)
+		}
+	}
+}
+
+func TestAddedProtectedPathsThatCouldNeverMatchAsWrittenAreRefused(t *testing.T) {
+	for _, path := range []string{
+		"./deploy/", "deploy//prod/", "deploy/../ci/", "a/..", "a/./b", ".", "./", "/", "deploy/*.yaml", "deploy/?", "[d]eploy/", "{a,b}/",
+		`deploy\\prod`, "**/Makefile",
+	} {
+		_, err := shipConfig(t, `protected_paths = ["`+path+`"]`+"\n")
+		if err == nil || !strings.Contains(err.Error(), "protected_paths entry") {
+			t.Errorf("protected_paths %q: error %v, want it refused", path, err)
+		}
+	}
+	if _, err := shipConfig(t, `protected_paths = ["deploy/", "deploy/prod/values.yaml", "Makefile", ".config/tool.toml"]`+"\n"); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestPRBodyAndFooterRefuseHiddenCharactersAndHTMLCommentOpeners(t *testing.T) {
+	for _, key := range []string{"pr_body", "pr_footer"} {
+		for text, want := range map[string]string{
+			`Reviewed\u202e.`:   key + " has control or invisible characters",
+			`Reviewed\u200b.`:   key + " has control or invisible characters",
+			`Reviewed\u001b[2K`: key + " has control or invisible characters",
+			`Notes <!-- hidden`: key + " cannot open an HTML comment",
+		} {
+			_, err := shipConfig(t, key+` = "`+text+`"`+"\n")
+			expectError(t, err, want)
+		}
+		settings, err := shipConfig(t, key+` = "First line.\nSecond line."`+"\n")
+		if err != nil {
+			t.Fatalf("%s with a line break: %v", key, err)
+		}
+		if got := map[string]string{"pr_body": settings.Ship.PRBody, "pr_footer": settings.Ship.PRFooter}[key]; got != "First line.\nSecond line." {
+			t.Errorf("%s = %q", key, got)
+		}
+	}
 }

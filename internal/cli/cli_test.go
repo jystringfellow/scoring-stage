@@ -392,6 +392,7 @@ func TestShipPushesUnderTheConfiguredBranchPrefixAndRefusesBranchesOutsideIt(t *
 	h, box := shippedTask(t)
 	writeGitHubSetup(t, h.home, "[ship]\nbranch_prefix = \"bot/\"\n")
 	sha := testutil.RunGit(t, box, "rev-parse", "HEAD")
+	main := testutil.RunGit(t, h.remote.Bare, "rev-parse", "main")
 	for _, branch := range []string{"main", "bot/", "agent/fix/x", "feature/bot/x"} {
 		h.expect(1, "ship", "fix", "--yes", "--branch", branch)
 		h.expectStderr("must start with bot/")
@@ -403,9 +404,50 @@ func TestShipPushesUnderTheConfiguredBranchPrefixAndRefusesBranchesOutsideIt(t *
 		t.Errorf("pushed %s, want %s", pushed, sha)
 	}
 	h.expect(0, "ship", "fix", "--yes", "--branch", "bot/fix/again")
-	if out := testutil.RunGit(t, h.remote.Bare, "branch", "--list", "agent/*", "main*"); strings.Contains(out, "agent/") {
+	if out := testutil.RunGit(t, h.remote.Bare, "branch", "--list", "agent/*"); out != "" {
 		t.Errorf("pushed outside the configured prefix: %s", out)
 	}
+	if now := testutil.RunGit(t, h.remote.Bare, "rev-parse", "main"); now != main {
+		t.Errorf("main moved from %s to %s", main, now)
+	}
+}
+
+func TestShipRefusesABranchPrefixThatIsNotANamespaceBeforePushing(t *testing.T) {
+	h, _ := shippedTask(t)
+	main := testutil.RunGit(t, h.remote.Bare, "rev-parse", "main")
+	writeGitHubSetup(t, h.home, "[ship]\nbranch_prefix = \"ma\"\n")
+	h.expect(1, "ship", "fix", "--yes", "--branch", "main")
+	h.expectStderr("branch_prefix must end in /")
+	if now := testutil.RunGit(t, h.remote.Bare, "rev-parse", "main"); now != main {
+		t.Fatalf("main moved from %s to %s", main, now)
+	}
+}
+
+func TestShipPushesNothingWhenTheUserConfigCannotBeLoaded(t *testing.T) {
+	h, _ := shippedTask(t)
+	writeGitHubSetup(t, h.home, "[aws]\nregion = 1\n")
+	h.expect(1, "ship", "fix", "--yes")
+	h.expectStderr("config.toml")
+	if out := testutil.RunGit(t, h.remote.Bare, "branch", "--list", "agent/*"); out != "" {
+		t.Fatalf("pushed with a config that does not load: %s", out)
+	}
+	if ships := h.recorded("fix").Ships; len(ships) != 0 {
+		t.Errorf("recorded %+v", ships)
+	}
+}
+
+func TestShipRefusesARenameThatMovesAProtectedFileAway(t *testing.T) {
+	h := setup(t)
+	h.commitToMain(map[string]string{".envrc": "export PATH_add=bin\nexport TOOLS=one two three\n"})
+	h.expect(0, "up", h.remote.Checkout, "fix")
+	box := filepath.Join(t.TempDir(), "box")
+	testutil.RunGit(t, h.remote.Root, "clone", "-q", h.remote.Checkout, box)
+	testutil.RunGit(t, box, "mv", ".envrc", "notes.txt")
+	testutil.RunGit(t, box, "commit", "-q", "-m", "Move the environment file")
+	testutil.RunGit(t, filepath.Join(h.task("fix"), "src"), "remote", "add", "sandbox-stage-fix", box)
+	h.pinGitConfig("fix")
+	h.expect(1, "ship", "fix", "--yes")
+	h.expectStderr("refusing to ship changes to CI, workflow or sandbox config files: .envrc")
 }
 
 func TestShipRefusesToRunOnAConfigWithAnEmptyBranchPrefix(t *testing.T) {
@@ -461,6 +503,15 @@ func TestPRBodySaysAnAIAgentProducedTheChangeWhateverBodyIsConfigured(t *testing
 		if configured != "" && !strings.Contains(body, "\n\n"+configured+"\n\n") {
 			t.Errorf("body lacks the configured text as its own paragraph: %q", body)
 		}
+	}
+}
+
+func TestPRBodyTrimsTheFooterAndLeavesOutAnEmptyOne(t *testing.T) {
+	if body := PRBody("fix", "abc123", "", " \n"); !strings.HasSuffix(body, "Commit: abc123\n") {
+		t.Errorf("body = %q", body)
+	}
+	if body := PRBody("fix", "abc123", "", "\n Sent by a robot. \n\n"); !strings.HasSuffix(body, "Commit: abc123\n\nSent by a robot.\n") {
+		t.Errorf("body = %q", body)
 	}
 }
 

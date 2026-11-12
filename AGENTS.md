@@ -74,7 +74,8 @@ From stage:
 - **broker:** stage's host process that hands each sandbox temporary AWS credentials for the profiles it was granted.
 - **take:** a copy of the sandbox paths a config, book or repository listed, kept on the host under
   `~/.scoring-stage/takes/<slug>/<time>/`. Takes only leave a sandbox; stage never copies one in.
-- **ship:** reviewing a sandbox's commit on the host and pushing it to `agent/<slug>/<sha>`.
+- **ship:** reviewing a sandbox's commit on the host and pushing it to `<prefix><slug>/<sha>`. The prefix
+  defaults to `agent/` and is the user's `[ship] branch_prefix`.
 
 ## Exercising stage live
 

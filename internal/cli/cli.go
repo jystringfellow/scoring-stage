@@ -107,7 +107,8 @@ commands:
   login <slug>                      save the sandbox's copyable agent logins (copy_logins) for future sandboxes
   exec <slug> -- <command> [args]   run a command in the repository
   ship <slug> [--ref R] [--branch B] [--pr]
-                                    push the sandbox's commit to agent/<slug>/<sha> from the host
+                                    push the sandbox's commit to <prefix><slug>/<sha> from the host
+                                    (prefix: [ship] branch_prefix, agent/ unless set)
   take <slug>                       copy the sandbox's takes to ~/.scoring-stage/takes/<slug>/ now
   list                              list scoring-stage sandboxes
   down <slug> [--discard-takes]     keep the sandbox's takes, then remove it, its secrets and the scratch clone
@@ -863,7 +864,7 @@ func PRBody(slug, sha, text, footer string) string {
 		paragraphs = append(paragraphs, text)
 	}
 	paragraphs = append(paragraphs, "Commit: "+sha)
-	if footer != "" {
+	if footer = strings.TrimSpace(footer); footer != "" {
 		paragraphs = append(paragraphs, footer)
 	}
 	return strings.Join(paragraphs, "\n\n") + "\n"
@@ -1027,7 +1028,7 @@ func (a *App) reviewShipment(repo, sha, branch, github string, shipping config.S
 	if err != nil {
 		return err
 	}
-	names, err := source.Git(repo, "diff", "--no-ext-diff", "--name-only", "-z", base, sha)
+	names, err := source.Git(repo, "diff", "--no-ext-diff", "--no-renames", "--name-only", "-z", base, sha)
 	if err != nil {
 		return err
 	}
