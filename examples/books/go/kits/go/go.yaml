@@ -1,0 +1,48 @@
+# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+displayName: Go
+description: >-
+  A Go toolchain with a C compiler for the race detector. Modules come
+  through the Go module proxy and are checked against the checksum database.
+
+args:
+  go:
+    default: "1.27.3"
+    pattern: '^[0-9]+\.[0-9]+(\.[0-9]+)?$'
+    description: Go toolchain version
+
+capabilities:
+  - type: com.docker.sandbox/network-policy@2
+    config:
+      install:
+        allow:
+          - deb.debian.org
+          - dhi.io
+          - security.debian.org
+          - go.dev
+          - dl.google.com
+          - proxy.golang.org
+          - sum.golang.org
+      runtime:
+        allow:
+          - proxy.golang.org
+          - sum.golang.org
+
+  - type: com.docker.sandbox/lifecycle@1
+    config:
+      install:
+        - command: |
+            set -eu
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update
+            apt-get install -y --no-install-recommends gcc libc6-dev
+          user: "0"
+          description: Install a C toolchain so go test -race runs
+        - command: |
+            set -eu
+            arch="$(dpkg --print-architecture)"
+            curl -fsSL "https://go.dev/dl/go${{ kit.args.go }}.linux-${arch}.tar.gz" | tar -C /usr/local -xz
+            ln -sf /usr/local/go/bin/go /usr/local/go/bin/gofmt /usr/local/bin/
+          user: "0"
+          description: Install the Go toolchain

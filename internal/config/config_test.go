@@ -527,8 +527,8 @@ func TestUserConfigOverridesBooksAndListsBooks(t *testing.T) {
 	if got := composition.Bindings["openai"]; !reflect.DeepEqual(got, map[string]any{"apiKey": map[string]any{"domains": []any{"api.openai.com"}}}) {
 		t.Errorf("openai binding = %v", got)
 	}
-	if settings.PRFooter() != "[Robots on behalf of Someone]" {
-		t.Errorf("footer = %q", settings.PRFooter())
+	if settings.Ship.PRFooter != "[Robots on behalf of Someone]" {
+		t.Errorf("footer = %q", settings.Ship.PRFooter)
 	}
 }
 
@@ -837,8 +837,8 @@ func TestSaveAgentsPrependsToTheUserConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	settings := load(t, home)
-	if got := settings.AgentEntries(); !reflect.DeepEqual(got, []string{"claude", "agy"}) || settings.PRFooter() != "x" {
-		t.Fatalf("agents %v footer %q", got, settings.PRFooter())
+	if got := settings.AgentEntries(); !reflect.DeepEqual(got, []string{"claude", "agy"}) || settings.Ship.PRFooter != "x" {
+		t.Fatalf("agents %v footer %q", got, settings.Ship.PRFooter)
 	}
 	expectError(t, SaveAgents(home, []string{"codex"}), "already sets agents")
 	expectError(t, SaveAgents(t.TempDir(), []string{"cursor"}), "unknown agent cursor")

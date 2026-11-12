@@ -9,13 +9,16 @@ the boundary:
   placeholders; the proxy adds the real values to outbound requests. AWS credentials come from a host broker that
   serves only short-lived keys, and only for the profiles granted to that sandbox.
 - **Pushes happen from the host.** `git push` over HTTP or HTTPS from the sandbox is refused at the proxy;
-  `stage ship` pushes the sandbox's commit to an `agent/` branch from the host. GraphQL writes are not refused; see
+  `stage ship` pushes the sandbox's commit from the host, to a branch under `agent/` unless you set another prefix. GraphQL writes are not refused; see
   [Limitations](#limitations).
 - **Each task gets its own scratch clone**, so the agent never touches your working copy.
 
 Organizations adapt it with **books**: a directory of [kits](https://github.com/docker/sandbox-kit-spec) plus the
 host-side wiring they need (secrets, credential bindings, AWS profiles, per-repository additions). Like the book a
 session player is handed for a gig, a book holds what the stage needs for one kind of work.
+
+stage works with repositories on GitHub.com only: `stage up` refuses a repository whose `origin` is anywhere else,
+and `stage ship` pushes to `https://github.com/`. It runs on Unix hosts: macOS, Linux, and Windows through WSL.
 
 > Status: early. Some of it has been checked against live sandboxes on sbx 0.51; much is covered only by unit tests
 > with fakes. [VERIFICATION.md](VERIFICATION.md) says which. The command line and book format may still change.
@@ -68,7 +71,7 @@ stage up ~/Code/api fix-login --aws-profile staging    # grant an AWS profile to
 stage up ~/Code/api fix-login --plan # write the env file and show sbx's plan without creating (stops first if approvals are missing)
 stage shell fix-login                # login shell in the repository; run claude, codex or copilot
 stage exec fix-login -- git log -1
-stage ship fix-login [--pr]          # review and push the sandbox's HEAD to agent/fix-login/<sha> from the host
+stage ship fix-login [--pr]          # review and push the sandbox's HEAD to agent/fix-login/<sha> (or your [ship] branch_prefix) from the host
 stage list
 stage login fix-login                # save the sandbox's agy login for future sandboxes (copy_logins)
 stage take fix-login                 # copy the sandbox's takes to ~/.scoring-stage/takes/fix-login/ now
@@ -80,19 +83,33 @@ stage github login                   # log in to your GitHub App ([github] mode 
 stage github token                   # print a fresh app token; sbx runs this on the host
 ```
 
-`stage ship` pushes to `agent/<slug>/<first 8 characters of the sha>` with your host git credentials; `--branch`
-names another branch, which must also start with `agent/`. It shows the commits and a diffstat, with control
+`stage ship` pushes to `<prefix><slug>/<first 8 characters of the sha>` with your host git credentials; `--branch`
+names another branch, which must also start with the prefix. The prefix is `agent/` unless you set `branch_prefix`
+under `[ship]` in your config. It must be a namespace, one or more legal branch name components ending in `/`
+(`bot/`, `team/agents/`), because the prefix is what keeps `ship` off the branches people work on; a
+repository or book cannot set it. The rest of this section writes `agent/` for it. `ship` shows the commits and a diffstat, with control
 characters escaped, and asks before pushing (`--yes` skips the question). It refuses changes to CI and workflow
 files (`.github/`, `azure-pipelines*.yml`, `.azure-pipelines/`, `.pipelines/`, GitLab, Jenkins, CircleCI,
 Buildkite), files that run code when someone opens or
 checks out the branch (`.devcontainer/`, `.vscode/`, `.husky/`, pre-commit and lefthook configs, `.envrc`, mise and
 asdf tool files), `.gitmodules` and `.scoring-stage/`, unless you pass `--allow-protected-paths`: CI runs a pushed
-branch's workflow files with the repository's secrets, and `.scoring-stage/` widens future sandboxes. Azure
+branch's workflow files with the repository's secrets, and `.scoring-stage/` widens future sandboxes.
+`protected_paths` under `[ship]` adds your own paths to that list; nothing removes a path from it. An entry is
+matched as written and case-sensitively against paths from the repository root: `Makefile` is that one file, and
+`deploy/`, with its trailing `/`, is everything under that directory. Patterns, `./`, `..` and absolute paths are
+refused. A rename counts as a change to the path it moves from. Azure
 Pipelines can read YAML from any path a pipeline names, so the file check is a heuristic there; use branch policies
 so `agent/*` branches cannot trigger pipelines that hold secrets. Pushing an `agent/*` branch triggers whatever CI
 the repository runs on branch pushes, so that CI should not hold privileged secrets for unreviewed branches: on
 GitHub, keep secrets in environments with required reviewers or deployment branch rules, or limit push triggers to
-protected branches. `ship` warns about commits without a `Co-authored-by` trailer, since commits carry your git identity.
+protected branches. Commits carry your git identity; with `warn_missing_trailer = true` under `[ship]`, `ship`
+warns about commits without a `Co-authored-by` trailer.
+
+`stage ship --pr` opens a draft pull request with `gh`. Its body always starts by saying that an AI coding agent
+in a scoring-stage sandbox produced the change, and always names the commit. `pr_body` under `[ship]` replaces the
+paragraph between the two, which by default says the changes were generated by an LLM and have not yet been
+reviewed by a human; `pr_body = ""` removes that paragraph. `pr_footer` adds a last paragraph. Neither may hold
+invisible characters or open an HTML comment (`<!--`), which would hide what follows it.
 
 Git on the host runs with hooks and fsmonitor off. `stage up` records a hash of the scratch clone's git config
 (`.git/config`, `.git/info/` and related files) after sbx creates the sandbox, and `ship` refuses to run git there
@@ -107,6 +124,39 @@ reach the host scratch clone, and that the host source mount, if sbx adds one, i
 `sbx env create`. The sandbox sees the repository at the scratch clone's host path. `stage down` deletes the scratch
 clone, so ship anything you want to keep first.
 The scratch clone's `origin/*` refs come from GitHub as of `stage up`.
+
+## First task
+
+One agent, no orchestrator, from an empty sandbox to a pushed branch. It assumes [one-time setup](#one-time-setup)
+is done, here with `stage setup --agent claude --github fine-grained` and a token saved with `stage token set`.
+
+```
+stage up ~/src/api fix-login         # on the host: scratch clone and sandbox stage-fix-login
+stage shell fix-login                # a login shell in the sandbox, in the repository
+  claude                             # in the sandbox: run the agent; the first run asks you to sign in
+  git log -1                         # in the sandbox: the agent's work must be committed to be shipped
+  exit
+stage ship fix-login --pr            # on the host: review the commits, push agent/fix-login/<sha>, open a draft PR
+stage down fix-login                 # on the host: remove the sandbox and the scratch clone
+```
+
+- **Commit inside the sandbox.** `ship` pushes a commit, by default the sandbox's `HEAD`; uncommitted changes stay
+  behind and are deleted by `stage down`. The sandbox cannot push, so nothing leaves it until you ship.
+- **A sandbox stops shortly after its last session ends.** sbx stops it 30 seconds after the last `stage shell` or
+  `stage exec` exits. A stopped sandbox keeps its files, and the next `stage exec` or `stage shell` starts it again.
+- **`ship` needs the sandbox running.** It fetches the commit from the sandbox over a git remote that sbx removes
+  when the sandbox stops, and it does not start the sandbox. If `ship` says there is no `sandbox-stage-<slug>`
+  remote, keep a `stage shell` open in another terminal while you ship.
+
+To run an agent without a terminal, give its non-interactive command to `stage exec`, for example:
+
+```
+stage exec fix-login -- claude -p "Fix the login redirect and commit the change"
+```
+
+The command runs in the repository as the sandbox user. Keep it in the foreground: the sandbox stops 30 seconds
+after `stage exec` returns, and anything the command left running in the background stops with it; see
+[Limitations](#limitations).
 
 ## Takes
 
@@ -396,8 +446,8 @@ Docker's Antigravity kit has no proxy-managed Google sign-in, so agy's token is 
   `~/.scoring-stage/logins/agy/` (mode 600), copies it into each new sandbox that has agy, and saves it again on
   `stage down` so a refreshed token is kept. Every sandbox with agy then holds a live copy of your Google sign-in.
   stage also carries agy's record that its first-run setup (color scheme and terms) is done,
-  `~/.gemini/antigravity-cli/cache/onboarding.json`, once you have finished that setup in a sandbox. Without it an agy
-  chair under kapellmeister or any other orchestrator waits on that setup screen.
+  `~/.gemini/antigravity-cli/cache/onboarding.json`, once you have finished that setup in a sandbox. Without it
+  agy stops at that setup screen in every new sandbox, which an unattended run cannot get past.
 
 The kit also has a Gemini API-key mode that would keep a key on the host: a `google` secret plus
 `[bindings.google]` with `apiKey = { domains = ["generativelanguage.googleapis.com"] }` in your config. It uses the
@@ -406,8 +456,9 @@ tested with stage.
 
 ## Configuration and books
 
-Configuration has two levels, like kapellmeister's: yours in `~/.scoring-stage/config.toml`, and a repository's
-in its `.scoring-stage/config.toml`.
+Configuration has two levels: yours in `~/.scoring-stage/config.toml`, which applies to every sandbox you create
+and may set everything below, and a repository's in its `.scoring-stage/config.toml`, which travels with the code and may
+only ask for agents, installed books, its own kits and takes.
 
 `~/.scoring-stage/config.toml` (all keys optional):
 
@@ -431,7 +482,11 @@ command = "op read op://Private/openai/key"
 apiKey = { domains = ["api.openai.com"] }
 
 [ship]
-pr_footer = "Generated with an AI coding agent."
+branch_prefix = "agent/"                           # every shipped branch starts with this; must end in /
+protected_paths = ["deploy/", "Makefile"]          # refused like CI files, in addition to stage's own list
+warn_missing_trailer = true                        # warn about commits without a Co-authored-by trailer (default false)
+pr_body = "Review against the team checklist."     # replaces the default text after the AI disclosure in a --pr body
+pr_footer = "Generated with an AI coding agent."   # last paragraph of a --pr body
 ```
 
 A book is a directory with a `book.toml`:
@@ -439,7 +494,7 @@ A book is a directory with a `book.toml`:
 ```toml
 name = "backend"
 agents = ["claude"]                                       # agents this book's work needs
-kits = ["./kits/toolchain", "./kits/mise"]               # local kits only, starting with ./ or ../
+kits = ["./kits/go"]                                      # local kits only, starting with ./ or ../
 
 [aws]
 profiles = ["dev", "staging"]
@@ -461,6 +516,12 @@ aws = { profiles = ["api-dev"] }
 An installed book applies to a sandbox when the repository's config names it, when `--book` names it, or when one
 of its `[[repos]]` entries matches the repository; the `[[repos]]` rules are for repositories you cannot add a
 config to. `--book ./dir` also uses a book that is not installed.
+
+The `book.toml` above shows every kind of entry; its feed, profiles and `[[repos]]` kit are placeholders.
+[`examples/books/go`](examples/books/go) is a complete book you can run: one local kit that installs a Go toolchain
+and allows the hosts `apt` and the Go module proxy need. Try it with
+`stage up <repo> <slug> --book ./examples/books/go`, or copy it as the start of your own. It passes stage's checks
+on a book; its install steps follow a kit that runs in a sandbox, but this copy has not been run in one.
 
 A book's `name` matches `^[a-z0-9][a-z0-9._-]*$`, and its `description` has no control characters. A book cannot
 set `base`. It cannot set a secret or binding for a reserved service: any service an agent binds (`anthropic`,
@@ -485,7 +546,7 @@ That review is the real control. See [Limitations](#limitations).
 A repository's `.scoring-stage/config.toml`, read from the branch the sandbox starts from:
 
 ```toml
-agents = ["claude", "codex"]     # for example, the agents its .kapellmeister ensembles seat
+agents = ["claude", "codex"]     # the agents this repository's contributors run
 books = ["backend"]              # installed books, by name
 kits = ["./.scoring-stage/kits/rules"]  # inside the repository; approved by you before use
 ```
@@ -519,6 +580,20 @@ grants a profile from your host AWS config to that one sandbox and makes it the 
 A kit that a book adds for its own service declares a `credential@1` entry for that service and names the hosts it is
 injected on; the book's `secrets` entry supplies the value for each sandbox, and its `bindings` entry authorises the
 service.
+
+### Writing a kit
+
+[`examples/books/go/kits/go/go.yaml`](examples/books/go/kits/go/go.yaml) is a small kit to start from. Two things
+about the sandbox have caught kits in use; both come from one kit's notes and have not been checked again for
+this README:
+
+- **Install Python tools with pip in a venv, not with uv.** uv aborts on the sandbox's 16 KB memory pages.
+  `python3 -m venv <dir>` and that venv's `pip install` work.
+- **Start a long-running server from a `startup` command inside a `tmux` session.** A process started straight
+  from the hook has no terminal; one started with `tmux new-session -d -s <name> <command>` gets a full terminal
+  environment from the tmux server. Set `TERM`, `SHELL` and `LANG` first, and guard with `tmux has-session` so a
+  second start does not fail. The kit has to install `tmux`. Like everything else in the sandbox, the server stops
+  when the sandbox does, and the `startup` command runs again on the next start.
 
 ## Managed settings
 
