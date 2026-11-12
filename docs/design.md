@@ -35,8 +35,10 @@ repository's config, a book or `--agent`, and an agent's bindings come with it. 
 `claude` would select Docker's v2 kits, which cannot compose with v3 mixins, so stage always names a v3 workload
 by reference.
 
-Configuration follows kapellmeister's split between the user's directory and the repository's. The repository's
-config is input from whoever can commit to it, so it may only ask for agents by name, things the user has already
+Configuration is split between the user's directory (`~/.scoring-stage/`) and the repository's
+(`.scoring-stage/`): the user's config is trusted with anything that acts on the host, and the repository's travels
+with the code so a clone says which agents and kits its work needs. (The split follows kapellmeister's.) The
+repository's config is input from whoever can commit to it, so it may only ask for agents by name, things the user has already
 installed (books, by name), and its own kits. Kits and books can widen egress, send credentials and run host
 commands, so a repository's kits must be link-free `./` directories in the repository, and its kits and the books
 it turns on are used only after the user approves each one by content: a local kit's or book's files. Books and
