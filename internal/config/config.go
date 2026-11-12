@@ -339,13 +339,8 @@ func LoadSettings(home string) (*Settings, error) {
 			return nil, errorf("%s: %v", path, err)
 		}
 	}
-	if settings.Gear, err = decodeGear(data, path, home, settings.Agents); err != nil {
+	if settings.Gear, err = decodeGear(data, path, settings.Agents); err != nil {
 		return nil, err
-	}
-	if len(settings.Gear) > 0 {
-		if err := settings.Managed.CheckGear(); err != nil {
-			return nil, errorf("%s: %v", path, err)
-		}
 	}
 	bookPaths, err := optionalStrings(data, "books", path)
 	if err != nil {

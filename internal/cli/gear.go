@@ -2,7 +2,9 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/jystringfellow/scoring-stage/internal/config"
@@ -10,15 +12,27 @@ import (
 	"github.com/jystringfellow/scoring-stage/internal/sbx"
 )
 
-const gearScript = `umask 077; d=$1; case "$d" in "~/"*) d="$HOME/${d#??}";; esac; mkdir -p "$(dirname "$d")" && tar -xf - -C "$(dirname "$d")"`
+const gearUnpacked = "stage-gear-unpacked"
+
+const gearScript = `umask 077; d=$1; case "$d" in "~/"*) d="$HOME/${d#??}";; esac; mkdir -p "$(dirname "$d")" && tar -xf - --no-overwrite-dir -C "$(dirname "$d")" && echo ` + gearUnpacked
 
 var (
 	gearLimits  = gear.DefaultLimits
 	gearTimeout = 5 * time.Minute
 )
 
-func (a *App) surveyGear(settings *config.Settings) (gear.Survey, error) {
-	survey, err := gear.Look(settings.Gear, gearLimits)
+func (a *App) surveyGear(settings *config.Settings, workspace string) (gear.Survey, error) {
+	checked, err := settings.CheckedGear()
+	if err != nil {
+		return gear.Survey{}, err
+	}
+	for _, item := range checked {
+		if config.GearLandsIn(item, workspace) {
+			return gear.Survey{}, errorf("gear: to %s is in the sandbox's workspace (%s) or holds it, where stage ship would find your files among the agent's work; copy it to a place outside the repository",
+				config.Printable(item.To), workspace)
+		}
+	}
+	survey, err := gear.Look(checked, gearLimits)
 	if err != nil {
 		return survey, errorf("gear: %s", config.Printable(err.Error()))
 	}
@@ -46,10 +60,15 @@ func (a *App) copyGear(survey gear.Survey, task *Task) error {
 	if len(survey.Sources) == 0 {
 		return nil
 	}
+	deadline := time.Now().Add(gearTimeout)
 	for _, source := range survey.Sources {
-		if err := feedGear(source, task.Sandbox); err != nil {
-			return errorf("could not copy gear to %s in %s: %s; the sandbox exists without it: run `stage down %s` to clean up",
-				config.Printable(source.To), task.Sandbox, config.Printable(err.Error()), task.Slug)
+		err := feedGear(source, task.Sandbox, time.Until(deadline))
+		if err != nil && !time.Now().Before(deadline) {
+			err = fmt.Errorf("the copy of all gear did not finish within %s", gearTimeout)
+		}
+		if err != nil {
+			return errorf("could not copy gear to %s: %s; %s is created and may hold only part of your gear: fix that, then run `stage down %s` and stage up again",
+				config.Printable(source.To), config.Printable(err.Error()), task.Sandbox, task.Slug)
 		}
 	}
 	a.say("copied %s (%d bytes) of gear into %s: %s", count(survey.Files, "file"), survey.Bytes, task.Sandbox, carried(survey))
@@ -59,7 +78,7 @@ func (a *App) copyGear(survey gear.Survey, task *Task) error {
 	return nil
 }
 
-func feedGear(source gear.Source, sandbox string) error {
+func feedGear(source gear.Source, sandbox string, within time.Duration) error {
 	reader, writer := io.Pipe()
 	archived := make(chan error, 1)
 	go func() {
@@ -67,10 +86,17 @@ func feedGear(source gear.Source, sandbox string) error {
 		writer.CloseWithError(err)
 		archived <- err
 	}()
-	fed := sbx.FeedWithin(gearTimeout, reader, "exec", "-i", "-u", "agent", sandbox, "sh", "-c", gearScript, "sh", source.To)
+	said, fed := sbx.FeedWithin(within, reader, "exec", "-i", "-u", "agent", sandbox, "sh", "-c", gearScript, "sh", source.To)
 	reader.Close()
-	if err := <-archived; err != nil && !errors.Is(err, io.ErrClosedPipe) {
-		return err
+	archiving := <-archived
+	cutShort := errors.Is(archiving, io.ErrClosedPipe)
+	switch {
+	case archiving != nil && !cutShort:
+		return archiving
+	case fed != nil:
+		return fed
+	case cutShort || !strings.Contains(said, gearUnpacked):
+		return errors.New("sbx finished without reading all of it and confirming that the sandbox unpacked it")
 	}
-	return fed
+	return nil
 }

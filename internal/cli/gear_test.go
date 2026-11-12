@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jystringfellow/scoring-stage/internal/config"
 	"github.com/jystringfellow/scoring-stage/internal/gear"
@@ -66,7 +67,7 @@ func TestUpCopiesGearIntoTheNewSandboxOnceItIsCreatedAndSaysWhatItCopied(t *test
 	if creating < 0 || copying < creating {
 		t.Errorf("created at call %d, copied at call %d in %v", creating, copying, h.sbx.Calls())
 	}
-	if call := h.sbx.Calls()[copying]; !strings.HasSuffix(call, " sh ~/.tool/config.toml") || !strings.Contains(call, "tar -xf -") {
+	if call := h.sbx.Calls()[copying]; !strings.HasSuffix(call, " sh ~/.tool/config.toml") || !strings.Contains(call, "tar -xf - --no-overwrite-dir") {
 		t.Errorf("the copy did not unpack at its destination: %q", call)
 	}
 	if h.anyCallContaining("theme") {
@@ -87,9 +88,10 @@ func TestUpFailsAndNamesTheCleanupWhenGearCannotBeCopied(t *testing.T) {
 
 	h.expect(1, "up", h.remote.Checkout, "fix")
 
-	h.expectStderr("could not copy gear to ~/.tool/config.toml in stage-fix")
+	h.expectStderr("could not copy gear to ~/.tool/config.toml:")
 	h.expectStderr("Cannot open: Permission denied")
-	h.expectStderr("run `stage down fix`")
+	h.expectStderr("stage-fix is created and may hold only part of your gear")
+	h.expectStderr("`stage down fix`")
 	if strings.Contains(h.stdout.String(), "is up") {
 		t.Errorf("up reported a sandbox without its gear as up: %q", h.stdout.String())
 	}
@@ -182,15 +184,81 @@ func TestARepositoryThatListsGearStopsUpBeforeTheSandboxIsCreated(t *testing.T) 
 	}
 }
 
-func TestManagedSettingsThatRefuseGearStopUp(t *testing.T) {
+func TestManagedSettingsThatRefuseGearStopUpAndShowInSetupButLeaveDownWorking(t *testing.T) {
 	h, user := carrying(t, `["~/.tool/config.toml"]`)
 	testutil.WriteFile(t, filepath.Join(user, ".tool", "config.toml"), "theme = \"dark\"\n")
+	h.expect(0, "up", h.remote.Checkout, "fix")
+	h.sbx.SetSandboxes("stage-fix\n")
 	testutil.WriteFile(t, h.managed, "allow_gear = false\n")
+	before := len(h.sbx.Calls())
 
+	h.expect(1, "up", h.remote.Checkout, "other")
+	h.expectStderr("gear is refused by " + h.managed)
+	for _, call := range h.sbx.Calls()[before:] {
+		if strings.HasPrefix(call, "env create") || strings.HasPrefix(call, "exec") {
+			t.Errorf("up went on to sbx: %q", call)
+		}
+	}
+
+	h.expect(0, "setup")
+	h.expectStderr("gear is refused by " + h.managed)
+	h.expectStderr("stage up will refuse")
+
+	h.expect(0, "list")
+	h.expect(0, "down", "fix")
+	if !h.anyCall("env rm") {
+		t.Error("down did not remove the sandbox")
+	}
+}
+
+func TestUpFailsWhenSbxExitsCleanlyWithoutUnpackingTheGear(t *testing.T) {
+	for name, body := range map[string]string{"a small file": "x", "a file larger than a pipe holds": strings.Repeat("x", 1<<20)} {
+		h, user := carrying(t, `["~/.tool/config.toml"]`)
+		testutil.WriteFile(t, filepath.Join(user, ".tool", "config.toml"), body)
+		h.sbx.IgnoreFeeds()
+
+		h.expect(1, "up", h.remote.Checkout, "fix")
+
+		if !strings.Contains(h.stderr.String(), "could not copy gear to ~/.tool/config.toml") || !strings.Contains(h.stderr.String(), "sbx finished without") {
+			t.Errorf("%s: stderr %q", name, h.stderr.String())
+		}
+		if strings.Contains(h.stdout.String(), "copied") {
+			t.Errorf("%s: up said it copied gear the sandbox never unpacked: %q", name, h.stdout.String())
+		}
+	}
+}
+
+func TestUpStopsAGearCopyThatDoesNotFinishInTime(t *testing.T) {
+	h, user := carrying(t, `["~/.tool/config.toml", "~/.tool/other.toml"]`)
+	testutil.WriteFile(t, filepath.Join(user, ".tool", "config.toml"), "x")
+	testutil.WriteFile(t, filepath.Join(user, ".tool", "other.toml"), "y")
+	h.sbx.HangFeeds()
+	original := gearTimeout
+	gearTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { gearTimeout = original })
+
+	started := time.Now()
 	h.expect(1, "up", h.remote.Checkout, "fix")
 
-	h.expectStderr("gear is refused by " + h.managed)
-	if h.anyCall("env create", "exec") {
+	h.expectStderr("the copy of all gear did not finish within 300ms")
+	h.expectStderr("`stage down fix`")
+	if took := time.Since(started); took > 20*time.Second {
+		t.Errorf("up waited %s for an sbx that never read its input", took)
+	}
+}
+
+func TestGearThatWouldLandInTheWorkspaceStopsUpBeforeTheSandboxIsCreated(t *testing.T) {
+	h := setup(t)
+	user := config.Resolve(t.TempDir())
+	t.Setenv("HOME", user)
+	writeGitHubSetup(t, h.home, `gear = [{ from = "~/.tool", to = "`+filepath.Join(h.task("fix"), "src", ".tool")+`" }]`+"\n")
+	testutil.WriteFile(t, filepath.Join(user, ".tool", "config.toml"), "x")
+
+	for _, args := range [][]string{{"up", h.remote.Checkout, "fix"}, {"up", h.remote.Checkout, "fix", "--plan"}} {
+		h.expect(1, args...)
+		h.expectStderr("is in the sandbox's workspace")
+	}
+	if h.anyCall("env create", "env plan", "exec") {
 		t.Errorf("up went on to sbx: %v", h.sbx.Calls())
 	}
 }

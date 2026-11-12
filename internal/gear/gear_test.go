@@ -226,3 +226,46 @@ func TestAFileThatChangesAfterTheSurveyStopsTheArchive(t *testing.T) {
 		}
 	}
 }
+
+func TestAFileThatCannotBeReadStopsTheSurvey(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "presets")
+	write(t, filepath.Join(dir, "open.json"), "{}", 0o600)
+	locked := write(t, filepath.Join(dir, "locked.json"), "{}", 0o000)
+
+	for _, source := range []string{dir, locked} {
+		_, err := Look([]config.Gear{item(source, "~/presets")}, DefaultLimits)
+		if err == nil || !strings.Contains(err.Error(), "locked.json") || !strings.Contains(err.Error(), "permission denied") {
+			t.Errorf("%s: error %v, want the unreadable file named", source, err)
+		}
+	}
+}
+
+func TestADirectorySwappedForALinkAfterTheSurveyCannotCarryAFileFromOutside(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "presets")
+	write(t, filepath.Join(dir, "deep", "token"), "inside", 0o600)
+	write(t, filepath.Join(root, "outside", "token"), "SECRET", 0o600)
+	lone := write(t, filepath.Join(root, "single", "token"), "inside", 0o600)
+	survey, err := Look([]config.Gear{item(dir, "~/presets"), item(lone, "~/token")}, DefaultLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(survey.Close)
+
+	for _, swapped := range []string{filepath.Join(dir, "deep"), filepath.Join(root, "single")} {
+		if err := os.Rename(swapped, swapped+"-moved"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join(root, "outside"), swapped); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, source := range survey.Sources {
+		var buffer bytes.Buffer
+		err := source.Archive(&buffer)
+		if strings.Contains(buffer.String(), "SECRET") {
+			t.Errorf("%s: the archive carries a file from outside the listed source (error %v)", source.To, err)
+		}
+	}
+}

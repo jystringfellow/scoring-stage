@@ -23,6 +23,7 @@ type Limits struct {
 var DefaultLimits = Limits{Bytes: 100 << 20, Entries: 10_000}
 
 type entry struct {
+	inRoot   string
 	hostPath string
 	name     string
 	mode     int64
@@ -33,6 +34,7 @@ type entry struct {
 
 type Source struct {
 	config.Gear
+	root    *os.Root
 	entries []entry
 }
 
@@ -50,6 +52,10 @@ type survey struct {
 	entries int
 }
 
+const readOnlyNeverFollowing = os.O_RDONLY | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
+
+// Look holds each source's directory open until Close, so that Archive reads
+// the files it measured even if a path to them is replaced in between.
 func Look(gear []config.Gear, limits Limits) (Survey, error) {
 	looking := &survey{limits: limits}
 	for _, item := range gear {
@@ -59,46 +65,77 @@ func Look(gear []config.Gear, limits Limits) (Survey, error) {
 			looking.Missing = append(looking.Missing, item)
 			continue
 		case err != nil:
+			looking.Close()
 			return looking.Survey, err
 		case !info.IsDir() && !info.Mode().IsRegular():
+			looking.Close()
 			return looking.Survey, fmt.Errorf("%s is neither a file nor a directory", item.From)
 		}
-		source := Source{Gear: item}
-		base := path.Base(item.To)
-		err = filepath.WalkDir(item.HostPath, func(hostPath string, found fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if !found.IsDir() && !found.Type().IsRegular() {
-				looking.Skipped++
-				return nil
-			}
-			info, err := found.Info()
-			if err != nil {
-				return err
-			}
-			relative, err := filepath.Rel(item.HostPath, hostPath)
-			if err != nil {
-				return err
-			}
-			added := entry{hostPath: hostPath, name: path.Join(base, filepath.ToSlash(relative)), modified: info.ModTime()}
-			if found.IsDir() {
-				added.dir, added.mode = true, 0o700
-			} else {
-				added.size, added.mode = info.Size(), int64(info.Mode().Perm()&0o700)
-			}
-			if err := looking.count(added); err != nil {
-				return err
-			}
-			source.entries = append(source.entries, added)
-			return nil
-		})
+		source, err := looking.add(item, info.IsDir())
 		if err != nil {
+			looking.Close()
 			return looking.Survey, err
 		}
 		looking.Sources = append(looking.Sources, source)
 	}
 	return looking.Survey, nil
+}
+
+func (s *survey) add(item config.Gear, isDir bool) (Source, error) {
+	held, start := filepath.Dir(item.HostPath), filepath.Base(item.HostPath)
+	if isDir {
+		held, start = item.HostPath, "."
+	}
+	root, err := os.OpenRoot(held)
+	if err != nil {
+		return Source{}, err
+	}
+	source := Source{Gear: item, root: root}
+	base := path.Base(item.To)
+	err = fs.WalkDir(root.FS(), start, func(inRoot string, found fs.DirEntry, err error) error {
+		hostPath := filepath.Join(held, filepath.FromSlash(inRoot))
+		if err != nil {
+			return fmt.Errorf("cannot read %s: %w", hostPath, err)
+		}
+		if !found.IsDir() && !found.Type().IsRegular() {
+			s.Skipped++
+			return nil
+		}
+		info, err := found.Info()
+		if err != nil {
+			return fmt.Errorf("cannot read %s: %w", hostPath, err)
+		}
+		added := entry{inRoot: inRoot, hostPath: hostPath, name: base, modified: info.ModTime()}
+		if isDir {
+			added.name = path.Join(base, inRoot)
+		}
+		if found.IsDir() {
+			added.dir, added.mode = true, 0o700
+		} else {
+			added.size, added.mode = info.Size(), int64(info.Mode().Perm()&0o700)
+			file, err := root.OpenFile(inRoot, readOnlyNeverFollowing, 0)
+			if err != nil {
+				return fmt.Errorf("cannot read %s: %w", hostPath, err)
+			}
+			file.Close()
+		}
+		if err := s.count(added); err != nil {
+			return err
+		}
+		source.entries = append(source.entries, added)
+		return nil
+	})
+	if err != nil {
+		root.Close()
+		return Source{}, err
+	}
+	return source, nil
+}
+
+func (s Survey) Close() {
+	for _, source := range s.Sources {
+		source.root.Close()
+	}
 }
 
 func (s *survey) count(added entry) error {
@@ -125,21 +162,18 @@ func (s Source) Archive(to io.Writer) error {
 			}
 			continue
 		}
-		if err := entry.write(writer); err != nil {
+		if err := entry.write(s.root, writer); err != nil {
 			return err
 		}
 	}
 	return writer.Close()
 }
 
-func (e entry) write(writer *tar.Writer) error {
+func (e entry) write(root *os.Root, writer *tar.Writer) error {
 	changed := fmt.Errorf("%s changed while stage was copying it", e.hostPath)
-	file, err := os.OpenFile(e.hostPath, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-	if errors.Is(err, syscall.ELOOP) || errors.Is(err, fs.ErrNotExist) {
-		return changed
-	}
+	file, err := root.OpenFile(e.inRoot, readOnlyNeverFollowing, 0)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %v", changed, err)
 	}
 	defer file.Close()
 	info, err := file.Stat()

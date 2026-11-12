@@ -222,12 +222,34 @@ it. Credentials stay on the host, behind secrets and bindings, so stage refuses 
 
 - stage's own directory (`~/.scoring-stage`, or `STAGE_HOME`), which keeps tokens, saved logins and broker grants;
 - a known credential location under your home: `.ssh`, `.aws`, `.azure`, `.gnupg`, `.kube`, `.netrc`, `.npmrc`,
-  `.pypirc`, `.git-credentials`, `.config/git/credentials`, `.config/gh`, `.config/gcloud`, `.config/sbx`,
-  `.docker/config.json`, `.claude/.credentials.json`, `.codex/auth.json`, and every agent's login files.
+  `.pypirc`, `.git-credentials`, `.vault-token`, `.pgpass`, `.my.cnf`, `.password-store`, `.terraform.d`,
+  `.docker/config.json`, `.cargo/credentials` and `.cargo/credentials.toml`, `.gem/credentials`,
+  `.m2/settings.xml`, `.claude/.credentials.json`, `.codex/auth.json`, `.config/git/credentials`, `.config/gh`,
+  `.config/github-copilot`, `.config/gcloud`, `.config/sbx`, `.config/rclone`, `.config/op`,
+  `.config/containers/auth.json`, `.local/share/keyrings`, `Library/Keychains`, the shell histories
+  `.bash_history`, `.zsh_history` and `.local/share/fish/fish_history`, and every agent's login files;
+- where these variables move one, when they are set: `AWS_SHARED_CREDENTIALS_FILE`, `AWS_CONFIG_FILE`,
+  `KUBECONFIG` (each file in the list), `GNUPGHOME`, `DOCKER_CONFIG` (its `config.json`), `HISTFILE`, and
+  `XDG_CONFIG_HOME` for the `.config` entries, in addition to the places above;
+- anything outside one of those directories that a link inside it points to, such as the file behind
+  `~/.aws/credentials` when a dotfiles manager links it.
 
-So `~/.config` and `~/.docker` are refused whole; list the files or directories beside the credential that you
-mean. The check follows links and ignores letter case. It is a guard against mistakes, not a scan: stage does not
-look inside your files, and a token in a file elsewhere is copied like anything else.
+So `~/.config`, `~/.docker`, `~/.cargo` and `~/.local/share` are refused whole; list the files or directories
+beside the credential that you mean. The comparison follows links and ignores letter case. If stage cannot find
+your home directory, cannot read one of these directories, or finds more than 100,000 entries in one, it refuses
+all gear, since it could not make the check.
+
+**The list is a guard against mistakes, not a guarantee.** stage does not look inside your files, so a token
+written into a config file you list, or kept anywhere the list does not name, is copied like anything else. A
+hard link to a credential is not detected. Everything that is copied is readable by the agent.
+
+A `to` is refused when it is, is inside or holds one of an agent's login files, which stage copies and saves
+itself with `copy_logins`, or the sandbox's workspace, where `stage ship` would find your files among the agent's
+work.
+
+These checks run at `stage up`, and `stage setup` reports what they would refuse. They do not stop other
+commands, so a gear entry stage refuses never keeps you from `stage down`, `stage take` or `stage ship` on a
+sandbox you already have.
 
 Only your own config may list gear. A repository's config, a book and a `[[repos]]` rule that list it are refused,
 since any of them could otherwise have stage hand your files to an agent. There is no flag to leave gear out of
@@ -241,12 +263,15 @@ What is copied:
   followed. Links and special files inside a listed directory are never followed or copied, wherever they point,
   and `stage up` says how many it left out.
 - A path that is not on this machine is passed over with one line. A listed path that is neither a file nor a
-  directory, or a file stage cannot read, stops `stage up`.
+  directory, or a file or directory stage cannot read, stops `stage up` before the sandbox is created.
 - At most 100 MiB and 10,000 files and directories across all gear. More stops `stage up` before the sandbox is
   created. A file that changes size, or turns into a link, between that check and its copy fails the copy.
+  stage holds each listed directory open from the check to the copy, so a directory under it that is swapped for
+  a link in between cannot bring in a file from outside.
 - Files keep their owner's permission bits, so an executable stays one, and get none for group or others.
-  Directories are mode 700. Everything is owned by the sandbox user, and written as that user, so a destination
-  that user cannot write stops `stage up`.
+  Directories gear creates are mode 700; a directory that is already there, such as `~/.config`, keeps its mode.
+  Everything is owned by the sandbox user, and written as that user, so a destination that user cannot write
+  stops `stage up`.
 
 Your copy wins. Gear is unpacked over whatever is at the destination, so a file a kit wrote there is replaced, and
 a directory is merged: your files replace those of the same name, and files only the kit wrote stay. Entries are
@@ -260,9 +285,11 @@ runs later sees your gear: `stage shell`, `stage exec`, the agent, and a `startu
 is copied once: a later change on your machine reaches the next sandbox, not this one. None of this has been run
 against a live sandbox yet; see [VERIFICATION.md](VERIFICATION.md).
 
-If a copy fails, `stage up` fails and says to run `stage down <slug>`: the sandbox exists, without some of its
-gear. `stage up --plan` shows what would be copied, and `stage setup` shows the setting. An administrator can refuse
-gear with `allow_gear = false` in [managed settings](#managed-settings).
+The copy of all gear together has 5 minutes. If it runs out, if a copy fails, or if sbx finishes without the
+sandbox confirming that it unpacked what stage sent, `stage up` fails: the sandbox is created and may hold only
+part of your gear. It is still a working sandbox, but stage does not call it up; fix the cause, then run
+`stage down <slug>` and `stage up` again. `stage up --plan` shows what would be copied, and `stage setup` shows the
+setting. An administrator can refuse gear with `allow_gear = false` in [managed settings](#managed-settings).
 
 ## One-time setup
 
@@ -704,9 +731,10 @@ Without a pin, users under managed settings can point app mode at any app, and o
 check stands between them and an app that can write; `stage setup` warns when `allowed_modes` allows `"app"` without
 a pin, and when a pin is set but app mode is not allowed.
 
-`allow_gear = false` refuses [gear](#gear): a user config that lists any stops stage with an error. Without the
-key gear is allowed, and a `false` in any managed file wins. It is all or nothing; managed settings cannot allow
-some paths and refuse others.
+`allow_gear = false` refuses [gear](#gear): `stage up` refuses while the user's config lists any, and
+`stage setup` warns. Other commands still run, so existing sandboxes can be shipped, taken from and removed.
+Without the key gear is allowed, and a `false` in any managed file wins. It is all or nothing; managed settings
+cannot allow some paths and refuse others.
 
 `stage setup` shows the managed settings in effect and warns about a managed file or directory that is not owned by
 root or that its group or others can write. A managed file stage cannot read stops stage rather than being skipped. They only
@@ -763,8 +791,8 @@ and what has not been run live yet.
 - agy's Google sign-in is a token file inside the sandbox that the agent can read. With `copy_logins`, every
   sandbox with agy holds a live copy.
 - [Gear](#gear) is copied into the sandbox as files the agent can read, and stage does not look inside them. The
-  refused credential locations are a fixed list that guards against mistakes; a secret kept anywhere else, or
-  written into a config file you list, goes in. Gear arrives after kit install commands have run, and is not
+  refused credential locations are a fixed list that guards against mistakes; a secret kept anywhere else,
+  written into a config file you list, or reached by a hard link, goes in. Gear arrives after kit install commands have run, and is not
   refreshed while the sandbox lives. The copy has run only against fakes.
 - AWS keys from the broker enter the sandbox and stay usable until they expire, up to about 12 hours, even after
   `stage down`.

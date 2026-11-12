@@ -186,16 +186,17 @@ func TestStreamSucceedsWhenSbxExitsCleanlyButAChildKeepsItsStderrOpen(t *testing
 func TestFeedWithinGivesSbxItsInputAndReportsWhatAFailedSbxSaid(t *testing.T) {
 	received := filepath.Join(t.TempDir(), "received")
 	t.Setenv("RECEIVED", received)
-	fakeSbx(t, `cat > "$RECEIVED"`)
-	if err := FeedWithin(time.Minute, strings.NewReader("all of it"), "exec", "box"); err != nil {
-		t.Fatal(err)
+	fakeSbx(t, `cat > "$RECEIVED"; echo unpacked`)
+	said, err := FeedWithin(time.Minute, strings.NewReader("all of it"), "exec", "box")
+	if err != nil || said != "unpacked\n" {
+		t.Fatalf("sbx said %q, %v", said, err)
 	}
 	if got, err := os.ReadFile(received); err != nil || string(got) != "all of it" {
 		t.Fatalf("sbx received %q, %v", got, err)
 	}
 
 	fakeSbx(t, `cat > /dev/null; echo 'tar: cannot open: Permission denied' >&2; exit 2`)
-	err := FeedWithin(time.Minute, strings.NewReader("all of it"), "exec", "box")
+	_, err = FeedWithin(time.Minute, strings.NewReader("all of it"), "exec", "box")
 	if err == nil || err.Error() != "sbx exec box failed: tar: cannot open: Permission denied" {
 		t.Fatalf("error %v", err)
 	}
@@ -204,7 +205,8 @@ func TestFeedWithinGivesSbxItsInputAndReportsWhatAFailedSbxSaid(t *testing.T) {
 func TestFeedWithinStopsAnSbxThatDoesNotFinishInTime(t *testing.T) {
 	fakeSbx(t, `sleep 30`)
 	err := returnsWithin(t, 10*time.Second, func() error {
-		return FeedWithin(200*time.Millisecond, strings.NewReader("ignored"), "exec", "box")
+		_, err := FeedWithin(200*time.Millisecond, strings.NewReader("ignored"), "exec", "box")
+		return err
 	})
 	if err == nil || !strings.Contains(err.Error(), "sbx exec box did not finish within 200ms") {
 		t.Fatalf("error %v", err)

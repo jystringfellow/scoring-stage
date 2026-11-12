@@ -78,7 +78,7 @@ printf '%s\n' "$*" >> "$FAKE_SBX_LOG"
 if [ "$1" = exec ]; then
   case " $* " in
     *"tar -cf -"*) if [ -f "$FAKE_SBX_STATE/takes.hang" ]; then sleep 30; fi; if [ -f "$FAKE_SBX_STATE/takes.fail" ]; then cat "$FAKE_SBX_STATE/takes.fail" >&2; exit 1; fi; [ -f "$FAKE_SBX_STATE/takes.tar" ] && cat "$FAKE_SBX_STATE/takes.tar" ;;
-    *" -i "*) for last; do :; done; if [ -f "$FAKE_SBX_STATE/feed.fail" ]; then cat > /dev/null; cat "$FAKE_SBX_STATE/feed.fail" >&2; exit 1; fi; mkdir -p "$FAKE_SBX_STATE/box"; cat > "$FAKE_SBX_STATE/box/$(basename "$last")" ;;
+    *" -i "*) for last; do :; done; if [ -f "$FAKE_SBX_STATE/feed.hang" ]; then sleep 30; fi; if [ -f "$FAKE_SBX_STATE/feed.ignore" ]; then exit 0; fi; if [ -f "$FAKE_SBX_STATE/feed.fail" ]; then cat > /dev/null; cat "$FAKE_SBX_STATE/feed.fail" >&2; exit 1; fi; mkdir -p "$FAKE_SBX_STATE/box"; cat > "$FAKE_SBX_STATE/box/$(basename "$last")"; case " $* " in *"tar -xf -"*) echo stage-gear-unpacked ;; esac ;;
     *" cat "*) for last; do :; done; file="$FAKE_SBX_STATE/box/$(basename "$last")"; [ -s "$file" ] || { echo "cat: No such file or directory" >&2; exit 1; }; cat "$file" ;;
   esac
   exit 0
@@ -167,6 +167,14 @@ func (f *FakeSbx) HangTakes() {
 
 func (f *FakeSbx) FailFeeds(message string) {
 	WriteFile(f.t, filepath.Join(f.State, "feed.fail"), message+"\n")
+}
+
+func (f *FakeSbx) IgnoreFeeds() {
+	WriteFile(f.t, filepath.Join(f.State, "feed.ignore"), "")
+}
+
+func (f *FakeSbx) HangFeeds() {
+	WriteFile(f.t, filepath.Join(f.State, "feed.hang"), "")
 }
 
 // BoxFile is the fake sandbox's copy of the in-box file with this base name:

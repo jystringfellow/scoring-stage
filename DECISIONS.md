@@ -244,33 +244,52 @@ into each new sandbox.
   `[[repos]]` rule is part of a book. Any of them listing gear would make stage hand the user's host files to an
   agent, so each is refused by name instead of as an unknown key.
 - **Managed settings.** `allow_gear = false` refuses it, like `allow_global_policy`: a boolean that any managed
-  file can turn off. Without the key gear is allowed, since it carries the user's own files into the user's own
+  file can turn off. Like every check on gear that depends on the machine, it is made by `stage up` and reported
+  by `stage setup`, not when the config is loaded, so a refused entry cannot keep a user from shipping from,
+  taking from or removing a sandbox they already have. Without the key gear is allowed, since it carries the user's own files into the user's own
   sandbox and adds no access to anything else. Rejected for now: path patterns an administrator allows, which no
   one has asked for and which would need the same link and case handling as the credential check.
 - **Credentials stay on the host.** Gear that is, is inside or holds stage's own directory or a known credential
-  location is refused with no override, compared after following links and without regard to case. The list is a
-  guard against mistakes, not a scan: stage does not read the files, and the README says the agent can read
-  everything listed.
+  location is refused with no override, compared after following links and without regard to case. The locations
+  include where `AWS_SHARED_CREDENTIALS_FILE`, `AWS_CONFIG_FILE`, `KUBECONFIG`, `GNUPGHOME`, `DOCKER_CONFIG`,
+  `HISTFILE` and `XDG_CONFIG_HOME` move them, and whatever a link inside a credential directory points to, so a
+  dotfiles directory holding the real `~/.aws/credentials` is refused. The check fails closed: no home directory,
+  an unreadable credential directory or one with more than 100,000 entries refuses all gear. The list is a guard
+  against mistakes, not a scan: stage does not read the files, a hard link is not detected, and the README says
+  the agent can read everything listed. A destination on an agent's login files or in the workspace is refused,
+  since `copy_logins` would save it as a login and `stage ship` would find it among the agent's work.
 - **What is copied.** Regular files and directories. A listed path that is a link is followed, since the user named
   it; links and special files under a listed directory are never followed or copied, so nothing outside the listed
   source can be carried, and are counted. A missing source is passed over with a line, like a take that does not
   exist. All gear together is bounded at 100 MiB and 10,000 entries, a tenth of a take's bounds because gear is
-  configuration, and is measured before the sandbox is created. Files keep only their owner's permission bits and
-  carry no owner.
+  configuration, and is measured, and every file opened, before the sandbox is created. stage holds each
+  source's directory open from that survey to the copy and opens files beneath it without following links, so
+  a path swapped in between cannot bring in a file from outside. Files keep only their owner's permission bits
+  and carry no owner; a directory that already exists in the sandbox keeps its mode.
 - **How and when.** sbx has no copy-in for an existing sandbox, so stage streams a tar through `sbx exec -i`, the
-  path saved logins take, with a time limit. That can only happen once `sbx env create` returns, which is after
+  path saved logins take, with 5 minutes for all gear together. The sandbox's script prints a line once tar
+  has unpacked, and stage treats a clean exit without it as a failure, since an sbx that never read its input
+  would otherwise look like a copy. That can only happen once `sbx env create` returns, which is after
   kit install commands; the README tells kit authors so. Rejected: generating a kit whose `files/` hold the gear,
   which would put the user's files in the env file's kit list, and whose order against other kits' commands, modes
   and handling of an existing file are unverified.
 - **The user's copy wins, and a failed copy fails `up`.** Gear is unpacked over what a kit wrote, and before saved
-  logins. A failed copy ends `stage up` with an error naming `stage down`, as a failed `sbx env create` does; a
+  logins. A failed copy ends `stage up` with an error that says the sandbox may hold part of the gear and names
+  `stage down`, as a failed `sbx env create` does; a
   failed login copy only warns, because the agent can sign in again, but nothing would tell the user their config
   was missing.
 
 Nothing here has run against a live sandbox; VERIFICATION.md lists what is unchecked. Evidence:
 `TestGearIsAHomePathOrAFromAndToPair`, `TestAGearEntryIsRefusedUnlessItsPathsAreCleanAndRooted`,
 `TestOnlyTheUsersConfigMayListGear`, `TestGearCannotComeFromStagesOwnDirectoryOrAKnownCredentialLocation`,
-`TestManagedSettingsCanRefuseGear`, `TestLinksAndSpecialFilesInsideADirectoryAreLeftOutAndCounted`,
+`TestGearCannotCarryWhatALinkInsideACredentialDirectoryPointsTo`,
+`TestCredentialLocationsFollowTheVariablesThatMoveThem`, `TestGearIsRefusedWhenTheHomeDirectoryIsUnknown`,
+`TestGearCannotLandOnAnAgentsLoginFilesOrInTheWorkspace`,
+`TestManagedSettingsCanRefuseGearWithoutStoppingTheConfigFromLoading`,
+`TestManagedSettingsThatRefuseGearStopUpAndShowInSetupButLeaveDownWorking`,
+`TestAFileThatCannotBeReadStopsTheSurvey`,
+`TestADirectorySwappedForALinkAfterTheSurveyCannotCarryAFileFromOutside`,
+`TestUpFailsWhenSbxExitsCleanlyWithoutUnpackingTheGear`, `TestUpStopsAGearCopyThatDoesNotFinishInTime`, `TestLinksAndSpecialFilesInsideADirectoryAreLeftOutAndCounted`,
 `TestASourceThatIsNotThereIsPassedOverAndNamed`, `TestGearOverTheByteOrEntryLimitIsAnErrorAcrossAllOfIt`,
 `TestAFileThatChangesAfterTheSurveyStopsTheArchive`,
 `TestUpCopiesGearIntoTheNewSandboxOnceItIsCreatedAndSaysWhatItCopied`,
