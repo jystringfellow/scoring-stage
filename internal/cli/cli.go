@@ -594,6 +594,9 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	if err := a.checkRepoApprovals(settings.Home, composition, github, *approveRepoConfig, *plan); err != nil {
 		return 0, err
 	}
+	for _, warning := range composition.Warnings {
+		a.warn("%s", warning)
+	}
 	if len(composition.Agents) == 0 {
 		a.warn("no agents chosen, so the sandbox has only a shell; use --agent, agents in config.toml or %s", config.RepoConfigPath)
 	}

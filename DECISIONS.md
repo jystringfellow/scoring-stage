@@ -178,12 +178,14 @@ a book may do only inside the fence and a repository not at all, so a book or re
 refused and both still only name agents. The services a defined agent binds or supplies, and its bindings' hosts,
 are reserved against books and repository kits exactly as a built-in agent's are. A definition is held to the same
 checks as other config, and cannot set `github` or `stage-broker`. Managed settings name agents, so a definition
-must not change what a listed name means: with an agent list, only a built-in name kept on its own kit at another
-version is accepted; with a `copy_logins` list, no definition may set login files. Rejected: letting a book define
-an agent, since a book could then supply a published kit and bind a reserved service by calling it an agent.
+must not change what a listed name means: with an agent list, a definition may set only `kit`, to another version
+of a built-in agent's own kit; with a `copy_logins` list, no definition may set login files or move a listed name
+to another kit. Rejected: letting a book define an agent, since a book could then supply a published kit and bind a
+reserved service by calling it an agent.
 Evidence: `TestAUserConfigDefinesAnAgentWithItsKitBindingsSecretAndLoginFiles`,
 `TestADefinitionOfABuiltInNameOverridesItAndKeepsWhatItDoesNotSet`, `TestARepositoryCannotDefineAnAgent`,
 `TestABookCannotDefineAnAgent`, `TestABookCannotClaimADefinedAgentsServicesOrHosts`,
-`TestAgentDefinitionsAreDecodedStrictly`, `TestAgentPolicyRefusesADefinitionThatChangesWhichKitANameMeans`,
-`TestManagedCopyLoginsRefusesLoginFilesFromADefinition`,
+`TestAgentDefinitionsAreDecodedStrictly`,
+`TestUnderAnAgentPolicyADefinitionMayOnlyPinAnotherVersionOfABuiltInAgentsKit`,
+`TestManagedCopyLoginsRefusesADefinitionThatChoosesTheFilesOrMovesAListedNameToAnotherKit`,
 `TestAnAgentsDefaultSecretThatNeedsGhIsLeftOutWithoutGhAndYieldsToTheUsersSecret`.

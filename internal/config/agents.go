@@ -66,6 +66,7 @@ var builtinAgents = map[string]agentSpec{
 type agentDefinition struct {
 	name            string
 	keepsBuiltinKit bool
+	setsOnlyKit     bool
 	setsLoginFiles  bool
 }
 
@@ -110,6 +111,8 @@ func AgentNames(home string) []string {
 var (
 	agentName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 	agentKeys = []string{"kit", "bindings", "secrets", "login_files"}
+
+	agentSecretKeys = []string{"command", "refresh"}
 )
 
 func decodeAgents(value any, file, home string) (Agents, error) {
@@ -140,6 +143,7 @@ func decodeAgents(value any, file, home string) (Agents, error) {
 		agents.defined = append(agents.defined, agentDefinition{
 			name:            name,
 			keepsBuiltinKit: overrides && sameKit(spec.kit, builtin.kit),
+			setsOnlyKit:     len(table) == 1,
 			setsLoginFiles:  setsLoginFiles,
 		})
 	}
@@ -207,10 +211,18 @@ func checkAgentCredentials(secrets, bindings map[string]any, where string) error
 		if !ok {
 			return errorf(`%s: secret %s: a secret is a table such as {command = "..."}`, where, service)
 		}
-		if command, present := table["command"]; present {
-			if _, ok := command.(string); !ok {
-				return errorf("%s: secret %s: command must be a string", where, service)
-			}
+		if err := checkKeys(table, agentSecretKeys, where+": secret "+service); err != nil {
+			return err
+		}
+		if table["command"] == nil {
+			return errorf("%s: secret %s: command is required", where, service)
+		}
+		command, ok := table["command"].(string)
+		if !ok {
+			return errorf("%s: secret %s: command must be a string", where, service)
+		}
+		if ghPlaceholderMisplaced(command) {
+			return errorf("%s: secret %s: %s must stand unquoted as a word of its own; stage puts the quoted path of gh in its place", where, service, ghPlaceholder)
 		}
 	}
 	for _, service := range sortedKeys(bindings) {
@@ -252,7 +264,7 @@ func decodeLoginFiles(value any, where string) ([]LoginFile, error) {
 		if !strings.HasPrefix(file.Path, "/") || !isTakePath(file.Path) || HasHidden(file.Path) {
 			return nil, errorf("%s: login file %s must be an absolute path in the sandbox with no .., doubled or trailing slash", where, Printable(file.Path))
 		}
-		name := path.Base(file.Path)
+		name := strings.ToLower(path.Base(file.Path))
 		if other, taken := saved[name]; taken {
 			return nil, errorf("%s: login files %s and %s are both saved as %s on the host; give them different file names", where, other, file.Path, name)
 		}
@@ -296,7 +308,7 @@ func isLocalKit(source string) bool { return strings.HasPrefix(source, "/") }
 
 func kitIdentity(source string) string {
 	if isLocalKit(source) {
-		return source
+		return filepath.Clean(source)
 	}
 	return repositoryOf(source)
 }
@@ -365,19 +377,40 @@ func agentSecret(spec any, gh string) (map[string]any, bool) {
 	return resolved, true
 }
 
-func boundByBuiltinAgent(host string) bool {
-	for _, spec := range builtinAgents {
-		for _, binding := range spec.bindings {
-			hosts, _ := bindingDomains(binding)
-			for _, bound := range hosts {
-				if normalizeHost(bound) == host {
-					return true
-				}
+// ghPlaceholderMisplaced reports a command where the placeholder is quoted,
+// escaped or joined to other text, where a shell-quoted path would not be
+// read as the command it names.
+func ghPlaceholderMisplaced(command string) bool {
+	var quote rune
+	escaped := false
+	for index, r := range command {
+		if strings.HasPrefix(command[index:], ghPlaceholder) {
+			before, after := command[:index], command[index+len(ghPlaceholder):]
+			startsWord := before == "" || strings.ContainsRune(" \t\n;|&(", rune(before[len(before)-1]))
+			endsWord := after == "" || strings.ContainsRune(" \t\n;|&)", rune(after[0]))
+			if quote != 0 || escaped || !startsWord || !endsWord {
+				return true
 			}
+		}
+		switch {
+		case escaped:
+			escaped = false
+		case r == '\\' && quote != '\'':
+			escaped = true
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			}
+		case r == '\'' || r == '"':
+			quote = r
 		}
 	}
 	return false
 }
+
+// hostsBesideGitHub sit under a GitHub apex but take a built-in agent's own
+// credential, not GitHub's.
+var hostsBesideGitHub = []string{"copilot.github.com"}
 
 var sbxBuiltinServices = []string{"anthropic", "copilot", "cursor", "devin", "droid", "github", "google", "groq", "mistral", "nebius", "openai", "openrouter", "xai"}
 

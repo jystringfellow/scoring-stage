@@ -263,11 +263,16 @@ func (m *Managed) CheckAgent(name string, known bool, source string) error {
 // CheckAgentDefinition keeps the names managed settings use meaning what they
 // mean without the user's definitions: under an agent policy a definition may
 // only move a built-in agent to another version of its own kit, and where
-// copy_logins is limited a definition cannot choose the files that are copied.
+// copy_logins is limited a definition cannot choose the files that are copied
+// or move a listed name to another kit.
 func (m *Managed) CheckAgentDefinition(definition agentDefinition) error {
 	m = m.orUnmanaged()
-	if m.HasAgentPolicy() && !definition.keepsBuiltinKit {
-		return errorf("agent %s is defined in the user's config, and %s limits agents; under an agent policy a definition may only pin another version of a built-in agent's kit",
+	if m.HasAgentPolicy() && !(definition.keepsBuiltinKit && definition.setsOnlyKit) {
+		return errorf("agent %s is defined in the user's config, and %s limits agents; under an agent policy a definition may only pin another version of a built-in agent's kit, and set nothing but kit",
+			definition.name, m.where())
+	}
+	if m.copyLoginsSet && contains(m.copyLogins, definition.name) && !definition.keepsBuiltinKit {
+		return errorf("agent %s is defined on a kit that is not its built-in one, and %s lists it in copy_logins; a name whose login may be copied keeps its built-in kit",
 			definition.name, m.where())
 	}
 	if m.copyLoginsSet && definition.setsLoginFiles {

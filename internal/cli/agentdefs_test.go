@@ -75,3 +75,12 @@ func TestADefinedAgentsLoginFilesAreCopiedLikeABuiltInAgents(t *testing.T) {
 		t.Errorf("no call writing %s in %v", want, h.sbx.Calls())
 	}
 }
+
+func TestUpSaysOnceWhenAnAgentsSecretIsLeftOutForWantOfGh(t *testing.T) {
+	h := setup(t)
+	h.expect(0, "up", h.remote.Checkout, "fix", "--agent", "copilot")
+	want := "agent copilot's secret copilot needs the gh CLI, which was not found"
+	if got := strings.Count(h.stderr.String(), want); got != 1 {
+		t.Errorf("said it %d times: %q", got, h.stderr.String())
+	}
+}

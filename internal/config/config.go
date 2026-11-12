@@ -82,6 +82,7 @@ type Composition struct {
 	RepoBooks         []Book
 	Takes             []string
 	RepoTakes         []string
+	Warnings          []string
 	agents            Agents
 }
 
@@ -657,16 +658,24 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 	}
 
 	agentBinding, agentSecretOwner := map[string]string{}, map[string]string{}
+	var warnings []string
 	for _, name := range agentNames {
 		spec := agents.specs[name]
 		for _, service := range sortedKeys(spec.bindings) {
+			if _, own := settings.bindings[service]; own {
+				continue
+			}
 			if err := addAgentDefault(bindings, agentBinding, service, spec.bindings[service], name, "binding"); err != nil {
 				return nil, err
 			}
 		}
 		for _, service := range sortedKeys(spec.secrets) {
+			if _, own := settings.secrets[service]; own {
+				continue
+			}
 			secret, usable := agentSecret(spec.secrets[service], selection.Gh)
 			if !usable {
+				warnings = append(warnings, fmt.Sprintf("agent %s's secret %s needs the gh CLI, which was not found, so the sandbox has no %s secret", name, service, service))
 				continue
 			}
 			if err := addAgentDefault(secrets, agentSecretOwner, service, secret, name, "secret"); err != nil {
@@ -692,6 +701,7 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 		Bindings:          bindings,
 		RepoKits:          repoKits,
 		RepoBooks:         booksOnlyTheRepoAskedFor(active, selection),
+		Warnings:          warnings,
 		agents:            agents,
 	}
 	addTakes := func(takes []string) {
@@ -908,10 +918,12 @@ func parseKit(entry any, baseDir, owner string) (Kit, error) {
 }
 
 func refuseGitHubService(secrets, bindings map[string]any, where string) error {
-	_, secret := secrets[GitHubService]
-	_, binding := bindings[GitHubService]
-	if secret || binding {
-		return errorf("%s: the %s secret and binding come only from [github] mode", where, GitHubService)
+	for _, table := range []map[string]any{secrets, bindings} {
+		for service := range table {
+			if normalizeService(service) == GitHubService {
+				return errorf("%s: the %s secret and binding come only from [github] mode", where, GitHubService)
+			}
+		}
 	}
 	for _, service := range sortedKeys(bindings) {
 		domains, err := bindingDomains(bindings[service])
@@ -954,7 +966,7 @@ func bindingDomains(binding any) ([]string, error) {
 }
 
 func ReachesGitHub(domain string) bool {
-	if boundByBuiltinAgent(normalizeHost(domain)) {
+	if contains(hostsBesideGitHub, normalizeHost(domain)) {
 		return false
 	}
 	return reachesAny(domain, gitHubApexes)

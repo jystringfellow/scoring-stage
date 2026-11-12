@@ -337,7 +337,7 @@ login_files = [                                      # files in the sandbox that
 apiKey = { domains = ["api.example.com"] }
 
 [agent.example.secrets.example]                      # the default secret; [secrets.example] replaces it
-command = "{gh} auth token"                          # {gh} is the gh CLI stage found; without gh the secret is left out
+command = "{gh} auth token"                          # {gh} is the gh CLI stage found
 ```
 
 - `kit` is the only required key. A name is lower-case letters, digits, `-` and `_`.
@@ -345,16 +345,26 @@ command = "{gh} auth token"                          # {gh} is the gh CLI stage 
   built-in values, so `[agent.claude]` with only `kit = "docker.io/sbx/claude-mixin:<version>"` moves Claude Code to
   another version of its mixin. An empty table or list clears the built-in value.
 - A kit belongs to one agent: two agents cannot use the same kit, whatever its version.
-- A login file is an absolute path in the sandbox. stage keeps it in `~/.scoring-stage/logins/<name>/` under its file
-  name, so two login files of one agent cannot share a file name. A file marked `optional` is carried when the
-  sandbox has it.
-- An agent cannot set the `github` or `stage-broker` service, and its bindings cannot cover GitHub's hosts.
+- A secret is `command`, a host command that prints the value, with an optional `refresh`. In a command, `{gh}`
+  stands for the gh CLI stage found on your machine. Write it unquoted as a word of its own, as in
+  `{gh} auth token`: stage puts gh's shell-quoted path in its place, and refuses a command that has `{gh}` inside
+  quotes, escaped or joined to other text. When gh is not found, `stage up` leaves that secret out and says so; the
+  agent then has its binding but no credential.
+- When two agents in one sandbox set the same service differently, `stage up` stops unless your own
+  `[bindings.<service>]` or `[secrets.<service>]` settles it.
+- A login file is an absolute path in the sandbox. stage reads and writes it as the sandbox's user, and it need not
+  be under that user's home. stage keeps it in `~/.scoring-stage/logins/<name>/` under its file name, so two login
+  files of one agent cannot share a file name, whatever its letter case. A file marked `optional` is carried when
+  the sandbox has it.
+- An agent cannot set the `github` or `stage-broker` service, however the name is cased or spaced, and its bindings
+  cannot cover GitHub's hosts.
 - Only your own config defines agents. A book or a repository that has an `agent` table is refused; both can only
   name agents. The services an agent you define binds or supplies are reserved like a built-in agent's, so no book or
   repository kit can claim them.
 - Under [managed settings](#managed-settings), an agent list (`allowed_agents` or `denied_agents`) refuses every
-  definition except a built-in name kept on its own kit at another version, and a `copy_logins` list refuses any
-  definition that sets `login_files`. The names an administrator lists therefore keep their meaning.
+  definition except one that only sets `kit`, to another version of a built-in agent's own kit. A `copy_logins`
+  list refuses any definition that sets `login_files`, and any definition that puts a name in that list on another
+  kit. The names an administrator lists therefore keep their meaning.
 
 The `github` binding (in `fine-grained`, `app` and `gh` modes), an agent's bindings and, with AWS, `stage-broker` are written to sbx's
 `~/.config/sbx/credentials.yaml`. A binding only authorises a service's credential for use; it does not limit

@@ -185,6 +185,18 @@ func TestAgentDefinitionsAreDecodedStrictly(t *testing.T) {
 		"[agent.example]\n" + kit + "login_files = [{ path = \"/home/agent/.x\", required = true }]\n":                     "a login file is a path or { path, optional }",
 		"[agent.example]\n" + kit + "login_files = [{ path = \"/home/agent/.x\", optional = \"yes\" }]\n":                  "a login file is a path or { path, optional }",
 		"[agent.example]\n" + kit + "login_files = [\"/home/agent/.a/token\", \"/home/agent/.b/token\"]\n":                 "are both saved as token",
+		"[agent.example]\n" + kit + "[agent.example.secrets.example]\ncomand = \"cat /tmp/k\"\n":                           "unknown keys comand",
+		"[agent.example]\n" + kit + "[agent.example.secrets.example]\nrefresh = \"1h\"\n":                                  "command is required",
+		"[agent.example]\n" + kit + "[agent.example.secrets.GitHub]\ncommand = \"cat /tmp/k\"\n":                           "come only from [github] mode",
+		"[agent.example]\n" + kit + "[agent.example.secrets.\" github\"]\ncommand = \"cat /tmp/k\"\n":                      "come only from [github] mode",
+		"[agent.example]\n" + kit + "[agent.example.bindings.GITHUB]\napiKey = { domains = [\"x.example.com\"] }\n":        "come only from [github] mode",
+		"[secrets.GitHub]\ncommand = \"cat /tmp/k\"\n":                                                                     "come only from [github] mode",
+		"[bindings.\"GITHUB \"]\napiKey = { domains = [\"x.example.com\"] }\n":                                             "come only from [github] mode",
+		"[agent.example]\n" + kit + "[agent.example.secrets.example]\ncommand = \"echo '{gh}'\"\n":                         "{gh} must stand unquoted",
+		"[agent.example]\n" + kit + "[agent.example.secrets.example]\ncommand = 'sh -c \"{gh} auth token\"'\n":             "{gh} must stand unquoted",
+		"[agent.example]\n" + kit + "[agent.example.secrets.example]\ncommand = 'echo \\{gh}'\n":                           "{gh} must stand unquoted",
+		"[agent.example]\n" + kit + "[agent.example.secrets.example]\ncommand = \"x{gh} auth token\"\n":                    "{gh} must stand unquoted",
+		"[agent.example]\n" + kit + "login_files = [\"/home/agent/.a/Token\", \"/home/agent/.b/token\"]\n":                 "are both saved as",
 		"[agent.example]\nkit = \"docker.io/sbx/claude-mixin:9.9.9\"\n":                                                    "agents claude and example both use docker.io/sbx/claude-mixin",
 	} {
 		_, err := LoadSettings(homeWith(t, body))
@@ -213,23 +225,39 @@ func TestTwoChosenAgentsCannotSetOneServiceDifferently(t *testing.T) {
 	expectError(t, err, "agent example sets binding openai differently from agent codex")
 }
 
-func TestAgentPolicyRefusesADefinitionThatChangesWhichKitANameMeans(t *testing.T) {
-	managedFiles(t, "allowed_agents = [\"claude\", \"example\"]\n")
-	_, err := LoadSettings(homeWith(t, exampleAgent))
-	expectError(t, err, "agent example is defined in")
-	_, err = LoadSettings(homeWith(t, "[agent.claude]\nkit = \"registry.example.com/other/kit:1\"\n"))
-	expectError(t, err, "agent claude is defined in")
-	settings := load(t, homeWith(t, "[agent.claude]\nkit = \"docker.io/sbx/claude-mixin:9.9.9\"\n"))
-	composeWith(t, settings, Selection{Agents: []string{"claude"}})
+func TestUnderAnAgentPolicyADefinitionMayOnlyPinAnotherVersionOfABuiltInAgentsKit(t *testing.T) {
+	pinned := "[agent.claude]\nkit = \"docker.io/sbx/claude-mixin:9.9.9\"\n"
+	for _, policy := range []string{"allowed_agents = [\"claude\", \"example\"]\n", "denied_agents = [\"codex\"]\n"} {
+		managedFiles(t, policy)
+		for _, body := range []string{
+			exampleAgent,
+			"[agent.claude]\nkit = \"registry.example.com/other/kit:1\"\n",
+			pinned + "[agent.claude.bindings.extra]\napiKey = { domains = [\"api.example.com\"] }\n",
+			pinned + "[agent.claude.secrets.anthropic]\ncommand = \"cat /tmp/k\"\n",
+			pinned + "login_files = [\"/home/agent/.claude/token\"]\n",
+			pinned + "bindings = {}\n",
+		} {
+			_, err := LoadSettings(homeWith(t, body))
+			if err == nil || !strings.Contains(err.Error(), "may only pin another version of a built-in agent's kit") {
+				t.Errorf("%s%q: got %v", policy, body, err)
+			}
+		}
+		composeWith(t, load(t, homeWith(t, pinned)), Selection{Agents: []string{"claude"}})
+	}
 }
 
-func TestManagedCopyLoginsRefusesLoginFilesFromADefinition(t *testing.T) {
+func TestManagedCopyLoginsRefusesADefinitionThatChoosesTheFilesOrMovesAListedNameToAnotherKit(t *testing.T) {
 	managedFiles(t, "copy_logins = [\"agy\", \"example\"]\n")
-	_, err := LoadSettings(homeWith(t, exampleAgent))
-	expectError(t, err, "agent example sets login_files")
+	_, err := LoadSettings(homeWith(t, "[agent.claude]\nkit = \"docker.io/sbx/claude-mixin:9.9.9\"\nlogin_files = [\"/home/agent/.claude/token\"]\n"))
+	expectError(t, err, "agent claude sets login_files")
 	_, err = LoadSettings(homeWith(t, "[agent.agy]\nkit = \"docker.io/sbx/antigravity-mixin:1.0.0\"\nlogin_files = [\"/home/agent/.ssh/id_ed25519\"]\n"))
 	expectError(t, err, "agent agy sets login_files")
+	_, err = LoadSettings(homeWith(t, "[agent.agy]\nkit = \"registry.example.com/other/kit:1\"\n"))
+	expectError(t, err, "agent agy is defined on a kit that is not its built-in one")
+	_, err = LoadSettings(homeWith(t, "[agent.example]\nkit = \"registry.example.com/other/kit:1\"\n"))
+	expectError(t, err, "agent example is defined on a kit that is not its built-in one")
 	load(t, homeWith(t, "copy_logins = [\"agy\"]\n[agent.agy]\nkit = \"docker.io/sbx/antigravity-mixin:9.9.9\"\n"))
+	load(t, homeWith(t, "[agent.claude]\nkit = \"registry.example.com/other/kit:1\"\n"))
 }
 
 func TestSaveAgentsAndTheListedNamesIncludeDefinedAgents(t *testing.T) {
@@ -262,5 +290,78 @@ func TestNoBuiltInAgentsHostCountsAsGitHubs(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestAGitHubHostInABuiltInAgentsBindingWouldStillCountAsGitHubs(t *testing.T) {
+	original := builtinAgents["claude"]
+	widened := original
+	widened.bindings = map[string]any{"anthropic": domains("oauth", "api.anthropic.com", "api.github.com")}
+	builtinAgents["claude"] = widened
+	t.Cleanup(func() { builtinAgents["claude"] = original })
+	if !ReachesGitHub("api.github.com") {
+		t.Error("a GitHub host was exempted because a built-in agent binds it")
+	}
+}
+
+func TestAnEmptyTableOrListClearsWhatTheBuiltInAgentHad(t *testing.T) {
+	home := homeWith(t, "[agent.claude]\nkit = \"docker.io/sbx/claude-mixin:9.9.9\"\nbindings = {}\n[agent.agy]\nkit = \"docker.io/sbx/antigravity-mixin:9.9.9\"\nlogin_files = []\n")
+	settings := load(t, home)
+	composition := composeWith(t, settings, Selection{Agents: []string{"claude", "agy"}})
+	if _, set := composition.Bindings["anthropic"]; set {
+		t.Error("an emptied bindings table kept the built-in binding")
+	}
+	if got := settings.Agents.LoginFiles("agy"); len(got) != 0 {
+		t.Errorf("an emptied login_files list kept %v", got)
+	}
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "copy_logins = [\"agy\"]\n"+testutil.ReadFile(t, filepath.Join(home, "config.toml")))
+	_, err := LoadSettings(home)
+	expectError(t, err, "copy_logins: agy cannot be copied")
+}
+
+func TestTheUsersOwnBindingOrSecretSettlesTwoAgentsThatDisagree(t *testing.T) {
+	definition := "[agent.example]\nkit = \"docker.io/org/kit:1\"\n[agent.example.bindings.openai]\napiKey = { domains = [\"api.openai.com\"] }\n" +
+		"[agent.example.secrets.shared]\ncommand = \"cat /tmp/a\"\n[agent.other]\nkit = \"docker.io/org/other:1\"\n[agent.other.secrets.shared]\ncommand = \"cat /tmp/b\"\n"
+	_, err := Compose(load(t, homeWith(t, definition)), Selection{Agents: []string{"example", "other"}})
+	expectError(t, err, "agent other sets secret shared differently from agent example")
+	home := homeWith(t, definition+"[bindings.openai]\napiKey = { domains = [\"chatgpt.com\"] }\n[secrets.shared]\ncommand = \"cat /tmp/mine\"\n")
+	composition := composeWith(t, load(t, home), Selection{Agents: []string{"codex", "example", "other"}})
+	if got := composition.Bindings["openai"]; !reflect.DeepEqual(got, domains("apiKey", "chatgpt.com")) {
+		t.Errorf("binding = %v", got)
+	}
+	if got := composition.Secrets["shared"]; !reflect.DeepEqual(got, map[string]any{"command": "cat /tmp/mine"}) {
+		t.Errorf("secret = %v", got)
+	}
+}
+
+func TestALocalKitIsTheSameKitHoweverItsPathIsWritten(t *testing.T) {
+	home := homeWith(t, "[agent.example]\nkit = \"/opt/kits/example\"\n[agent.example.bindings.example]\napiKey = { domains = [\"api.example.com\"] }\n")
+	for _, reference := range []string{"/opt/kits/example", "/opt/kits/example/", "/opt/./kits/example", "/opt/kits//example"} {
+		composition := composeWith(t, load(t, home), Selection{Agents: []string{reference}})
+		if !reflect.DeepEqual(composition.Agents, []string{"example"}) || composition.Bindings["example"] == nil {
+			t.Errorf("%s: agents %v bindings %v", reference, composition.Agents, composition.Bindings)
+		}
+	}
+	_, err := LoadSettings(homeWith(t, "[agent.example]\nkit = \"/opt/kits/example\"\n[agent.other]\nkit = \"/opt/kits/example/\"\n"))
+	expectError(t, err, "agents example and other both use /opt/kits/example")
+}
+
+func TestGhInAnAgentsSecretIsSubstitutedShellQuotedAndItsAbsenceIsReported(t *testing.T) {
+	home := homeWith(t, exampleAgent)
+	composition := composeWith(t, load(t, home), Selection{Agents: []string{"example"}, Gh: "/opt/my tools/gh"})
+	if got := composition.Secrets["example"]; !reflect.DeepEqual(got, map[string]any{"command": "'/opt/my tools/gh' auth token"}) {
+		t.Errorf("secret = %v", got)
+	}
+	if len(composition.Warnings) != 0 {
+		t.Errorf("warnings = %v", composition.Warnings)
+	}
+	composition = composeWith(t, load(t, home), Selection{Agents: []string{"example"}})
+	want := []string{"agent example's secret example needs the gh CLI, which was not found, so the sandbox has no example secret"}
+	if !reflect.DeepEqual(composition.Warnings, want) {
+		t.Errorf("warnings = %v", composition.Warnings)
+	}
+	composition = composeWith(t, load(t, homeWith(t, exampleAgent+"[secrets.example]\ncommand = \"cat /tmp/key\"\n")), Selection{Agents: []string{"example"}})
+	if len(composition.Warnings) != 0 {
+		t.Errorf("warned although the user supplies the secret: %v", composition.Warnings)
 	}
 }
