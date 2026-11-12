@@ -212,7 +212,7 @@ func owns(owned map[string]any, service string) bool {
 	return ok
 }
 
-func checkUntrustedKit(dir, owner string, owned map[string]any) error {
+func checkUntrustedKit(agents Agents, dir, owner string, owned map[string]any) error {
 	documents, err := loadKit(dir)
 	if err != nil {
 		return errorf("%s: %v", owner, err)
@@ -238,8 +238,8 @@ func checkUntrustedKit(dir, owner string, owned map[string]any) error {
 			if normalized == "" {
 				return errorf("%s: declares a credential without a service name", where)
 			}
-			if isReservedService(normalized) {
-				return errorf("%s: declares credential %s, which is reserved; %s", where, normalized, reservedReason())
+			if agents.isReservedService(normalized) {
+				return errorf("%s: declares credential %s, which is reserved; %s", where, normalized, agents.reservedReason())
 			}
 			if owned == nil {
 				return errorf("%s: declares credential %s; a repository's kits may declare no credentials, since a repository supplies none", where, normalized)
@@ -255,8 +255,8 @@ func checkUntrustedKit(dir, owner string, owned map[string]any) error {
 				if hasDomainGlob(domain) {
 					return errorf("%s: credential %s is injected on %s; %s", where, service, Printable(domain), domainGlobReason)
 				}
-				if ReachesReserved(domain) {
-					return errorf("%s: credential %s is injected on %s, a host a reserved service uses; %s", where, service, Printable(domain), reservedReason())
+				if agents.ReachesReserved(domain) {
+					return errorf("%s: credential %s is injected on %s, a host a reserved service uses; %s", where, service, Printable(domain), agents.reservedReason())
 				}
 			}
 		}

@@ -356,7 +356,7 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 	fs := a.newFlags("setup", "[--yes] [--agent NAME]... [--github MODE]")
 	yes := fs.Bool("yes", false, "reset the global sbx policy to deny-all")
 	var agentFlags stringList
-	fs.Var(&agentFlags, "agent", "save an agent to config.toml: "+strings.Join(config.AgentNames(), ", ")+" (repeatable)")
+	fs.Var(&agentFlags, "agent", "save an agent to config.toml: "+strings.Join(config.AgentNames(home), ", ")+" (repeatable)")
 	githubMode := fs.String("github", "", "save how sandboxes reach GitHub to config.toml: "+strings.Join(config.GitHubModes, ", "))
 	if _, err := fs.parse(args); err != nil {
 		return 0, err
@@ -436,7 +436,7 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 	if agentList := settings.AgentEntries(); len(agentList) > 0 {
 		a.say("agents: %s", strings.Join(agentList, ", "))
 	} else {
-		a.warn("no agents in config.toml; boxes get only a shell unless --agent, a book or the repository adds some (stage setup --agent %s ...)", config.AgentNames()[0])
+		a.warn("no agents in config.toml; boxes get only a shell unless --agent, a book or the repository adds some (stage setup --agent %s ...)", settings.Agents.Names()[0])
 	}
 	var bookNames []string
 	for _, book := range settings.Books {
@@ -459,7 +459,7 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 	if err := checkNoGlobalGitHubSecret(); err != nil {
 		a.warn("%s", err)
 	}
-	a.auditBindings(settings.StageBindings())
+	a.auditBindings(settings, settings.StageBindings())
 	composition, err := config.Compose(settings, config.Selection{Gh: gh})
 	if err != nil {
 		return 0, err
@@ -481,7 +481,7 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	fs := a.newFlags("up", "<repo> <slug> [--agent NAME]... [--book NAME|DIR]... [--aws-profile NAME] [--base B] [--cpus N] [--memory M] [--allow-global-policy] [--plan]")
 	base := fs.String("base", "", "branch to start from (default: the repository's default branch)")
 	var agentFlags, books stringList
-	fs.Var(&agentFlags, "agent", "add an agent: "+strings.Join(config.AgentNames(), ", ")+", or a kit reference (repeatable)")
+	fs.Var(&agentFlags, "agent", "add an agent: "+strings.Join(config.AgentNames(home), ", ")+", or a kit reference (repeatable)")
 	fs.Var(&books, "book", "use an installed book by name, or a book directory such as ./book (repeatable)")
 	awsProfile := fs.String("aws-profile", "", "grant this AWS profile to the sandbox and make it the default")
 	cpus := fs.intFlag("cpus", "CPUs for the sandbox")
@@ -516,7 +516,7 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	}
 	auditExpected := settings.StageBindings()
 	if *plan {
-		defer func() { a.auditBindings(auditExpected) }()
+		defer func() { a.auditBindings(settings, auditExpected) }()
 	}
 	owner, _, _ := strings.Cut(github, "/")
 	gh := a.FindGh()
@@ -1174,7 +1174,7 @@ func copiedAgents(settings *config.Settings, task *Task) []string {
 func (a *App) restoreLogins(settings *config.Settings, task *Task) {
 agents:
 	for _, agent := range copiedAgents(settings, task) {
-		for _, loginFile := range config.LoginFiles(agent) {
+		for _, loginFile := range settings.Agents.LoginFiles(agent) {
 			file, err := os.Open(settings.SavedLogin(agent, loginFile))
 			if err != nil {
 				if loginFile.Required {
@@ -1197,7 +1197,7 @@ agents:
 
 func (a *App) saveLogins(settings *config.Settings, task *Task) error {
 	for _, agent := range copiedAgents(settings, task) {
-		for _, loginFile := range config.LoginFiles(agent) {
+		for _, loginFile := range settings.Agents.LoginFiles(agent) {
 			content, err := sbx.Output("exec", "-u", "agent", task.Sandbox, "cat", loginFile.Path)
 			if err != nil || strings.TrimSpace(content) == "" {
 				if loginFile.Required {

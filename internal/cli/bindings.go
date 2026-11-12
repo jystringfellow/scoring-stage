@@ -19,7 +19,7 @@ const (
 	bindingUnrecognised  = "unrecognised entry"
 )
 
-func (a *App) auditBindings(expected map[string]*config.StageBinding) {
+func (a *App) auditBindings(settings *config.Settings, expected map[string]*config.StageBinding) {
 	path := sbx.CredentialsPath()
 	if path == "" {
 		return
@@ -42,7 +42,7 @@ func (a *App) auditBindings(expected map[string]*config.StageBinding) {
 	if secretsErr != nil {
 		a.warn("cannot tell which bound services have a global secret: %s", printable(secretsErr.Error()))
 	}
-	known := config.KnownStageBindings()
+	known := settings.KnownStageBindings()
 	for _, binding := range bindings {
 		mark, reference, extra := classifyBinding(binding, expected, known)
 		global := slices.Contains(secrets, binding.Service)

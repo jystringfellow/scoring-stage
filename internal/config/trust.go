@@ -47,7 +47,7 @@ func RepoApprovals(composition *Composition, repository string) ([]Approval, err
 		if err != nil {
 			return nil, err
 		}
-		approvals = append(approvals, Approval{Label: "book " + book.Name + " (" + book.Path + ")", Fingerprint: fingerprint, Details: summarizeBook(book)})
+		approvals = append(approvals, Approval{Label: "book " + book.Name + " (" + book.Path + ")", Fingerprint: fingerprint, Details: summarizeBook(composition.agents, book)})
 	}
 	if len(composition.RepoTakes) > 0 {
 		approvals = append(approvals, Approval{Label: "takes for " + repository, Fingerprint: takesFingerprint(repository, composition.RepoTakes), Details: takeDetails(composition.RepoTakes)})
@@ -271,11 +271,11 @@ func Approve(home string, approvals []Approval) error {
 	return writeTrust(home, records)
 }
 
-func summarizeBook(book Book) []string {
+func summarizeBook(agents Agents, book Book) []string {
 	var details []string
 	agentLine := func(entry any, where string) {
 		if name, ok := entry.(string); ok && looksLikeName(name) {
-			if spec, known := agents[name]; known {
+			if spec, known := agents.specs[name]; known {
 				details = append(details, fmt.Sprintf("%sagent %s pinned to %s", where, name, spec.kit))
 				return
 			}

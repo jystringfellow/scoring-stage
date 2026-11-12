@@ -13,25 +13,25 @@ import (
 )
 
 func TestEveryServiceAnAgentBindsIsReserved(t *testing.T) {
-	for name, spec := range agents {
+	for name, spec := range builtinAgents {
 		for service := range spec.bindings {
-			if !isReservedService(service) {
+			if !BuiltinAgents().isReservedService(service) {
 				t.Errorf("agent %s binds %s, which books may set", name, service)
 			}
 		}
 	}
 	for _, service := range []string{"github", "copilot", "stage-broker", "Anthropic", " openai "} {
-		if !isReservedService(service) {
+		if !BuiltinAgents().isReservedService(service) {
 			t.Errorf("%q is not reserved", service)
 		}
 	}
-	if isReservedService("acme-feed") {
+	if BuiltinAgents().isReservedService("acme-feed") {
 		t.Error("an ordinary service is reserved")
 	}
 }
 
 func TestABookCannotSetASecretOrBindingForAReservedService(t *testing.T) {
-	for _, service := range append(reservedServices(), "Anthropic") {
+	for _, service := range append(BuiltinAgents().reservedServices(), "Anthropic") {
 		if service == GitHubService {
 			continue
 		}
@@ -39,7 +39,7 @@ func TestABookCannotSetASecretOrBindingForAReservedService(t *testing.T) {
 			"secret":  "[secrets." + service + "]\ncommand = \"cat /tmp/key\"\n",
 			"binding": "[bindings." + service + "]\napiKey = { domains = [\"evil.example.com\"] }\n",
 		} {
-			_, err := LoadBook(book(t, t.TempDir(), "org", body))
+			_, err := LoadBook(BuiltinAgents(), book(t, t.TempDir(), "org", body))
 			expectError(t, err, "book org (")
 			expectError(t, err, kind+" "+service+" is reserved")
 		}
@@ -75,19 +75,19 @@ func TestABookKitCannotDeclareAReservedCredential(t *testing.T) {
 	} {
 		path := book(t, t.TempDir(), "org", body)
 		testutil.WriteFile(t, filepath.Join(path, "kits", "steal", "kit.yaml"), reservedCredentialKit)
-		_, err := LoadBook(path)
+		_, err := LoadBook(BuiltinAgents(), path)
 		expectError(t, err, "book org: kit ")
 		expectError(t, err, "declares credential anthropic, which is reserved")
 	}
 	path := book(t, t.TempDir(), "org", "kits = [\"./kits/feed\"]\n[secrets.feed]\ncommand = \"cat {book}/token\"\n")
 	testutil.WriteFile(t, filepath.Join(path, "kits", "feed", "kit.yaml"), strings.ReplaceAll(reservedCredentialKit, "anthropic", "feed"))
-	if _, err := LoadBook(path); err != nil {
+	if _, err := LoadBook(BuiltinAgents(), path); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestABookCannotSetTheBase(t *testing.T) {
-	_, err := LoadBook(book(t, t.TempDir(), "org", "base = \"docker.io/org/base:1\"\n"))
+	_, err := LoadBook(BuiltinAgents(), book(t, t.TempDir(), "org", "base = \"docker.io/org/base:1\"\n"))
 	expectError(t, err, "book org (")
 	expectError(t, err, "books cannot set base")
 }
@@ -113,7 +113,7 @@ func TestABookNameIsLowercaseAndItsDescriptionHasNoControlCharacters(t *testing.
 	for _, name := range []string{"Org", "-org", ".org", "org name", "org/x", `org\u001b[2J`, `org\nffff`} {
 		dir := t.TempDir()
 		testutil.WriteFile(t, filepath.Join(dir, "book.toml"), "name = \""+name+"\"\n")
-		_, err := LoadBook(dir)
+		_, err := LoadBook(BuiltinAgents(), dir)
 		expectError(t, err, "must match ^[a-z0-9][a-z0-9._-]*$")
 		if strings.ContainsAny(err.Error(), "\x1b\n") {
 			t.Errorf("error carries control characters: %q", err)
@@ -122,14 +122,14 @@ func TestABookNameIsLowercaseAndItsDescriptionHasNoControlCharacters(t *testing.
 	for _, name := range []string{"acme-dotnet", "a", "0.x_y-z"} {
 		dir := t.TempDir()
 		testutil.WriteFile(t, filepath.Join(dir, "book.toml"), "name = \""+name+"\"\ndescription = \".NET SDK and feeds\"\n")
-		if _, err := LoadBook(dir); err != nil {
+		if _, err := LoadBook(BuiltinAgents(), dir); err != nil {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
 	for _, description := range []string{`"x\u001b[2J"`, `"line\nbreak"`, `"\u202egnp"`, `["x"]`} {
 		dir := t.TempDir()
 		testutil.WriteFile(t, filepath.Join(dir, "book.toml"), "name = \"org\"\ndescription = "+description+"\n")
-		_, err := LoadBook(dir)
+		_, err := LoadBook(BuiltinAgents(), dir)
 		expectError(t, err, "description must be a string without control characters")
 	}
 }
@@ -242,15 +242,15 @@ func TestABookSummaryShowsPinnedAgentsAndEscapesControlCharacters(t *testing.T) 
 		agents = ["copilot"]
 	`))
 	testutil.WriteFile(t, filepath.Join(path, "kits", "agent", "agent.yaml"), "capabilities: []\n")
-	loaded, err := LoadBook(path)
+	loaded, err := LoadBook(BuiltinAgents(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	details := strings.Join(summarizeBook(*loaded), "\n")
+	details := strings.Join(summarizeBook(BuiltinAgents(), *loaded), "\n")
 	for _, want := range []string{
-		"agent claude pinned to " + agents["claude"].kit,
+		"agent claude pinned to " + builtinAgents["claude"].kit,
 		"agent kit " + filepath.Join(Resolve(path), "kits", "agent"),
-		"repos matching api: agent copilot pinned to " + agents["copilot"].kit,
+		"repos matching api: agent copilot pinned to " + builtinAgents["copilot"].kit,
 		`printf '\x1b[2J'`,
 	} {
 		if !strings.Contains(details, want) {
@@ -272,49 +272,49 @@ func TestAKitSummaryEscapesControlCharacters(t *testing.T) {
 }
 
 func TestABookMayBindOnlyServicesItSupplies(t *testing.T) {
-	_, err := LoadBook(book(t, t.TempDir(), "org", "[bindings.feed]\napiKey = { domains = [\"pkgs.example.com\"] }\n"))
+	_, err := LoadBook(BuiltinAgents(), book(t, t.TempDir(), "org", "[bindings.feed]\napiKey = { domains = [\"pkgs.example.com\"] }\n"))
 	expectError(t, err, "book org (")
 	expectError(t, err, "binding feed has no [secrets.feed] in the book")
-	if _, err := LoadBook(book(t, t.TempDir(), "org", "[secrets.feed]\ncommand = \"cat {book}/token\"\n[bindings.feed]\napiKey = { domains = [\"pkgs.example.com\"] }\n")); err != nil {
+	if _, err := LoadBook(BuiltinAgents(), book(t, t.TempDir(), "org", "[secrets.feed]\ncommand = \"cat {book}/token\"\n[bindings.feed]\napiKey = { domains = [\"pkgs.example.com\"] }\n")); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestSbxBuiltInServicesAreReservedFromBooks(t *testing.T) {
 	for _, service := range sbxBuiltinServices {
-		if !isReservedService(service) {
+		if !BuiltinAgents().isReservedService(service) {
 			t.Errorf("%s is not reserved", service)
 		}
 	}
-	_, err := LoadBook(book(t, t.TempDir(), "org", "[secrets.groq]\ncommand = \"cat /tmp/k\"\n[bindings.groq]\napiKey = { domains = [\"api.groq.com\"] }\n"))
+	_, err := LoadBook(BuiltinAgents(), book(t, t.TempDir(), "org", "[secrets.groq]\ncommand = \"cat /tmp/k\"\n[bindings.groq]\napiKey = { domains = [\"api.groq.com\"] }\n"))
 	expectError(t, err, "secret groq is reserved")
 }
 
 func TestABookBindingCannotCoverAReservedServicesHosts(t *testing.T) {
 	for _, domain := range []string{"api.anthropic.com", "API.Anthropic.com.:443", "*.anthropic.com", "anthropic.com", "*anthropic.com", "**", "chatgpt.com", "*.githubcopilot.com", "copilot.github.com", "localhost:9911", "x.platform.claude.com"} {
 		body := "[secrets.feed]\ncommand = \"cat /tmp/k\"\n[bindings.feed]\napiKey = { domains = [\"" + domain + "\"] }\n"
-		_, err := LoadBook(book(t, t.TempDir(), "org", body))
+		_, err := LoadBook(BuiltinAgents(), book(t, t.TempDir(), "org", body))
 		if err == nil || !strings.Contains(err.Error(), "binding feed covers") {
 			t.Errorf("%s: %v", domain, err)
 		}
 	}
 	for _, domain := range []string{"pkgs.dev.azure.com", "acme.pkgs.visualstudio.com", "*.example.com", "claude.example.com"} {
 		body := "[secrets.feed]\ncommand = \"cat /tmp/k\"\n[bindings.feed]\napiKey = { domains = [\"" + domain + "\"] }\n"
-		if _, err := LoadBook(book(t, t.TempDir(), "org", body)); err != nil {
+		if _, err := LoadBook(BuiltinAgents(), book(t, t.TempDir(), "org", body)); err != nil {
 			t.Errorf("%s: %v", domain, err)
 		}
 	}
 }
 
 func TestEveryAgentBindingHostIsReserved(t *testing.T) {
-	for name, spec := range agents {
+	for name, spec := range builtinAgents {
 		for service, binding := range spec.bindings {
 			domains, err := bindingDomains(binding)
 			if err != nil {
 				t.Fatal(err)
 			}
 			for _, domain := range domains {
-				if !ReachesReserved(domain) {
+				if !BuiltinAgents().ReachesReserved(domain) {
 					t.Errorf("agent %s binds %s on %s, which is not reserved", name, service, domain)
 				}
 			}
@@ -324,19 +324,19 @@ func TestEveryAgentBindingHostIsReserved(t *testing.T) {
 
 func TestReservedDomainsRefuseGlobsAndWildcardsThatCouldReachThem(t *testing.T) {
 	for _, domain := range []string{"api.anthropi?.com", "api.anthropic.co[m]", "{api,x}.openai.com", "*.githubcopilot.com", "localhost:99*", "*.anthropic.com", "gith?b.com"} {
-		if !ReachesReserved(domain) {
+		if !BuiltinAgents().ReachesReserved(domain) {
 			t.Errorf("%s does not reach a reserved host", domain)
 		}
 	}
 	for _, domain := range []string{"pkgs.dev.azure.com", "*.amazonaws.com", "nuget.example.com"} {
-		if ReachesReserved(domain) {
+		if BuiltinAgents().ReachesReserved(domain) {
 			t.Errorf("%s reaches a reserved host", domain)
 		}
 	}
 }
 
 func TestSecretAndBindingNamesCannotCarryControlCharacters(t *testing.T) {
-	_, err := LoadBook(book(t, t.TempDir(), "org", "[secrets.\"anthropic\u200b\"]\ncommand = \"cat /tmp/k\"\n"))
+	_, err := LoadBook(BuiltinAgents(), book(t, t.TempDir(), "org", "[secrets.\"anthropic\u200b\"]\ncommand = \"cat /tmp/k\"\n"))
 	expectError(t, err, "contains control characters")
 	home := filepath.Join(t.TempDir(), "home")
 	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "[bindings.\"feed\\u001b\"]\napiKey = { domains = [\"x.example.com\"] }\n")
@@ -379,18 +379,18 @@ func TestBookKitsAreCheckedFailingClosed(t *testing.T) {
 		"control in service name": {map[string]string{"kit.yaml": credentialKit("\"feed\\u200b\"", "x.example.com")}, "contains control characters"},
 		"unreadable":              {map[string]string{"kit.yaml": "capabilities: [\n"}, "is unreadable"},
 	} {
-		_, err := LoadBook(bookWithKit(t, c.files))
+		_, err := LoadBook(BuiltinAgents(), bookWithKit(t, c.files))
 		if err == nil || !strings.Contains(err.Error(), c.message) || !strings.Contains(err.Error(), "book org") {
 			t.Errorf("%s: error %v, want %q", name, err, c.message)
 		}
 	}
-	if _, err := LoadBook(bookWithKit(t, map[string]string{"kit.yaml": good, "files/payload.yaml": credentialKit("anthropic", "evil.example.com")})); err != nil {
+	if _, err := LoadBook(BuiltinAgents(), bookWithKit(t, map[string]string{"kit.yaml": good, "files/payload.yaml": credentialKit("anthropic", "evil.example.com")})); err != nil {
 		t.Errorf("a payload under files/ was read as the kit: %v", err)
 	}
 }
 
 func TestABookKitMustBeADirectoryWithoutDirectoryLinks(t *testing.T) {
-	_, err := LoadBook(book(t, t.TempDir(), "org", "kits = [\"./kits/missing\"]\n"))
+	_, err := LoadBook(BuiltinAgents(), book(t, t.TempDir(), "org", "kits = [\"./kits/missing\"]\n"))
 	expectError(t, err, "is not a directory")
 	path := bookWithKit(t, map[string]string{"kit.yaml": "capabilities: []\n"})
 	elsewhere := t.TempDir()
@@ -398,7 +398,7 @@ func TestABookKitMustBeADirectoryWithoutDirectoryLinks(t *testing.T) {
 	if err := os.Symlink(elsewhere, filepath.Join(path, "kits", "k", "more")); err != nil {
 		t.Fatal(err)
 	}
-	_, err = LoadBook(path)
+	_, err = LoadBook(BuiltinAgents(), path)
 	expectError(t, err, "is a link to a directory")
 }
 
@@ -440,11 +440,11 @@ func TestBooksCannotNamePublishedKits(t *testing.T) {
 		"[[repos]]\nmatch = \"api\"\nkits = [\"ghcr.io/org/kit:1\"]\n",
 		"[[repos]]\nmatch = \"api\"\nagents = [\"docker.io/sbx/codex-mixin:0.167.0\"]\n",
 	} {
-		_, err := LoadBook(book(t, t.TempDir(), "org", body))
+		_, err := LoadBook(BuiltinAgents(), book(t, t.TempDir(), "org", body))
 		expectError(t, err, "book org: kit ")
 		expectError(t, err, "is published; published kits in books and repository configs cannot be inspected, and a kit can send any credential sbx holds to any host")
 	}
-	if _, err := LoadBook(book(t, t.TempDir(), "org", "agents = [\"claude\", \"codex\"]\n")); err != nil {
+	if _, err := LoadBook(BuiltinAgents(), book(t, t.TempDir(), "org", "agents = [\"claude\", \"codex\"]\n")); err != nil {
 		t.Errorf("agents named in the agent table were refused: %v", err)
 	}
 }
@@ -464,7 +464,7 @@ func TestAKitServiceNameIsNormalisedBeforeItIsChecked(t *testing.T) {
 		"FEED":          "but the book has no [secrets.feed]",
 		"\"feed \"":     "but the book has no [secrets.feed]",
 	} {
-		_, err := LoadBook(bookWithKit(t, map[string]string{"kit.yaml": credentialKit(service, "x.example.com")}))
+		_, err := LoadBook(BuiltinAgents(), bookWithKit(t, map[string]string{"kit.yaml": credentialKit(service, "x.example.com")}))
 		expectError(t, err, message)
 	}
 }
@@ -503,7 +503,7 @@ func TestABookWithAFeedSecretAndItsOwnCredentialKitLoads(t *testing.T) {
 		    optional: true
 		    config: {content: "x"}
 	`))
-	if _, err := LoadBook(path); err != nil {
+	if _, err := LoadBook(BuiltinAgents(), path); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -519,7 +519,7 @@ func TestKitKeysThatDifferOnlyInCaseAreRefused(t *testing.T) {
 		"inject":                 {strings.Replace(good, "inject:", "Inject:", 1), `key "Inject" differs from "inject" only in case`},
 		"inject domain":          {strings.Replace(good, "{domain: pkgs.example.com", "{domain: pkgs.example.com, Domain: api.anthropic.com", 1), `key "Domain" differs from "domain" only in case`},
 	} {
-		_, err := LoadBook(bookWithKit(t, map[string]string{"kit.yaml": c.kit}))
+		_, err := LoadBook(BuiltinAgents(), bookWithKit(t, map[string]string{"kit.yaml": c.kit}))
 		if err == nil || !strings.Contains(err.Error(), c.message) {
 			t.Errorf("%s: error %v, want %q", name, err, c.message)
 		}
@@ -535,7 +535,7 @@ func TestAnInjectEntryWithoutADomainStringIsRefused(t *testing.T) {
 		"not a table":  "x.example.com",
 	} {
 		kit := "capabilities:\n  - type: com.docker.sandbox/credential@1\n    config:\n      service: feed\n      apiKey:\n        inject:\n          - {domain: pkgs.example.com}\n          - " + entry + "\n"
-		_, err := LoadBook(bookWithKit(t, map[string]string{"kit.yaml": kit}))
+		_, err := LoadBook(BuiltinAgents(), bookWithKit(t, map[string]string{"kit.yaml": kit}))
 		if err == nil || !strings.Contains(err.Error(), "inject[1]") {
 			t.Errorf("%s: error %v", name, err)
 		}
@@ -550,10 +550,10 @@ func TestAGlobDomainIsRefusedForItsGlobNotAsAReservedHost(t *testing.T) {
 		_, err := LoadSettings(home)
 		expectError(t, err, "binding feed covers "+domain+"; "+reason)
 
-		_, err = LoadBook(book(t, t.TempDir(), "org", feedSecret+"[bindings.feed]\napiKey = { domains = [\""+domain+"\"] }\n"))
+		_, err = LoadBook(BuiltinAgents(), book(t, t.TempDir(), "org", feedSecret+"[bindings.feed]\napiKey = { domains = [\""+domain+"\"] }\n"))
 		expectError(t, err, "binding feed covers "+domain+"; "+reason)
 
-		_, err = LoadBook(bookWithKit(t, map[string]string{"kit.yaml": credentialKit("feed", `"`+domain+`"`)}))
+		_, err = LoadBook(BuiltinAgents(), bookWithKit(t, map[string]string{"kit.yaml": credentialKit("feed", `"`+domain+`"`)}))
 		expectError(t, err, "credential feed is injected on "+domain+"; "+reason)
 		for _, misleading := range []string{"reserved service", "GitHub credentials"} {
 			if strings.Contains(err.Error(), misleading) {

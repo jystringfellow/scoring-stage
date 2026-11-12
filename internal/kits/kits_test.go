@@ -62,3 +62,21 @@ func TestTheBrokerKitReachesOnlyTheBrokerPort(t *testing.T) {
 		t.Error("aws-broker.yaml does not allow and inject on localhost:9911")
 	}
 }
+
+func TestTheStageKitsGuidanceHoldsHoweverTheAgentWasLaunched(t *testing.T) {
+	kit, err := scoringstage.Kits.ReadFile("kits/stage/stage.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guidance := string(kit)
+	for _, claim := range []string{"prompts off", "permission prompts", "work freely"} {
+		if strings.Contains(guidance, claim) {
+			t.Errorf("the guidance assumes how the agent was launched: %q", claim)
+		}
+	}
+	for _, rule := range []string{"`stage ship`", "deny-all", "HTTP 403", "Credentials are held on the host", "never print, copy or"} {
+		if !strings.Contains(guidance, rule) {
+			t.Errorf("the guidance lost a rule: %q", rule)
+		}
+	}
+}
