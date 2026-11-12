@@ -133,8 +133,6 @@ stage down fix-login                 # on the host: remove the sandbox and the s
 - **`ship` needs the sandbox running.** It fetches the commit from the sandbox over a git remote that sbx removes
   when the sandbox stops, and it does not start the sandbox. If `ship` says there is no `sandbox-stage-<slug>`
   remote, keep a `stage shell` open in another terminal while you ship.
-- **Trailers.** `ship` warns about commits without a `Co-authored-by` trailer. If your agent does not add one by
-  default, ask it to, or expect the warning.
 
 To run an agent without a terminal, give its non-interactive command to `stage exec`, for example:
 
