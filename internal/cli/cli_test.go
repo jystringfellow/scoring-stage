@@ -388,6 +388,36 @@ func TestShipRefusesBranchesOutsideAgent(t *testing.T) {
 	}
 }
 
+func TestShipPushesUnderTheConfiguredBranchPrefixAndRefusesBranchesOutsideIt(t *testing.T) {
+	h, box := shippedTask(t)
+	writeGitHubSetup(t, h.home, "[ship]\nbranch_prefix = \"bot/\"\n")
+	sha := testutil.RunGit(t, box, "rev-parse", "HEAD")
+	for _, branch := range []string{"main", "bot/", "agent/fix/x", "feature/bot/x"} {
+		h.expect(1, "ship", "fix", "--yes", "--branch", branch)
+		h.expectStderr("must start with bot/")
+	}
+	h.expect(1, "ship", "fix", "--yes", "--branch", "bot/fix/\u202eniam")
+	h.expectStderr("control or invisible characters")
+	h.expect(0, "ship", "fix", "--yes")
+	if pushed := testutil.RunGit(t, h.remote.Bare, "rev-parse", "bot/fix/"+sha[:8]); pushed != sha {
+		t.Errorf("pushed %s, want %s", pushed, sha)
+	}
+	h.expect(0, "ship", "fix", "--yes", "--branch", "bot/fix/again")
+	if out := testutil.RunGit(t, h.remote.Bare, "branch", "--list", "agent/*", "main*"); strings.Contains(out, "agent/") {
+		t.Errorf("pushed outside the configured prefix: %s", out)
+	}
+}
+
+func TestShipRefusesToRunOnAConfigWithAnEmptyBranchPrefix(t *testing.T) {
+	h, _ := shippedTask(t)
+	writeGitHubSetup(t, h.home, "[ship]\nbranch_prefix = \"\"\n")
+	h.expect(1, "ship", "fix", "--yes", "--branch", "main")
+	h.expectStderr("branch_prefix cannot be empty")
+	if out := testutil.RunGit(t, h.remote.Bare, "log", "--format=%s", "-1", "main"); strings.Contains(out, "Fix the login redirect") {
+		t.Fatalf("pushed to main: %s", out)
+	}
+}
+
 func TestShipNeedsTheSandboxRemote(t *testing.T) {
 	h := setup(t)
 	h.expect(0, "up", h.remote.Checkout, "fix")
@@ -402,8 +432,8 @@ func TestCommandsOnAnUnknownTaskAskForStageUp(t *testing.T) {
 }
 
 func TestPRBodyDisclosesAIGenerationAndAppendsTheConfiguredFooter(t *testing.T) {
-	body := PRBody("fix", "abc123", "[Robots on behalf of Someone]")
-	for _, fragment := range []string{"AI coding agent", "LLM", "abc123"} {
+	body := PRBody("fix", "abc123", config.DefaultPRBody, "[Robots on behalf of Someone]")
+	for _, fragment := range []string{"AI coding agent", "LLM", "not yet been reviewed by a human", "abc123"} {
 		if !strings.Contains(body, fragment) {
 			t.Errorf("body lacks %q", fragment)
 		}
@@ -411,8 +441,42 @@ func TestPRBodyDisclosesAIGenerationAndAppendsTheConfiguredFooter(t *testing.T) 
 	if !strings.HasSuffix(body, "\n[Robots on behalf of Someone]\n") {
 		t.Errorf("body = %q", body)
 	}
-	if !strings.HasSuffix(PRBody("fix", "abc123", ""), "Commit: abc123\n") {
+	if !strings.HasSuffix(PRBody("fix", "abc123", config.DefaultPRBody, ""), "Commit: abc123\n") {
 		t.Error("body without footer does not end with the commit")
+	}
+}
+
+func TestPRBodySaysAnAIAgentProducedTheChangeWhateverBodyIsConfigured(t *testing.T) {
+	for _, configured := range []string{"", "Review against the team checklist.", "Written by hand."} {
+		body := PRBody("fix", "abc123", configured, "")
+		if !strings.HasPrefix(body, "This draft pull request was produced by an AI coding agent running in a scoring-stage sandbox (task `fix`)") {
+			t.Errorf("with %q configured, body = %q", configured, body)
+		}
+		if !strings.Contains(body, "Commit: abc123") {
+			t.Errorf("with %q configured, body lacks the commit: %q", configured, body)
+		}
+		if strings.Contains(body, "not yet been reviewed by a human") {
+			t.Errorf("with %q configured, body keeps the default text: %q", configured, body)
+		}
+		if configured != "" && !strings.Contains(body, "\n\n"+configured+"\n\n") {
+			t.Errorf("body lacks the configured text as its own paragraph: %q", body)
+		}
+	}
+}
+
+func TestShipWithPRWritesTheConfiguredBodyAndFooter(t *testing.T) {
+	h, _ := shippedTask(t)
+	writeGitHubSetup(t, h.home, "[ship]\npr_body = \"Review against the team checklist.\"\npr_footer = \"Sent by a robot.\"\n")
+	log := h.ghAnswering("https://github.com/acme/api/pull/7\n", 0)
+	h.expect(0, "ship", "fix", "--yes", "--pr")
+	call := testutil.ReadFile(t, log)
+	for _, want := range []string{"produced by an AI coding agent", "Review against the team checklist.", "Sent by a robot."} {
+		if !strings.Contains(call, want) {
+			t.Errorf("gh was asked %q, which lacks %q", call, want)
+		}
+	}
+	if strings.Contains(call, "not yet been reviewed by a human") {
+		t.Errorf("gh was asked %q, which keeps the default text", call)
 	}
 }
 
@@ -667,8 +731,25 @@ func TestShipRefusesProtectedPathsUnlessAllowed(t *testing.T) {
 	}
 }
 
-func TestShipWarnsAboutCommitsWithoutAnAgentTrailer(t *testing.T) {
+func TestShipRefusesPathsTheUserConfigAddsToTheProtectedList(t *testing.T) {
+	for _, path := range []string{"deploy/prod.yaml", "Makefile", ".github/workflows/ci.yml"} {
+		h, box := shippedTask(t)
+		writeGitHubSetup(t, h.home, "[ship]\nprotected_paths = [\"deploy/\", \"Makefile\"]\n")
+		boxCommit(t, box, path, "Touch "+path)
+		h.expect(1, "ship", "fix", "--yes")
+		h.expectStderr("refusing to ship changes to CI, workflow or sandbox config files: " + path)
+		h.expect(0, "ship", "fix", "--yes", "--allow-protected-paths")
+		h.expectStderr("shipping changes to protected files: " + path)
+	}
 	h, box := shippedTask(t)
+	writeGitHubSetup(t, h.home, "[ship]\nprotected_paths = [\"deploy/\", \"Makefile\"]\n")
+	boxCommit(t, box, "docs/deploy/Makefile.md", "Describe the deploy")
+	h.expect(0, "ship", "fix", "--yes")
+}
+
+func TestShipWarnsAboutCommitsWithoutAnAgentTrailerWhenTheUserConfigAsks(t *testing.T) {
+	h, box := shippedTask(t)
+	writeGitHubSetup(t, h.home, "[ship]\nwarn_missing_trailer = true\n")
 	boxCommit(t, box, "two.txt", "Second change\n\nCo-authored-by: Claude <noreply@anthropic.com>")
 	h.expect(0, "ship", "fix", "--yes")
 	first := testutil.RunGit(t, box, "rev-parse", "--short", "HEAD~1")
@@ -676,6 +757,42 @@ func TestShipWarnsAboutCommitsWithoutAnAgentTrailer(t *testing.T) {
 	if second := testutil.RunGit(t, box, "rev-parse", "--short", "HEAD"); strings.Contains(h.stderr.String(), second) {
 		t.Errorf("warned about the attributed commit %s", second)
 	}
+}
+
+func TestShipSaysNothingAboutTrailersByDefault(t *testing.T) {
+	h, _ := shippedTask(t)
+	h.expect(0, "ship", "fix", "--yes")
+	if strings.Contains(h.stderr.String(), "Co-authored-by") {
+		t.Errorf("stderr %q", h.stderr.String())
+	}
+}
+
+func TestSetupMentionsCopilotAndItsGhSecretOnlyWhenCopilotIsAConfiguredAgent(t *testing.T) {
+	for _, gh := range []int{0, 1} {
+		h := setup(t)
+		h.gh = fakeGh(t, gh)
+		writeGitHubSetup(t, h.home, "agents = [\"claude\"]\n")
+		h.expect(0, "setup")
+		said := h.stdout.String() + h.stderr.String()
+		for _, unwanted := range []string{"gh auth:", "copilot secret", "Copilot will"} {
+			if strings.Contains(said, unwanted) {
+				t.Errorf("setup without copilot, gh exiting %d, said %q in: %s", gh, unwanted, said)
+			}
+		}
+	}
+	h := setup(t)
+	h.gh = fakeGh(t, 0)
+	writeGitHubSetup(t, h.home, "agents = [\"claude\", \"copilot\"]\n")
+	h.expect(0, "setup")
+	if !strings.Contains(h.stdout.String(), "gh auth: ok (source of the per-box copilot secret)") {
+		t.Errorf("stdout %q", h.stdout.String())
+	}
+	h.gh = fakeGh(t, 1)
+	h.expect(0, "setup")
+	h.expectStderr("gh is missing or not logged in; Copilot will be unauthenticated")
+	h.gh = ""
+	h.expect(0, "setup")
+	h.expectStderr("gh is missing or not logged in; Copilot will be unauthenticated")
 }
 
 func TestShipRefusesWhenTheSandboxHasNothingNew(t *testing.T) {
