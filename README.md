@@ -65,6 +65,7 @@ or, from a clone, `go build -o bin/stage ./cmd/stage`. `stage version` prints th
 
 ```
 stage setup --agent claude --agent codex  # save the agents you use; check sbx, the policy and credentials
+stage init --agent claude --book backend --kit rules  # draft and check this repository's config and an empty kit
 stage up ~/Code/api fix-login        # sandbox stage-fix-login on a scratch clone of ~/Code/api
 stage up ~/Code/api fix-login --agent agy --book dotnet  # add an agent or an installed book for one box
 stage up ~/Code/api fix-login --aws-profile staging    # grant an AWS profile to one box and make it the default
@@ -642,6 +643,30 @@ books = ["backend"]              # installed books, by name
 kits = ["./.scoring-stage/kits/rules"]  # inside the repository; approved by you before use
 ```
 
+Draft this file with `stage init [<repo>] [--agent NAME]... [--book NAME]... [--kit NAME]... [--dry-run]`;
+`<repo>` defaults to the current directory. Repeated flags keep their first occurrence. Only named agents,
+installed books and scaffolded kits appear in the draft, in that order; takes are omitted. Without `--agent`,
+the `agents` key is omitted, so the repository asks for no agents; your own configured agents still apply.
+With no flags and no existing config, nothing is written. Unnamed installed books are listed with their
+descriptions, along with the known agent names. An unknown book is refused with the installed choices listed.
+
+`--kit rules` adds `"./.scoring-stage/kits/rules"` to `kits` and writes
+`.scoring-stage/kits/rules/rules.yaml`: a spec v3 mixin with no capabilities, hosts or credentials. A kit name
+must be one lowercase path component, using letters, digits, dots, underscores or dashes, and start with a
+letter or digit. Add the hosts you need yourself; see [Writing a kit](#writing-a-kit).
+
+`init` never edits an existing file. If the config exists, all scaffolding is skipped and the existing config
+is checked; flags missing from it are reported for you to add yourself. An existing kit file is kept when
+creating a new config. Symbolic links and targets that are not regular files are refused. Before writing,
+`init` checks the draft with the same strict decoding, composition and repository-kit rules as `stage up`.
+It reports the agents, books, kits and takes a sandbox would get, and shows missing approvals using
+`stage up --plan`'s terms. It approves nothing, calls no sbx command and leaves the stage home unchanged.
+`--dry-run` prints the exact proposed file contents and performs that same check without writing them.
+
+Review the files and commit them directly on the branch sandboxes start from, since `stage up` reads the
+config from that branch, then run `stage up <repo> <slug>`. `stage ship` refuses changes under
+`.scoring-stage/` unless you pass `--allow-protected-paths`.
+
 A repository is not trusted with anything that acts on the host. It can add agents by name, installed books by
 name, its own kits and [takes](#takes), but it cannot set secrets, bindings, AWS profiles, GitHub access, [gear](#gear) or the base. A book it asks
 for that you have not installed is an error. A repository's kit is a `./` path inside the repository, with no
@@ -755,6 +780,9 @@ and what has not been run live yet.
 
 ## Limitations
 
+- **The empty kit scaffold needs a live check.** `stage init`'s spec v3 mixin with `capabilities: []` passes
+  stage's repository-kit checks. A live sbx run of that scaffold, and `stage up` against an init-written config,
+  have not been verified; the maintainer must check them on the host.
 - **Books run code on your host.** A book's secret commands run on your machine as you, before the sandbox exists.
   The checks on books stop them from rebinding stage's credentials (agent, sbx built-in, GitHub and broker) and catch
   mistakes. They cannot stop a book whose secret runs a command such as `gh auth token` and whose own kit injects

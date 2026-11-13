@@ -106,15 +106,16 @@ type repo struct {
 }
 
 type Book struct {
-	Name     string
-	Path     string
-	agents   []any
-	kits     []any
-	aws      aws
-	secrets  map[string]any
-	bindings map[string]any
-	repos    []repo
-	takes    []string
+	Name        string
+	Description string
+	Path        string
+	agents      []any
+	kits        []any
+	aws         aws
+	secrets     map[string]any
+	bindings    map[string]any
+	repos       []repo
+	takes       []string
 }
 
 type Settings struct {
@@ -413,7 +414,8 @@ func LoadBook(agents Agents, path string) (*Book, error) {
 	if _, present := data["base"]; present {
 		return nil, errorf("%s (%s): books cannot set base; set base in config.toml", owner, manifest)
 	}
-	book := &Book{Name: name, Path: path}
+	description, _ := data["description"].(string)
+	book := &Book{Name: name, Description: description, Path: path}
 	if book.agents, err = optionalList(data, "agents", manifest); err != nil {
 		return nil, err
 	}

@@ -102,6 +102,7 @@ commands:
   token set <owner>                 save a fine-grained GitHub token for a repository owner, read from stdin
   broker start|stop|status|serve    manage the host AWS credential broker
   github login|token                log in to your GitHub App ([github] mode = "app"); print a fresh token
+  init [<repo>] [options]           draft and check a repository config and kits
   up <repo> <slug> [options]        create a sandbox for a repository
   shell <slug>                      open a login shell in the repository
   login <slug>                      save the sandbox's copyable agent logins (copy_logins) for future sandboxes
@@ -122,7 +123,7 @@ func (a *App) Main(args []string) int {
 		return 2
 	}
 	commands := map[string]func([]string, string) (int, error){
-		"setup": a.cmdSetup, "broker": a.cmdBroker, "up": a.cmdUp, "shell": a.cmdShell,
+		"init": a.cmdInit, "setup": a.cmdSetup, "broker": a.cmdBroker, "up": a.cmdUp, "shell": a.cmdShell,
 		"exec": a.cmdExec, "ship": a.cmdShip, "list": a.cmdList, "down": a.cmdDown, "login": a.cmdLogin, "take": a.cmdTake,
 		"github": a.cmdGitHub,
 		"token":  a.cmdToken,
@@ -693,14 +694,7 @@ func (a *App) checkRepoApprovals(home string, composition *config.Composition, g
 	if err != nil || len(missing) == 0 {
 		return err
 	}
-	fmt.Fprintf(a.Stderr, "stage: the repository's %s asks for kits, books or takes you have not approved. They can widen the\n"+
-		"  sandbox's network access, send credentials, run commands or copy files out of the sandbox. Review them before approving:\n", config.RepoConfigPath)
-	for _, approval := range missing {
-		fmt.Fprintf(a.Stderr, "  - %s\n", config.Printable(approval.Label))
-		for _, detail := range approval.Details {
-			fmt.Fprintf(a.Stderr, "      %s\n", config.Printable(detail))
-		}
-	}
+	printApprovals(a.Stderr, missing)
 	if plan {
 		return errorf("plan stopped before writing the env file: approve these first by running stage up without --plan, then plan again")
 	}
@@ -714,6 +708,17 @@ func (a *App) checkRepoApprovals(home string, composition *config.Composition, g
 		a.say("approved %s (%s); a change to it asks again", config.Printable(approval.Label), approval.Fingerprint[:12])
 	}
 	return nil
+}
+
+func printApprovals(w io.Writer, missing []config.Approval) {
+	fmt.Fprintf(w, "stage: the repository's %s asks for kits, books or takes you have not approved. They can widen the\n"+
+		"  sandbox's network access, send credentials, run commands or copy files out of the sandbox. Review them before approving:\n", config.RepoConfigPath)
+	for _, approval := range missing {
+		fmt.Fprintf(w, "  - %s\n", config.Printable(approval.Label))
+		for _, detail := range approval.Details {
+			fmt.Fprintf(w, "      %s\n", config.Printable(detail))
+		}
+	}
 }
 
 const ghModeWarning = "[github] mode = \"gh\": sandboxes use your gh login. GraphQL lets them do anything that login can: " +
