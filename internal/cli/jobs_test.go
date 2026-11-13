@@ -249,6 +249,7 @@ func TestDownRefusesWhileAJobIsRunningAndRemovesFinishedJobsWithTheTask(t *testi
 	h, _ := jobsReady(t)
 	_, args := gated(t, h)
 	h.expect(0, args...)
+	eventually(t, func() bool { return len(h.sbx.Sessions()) == 1 })
 	before := len(h.sbx.Calls())
 	h.expect(1, "down", "fix", "--discard-takes")
 	h.expectStderr("1 running jobs (1)")
