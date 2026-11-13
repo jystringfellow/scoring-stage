@@ -382,3 +382,28 @@ Checked:
 
 Not checked: a repository whose config needs approval, `take` with takes present, the exec and wait caps,
 cancellation, and an MCP client application.
+
+## 2026-11-13: the Python example book against a live sbx
+
+- **sbx:** 0.51.0, macOS.
+- **stage:** built from 0e30846 plus the cache fix described below.
+- **Credentials:** none used. A sandbox of a public Python repository, with the `shell` and `stage` kits and the
+  book given by path, in the usual stage home.
+- **Restoration:** the sandbox was removed with `stage down`.
+
+Checked:
+
+- sbx accepted the kit, including the install-only entries that limit `github.com` to GET requests under the
+  Python build releases path.
+- In the sandbox `uv` 0.13.8 and `python3.12` (3.12.16) were on the agent user's PATH; the image's own `python3`
+  was still 3.14.
+- As the agent user, `uv sync --python 3.12 --locked --all-extras --dev` installed the repository's dependencies
+  from PyPI, and 590 of its unit tests passed. Without the book the same command was refused with
+  `403 Forbidden` from `files.pythonhosted.org`.
+- **Before the cache fix, `uv` failed for the agent user** with `Failed to initialize cache at
+  /home/agent/.cache/uv ... Permission denied`: the install steps run as root with the agent's home, and left
+  that directory owned by root. The steps now run without a cache, and the directory is created by the agent
+  on first use.
+
+Not checked: a Python version other than the default, a repository that needs a C compiler to build a
+dependency, and `stage init --guide` followed by an agent.

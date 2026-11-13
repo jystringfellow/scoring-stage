@@ -39,13 +39,13 @@ capabilities:
             set -eu
             umask 022
             python3 -m venv /opt/uv
-            /opt/uv/bin/pip install uv
+            /opt/uv/bin/pip install --no-cache-dir uv
             ln -sf /opt/uv/bin/uv /usr/local/bin/uv
           user: "0"
           description: Install uv from PyPI into a shared venv
         - command: |
             set -eu
             umask 022
-            UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python UV_PYTHON_BIN_DIR=/usr/local/bin uv python install ${{ kit.args.python }}
+            UV_NO_CACHE=1 UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python UV_PYTHON_BIN_DIR=/usr/local/bin uv python install ${{ kit.args.python }}
           user: "0"
           description: Install the pinned Python with executables on PATH for every user
