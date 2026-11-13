@@ -74,6 +74,24 @@ func (f *flags) parse(args []string, names ...string) ([]string, error) {
 	return positional, nil
 }
 
+func (f *flags) parseOptional(args []string, max int) ([]string, error) {
+	positional, err := f.parseInterspersed(args)
+	if errors.Is(err, flag.ErrHelp) {
+		fmt.Fprintln(f.stdout, f.usageLine())
+		f.SetOutput(f.stdout)
+		f.PrintDefaults()
+		return nil, err
+	}
+	if err == nil && len(positional) > max {
+		err = errors.New("unrecognized arguments: " + strings.Join(positional[max:], " "))
+	}
+	if err != nil {
+		fmt.Fprintln(f.stderr, f.usageLine())
+		return nil, &usageError{err.Error()}
+	}
+	return positional, nil
+}
+
 func (f *flags) parseInterspersed(args []string) ([]string, error) {
 	var positional []string
 	for {

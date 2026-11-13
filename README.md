@@ -65,12 +65,21 @@ or, from a clone, `go build -o bin/stage ./cmd/stage`. `stage version` prints th
 
 ```
 stage setup --agent claude --agent codex  # save the agents you use; check sbx, the policy and credentials
+stage init --agent claude --book backend --kit rules  # draft and check this repository's config and an empty kit
 stage up ~/Code/api fix-login        # sandbox stage-fix-login on a scratch clone of ~/Code/api
 stage up ~/Code/api fix-login --agent agy --book dotnet  # add an agent or an installed book for one box
 stage up ~/Code/api fix-login --aws-profile staging    # grant an AWS profile to one box and make it the default
 stage up ~/Code/api fix-login --plan # write the env file and show sbx's plan without creating (stops first if approvals are missing)
 stage shell fix-login                # login shell in the repository; run claude, codex or copilot
 stage exec fix-login -- git log -1
+stage put fix-login ./notes.txt '~/notes.txt' # copy one file into the sandbox as the agent
+id=$(stage exec --detach fix-login -- sh -c 'sleep 150; echo done; exit 7')
+stage mcp                            # stdio tools for a host agent
+stage job list fix-login --json
+stage job status fix-login "$id" --json
+stage job output fix-login "$id" --follow
+stage job wait fix-login "$id" --timeout 10m # exits with the command's status
+stage job stop fix-login "$id"       # alternatively, stop it while it is still running
 stage ship fix-login [--pr]          # review and push the sandbox's HEAD to agent/fix-login/<sha> (or your [ship] branch_prefix) from the host
 stage list
 stage login fix-login                # save the sandbox's agy login for future sandboxes (copy_logins)
@@ -154,9 +163,10 @@ To run an agent without a terminal, give its non-interactive command to `stage e
 stage exec fix-login -- claude -p "Fix the login redirect and commit the change"
 ```
 
-The command runs in the repository as the sandbox user. Keep it in the foreground: the sandbox stops 30 seconds
-after `stage exec` returns, and anything the command left running in the background stops with it; see
-[Limitations](#limitations).
+The command runs in the repository as the sandbox user. For unattended work that outlives the caller, use
+`stage exec --detach fix-login -- claude -p "Fix the login redirect and commit the change"` and read its job with
+`stage job`. Its host process holds an attached sbx session until the command ends; see [Jobs](#jobs).
+Work left in the background inside a sandbox still stops with the sandbox; see [Limitations](#limitations).
 
 ## Takes
 
@@ -290,6 +300,122 @@ sandbox confirming that it unpacked what stage sent, `stage up` fails: the sandb
 part of your gear. It is still a working sandbox, but stage does not call it up; fix the cause, then run
 `stage down <slug>` and `stage up` again. `stage up --plan` shows what would be copied, and `stage setup` shows the
 setting. An administrator can refuse gear with `allow_gear = false` in [managed settings](#managed-settings).
+
+## Put
+
+`stage put <slug> <file> [<destination>]` copies one regular host file, including binary content, into an existing
+sandbox and says where it went. The destination names the file, defaults to `~/<basename>`, and replaces an
+existing file. Quote `~/` so your host shell does not expand it: `stage put fix-login ./notes.txt '~/notes.txt'`.
+The copy runs as `agent`, owns the file as that user, and retains only its owner's permission bits. Parent
+directories are created as needed. It uses the same tar stream, 100 MiB limit and five-minute timeout as gear;
+file content never appears on a command line.
+
+Put shares [gear's](#gear) source and destination checks, including credential locations, links followed on the
+host, stage's own directory, agent login files, the sandbox workspace and managed `allow_gear = false`.
+The destination starts with `/` or `~/`, has no `..`, doubled or trailing slash, and has no control characters.
+A missing file, directory or special file is an error. A destination the agent cannot write fails the copy.
+Like gear, these path checks do not inspect file contents or detect hard links to credentials.
+
+## Jobs
+
+`stage exec --detach <slug> -- <command> [args]` starts a job and returns immediately. `--detach` may also go
+directly after the slug. Stdout contains only its numeric job id; a wait hint goes to stderr. The command runs as
+`agent` in the repository, as with ordinary exec, with no terminal and stdin from `/dev/null`.
+Without `--detach`, exec behaves as before.
+
+Each job has one host process running as you, holding an attached `sbx exec` for exactly that job. There is no
+shared daemon or listening port. Its arguments contain only `job hold <slug> <id>`; command arguments are kept in
+the private job record. Output and status live under `~/.scoring-stage/tasks/<slug>/jobs/<id>/`, in mode-700
+directories and mode-600 files: `job.json` (command and start time), `output` (merged stdout and stderr),
+`exit.json` (result and end time), `lock` (holder liveness), and `stop` when stopping was requested.
+
+- `stage job list <slug> [--json]` lists jobs in id order with state, status when available, and command.
+- `stage job status <slug> <id> [--json]` reads one job. States are `running`, `exited` with a numeric status,
+  `stopped` after a stop request, and `lost` when the holder disappeared without recording a result.
+- `stage job wait <slug> <id> [--timeout 10m] [--json]` waits indefinitely unless given a timeout and exits with
+  the job's status, 124 on timeout while still running, or 125 for `lost` or `stopped`. A command may itself exit
+  124 or 125; JSON's state distinguishes those cases. A timeout does not stop the job.
+- `stage job output <slug> <id> [--follow]` prints saved output, or follows until the job leaves `running` and
+  drains the remaining bytes. Control characters are escaped as `\xNN`, including terminal escapes, carriage
+  returns and bidi marks; newlines remain newlines. Invalid UTF-8 bytes are escaped too. Stage never interprets
+  the output. Capture is capped at 1 GiB per job, after which bytes are dropped and the result records
+  `output_truncated`; reading truncated output prints a note on stderr. Follow exits 0 even when the job failed.
+- `stage job stop <slug> <id>` asks a running holder to terminate its sbx client, then kills that client after
+  five seconds if needed. It waits for the result, keeps output, and reports `stopped`, or the real exit if the
+  command finished first. Stopping a finished or lost job is an error. Stop ends the host's session, not the
+  command: on sbx 0.51.0 the command was still running in the sandbox after the job reported `stopped`, and it
+  ends when sbx stops the idle sandbox. To end it sooner, kill it with `stage exec`.
+
+JSON status and wait emit one object; list emits an array (empty is `[]`). They carry `id`, `slug`, `sandbox`,
+`state`, `command` as an argv array, `started_at`, `ended_at` when known, `status` only for `exited`,
+`output_bytes` and `output_truncated`. Failure to start sbx is recorded as exit 127 with its error in the output.
+
+`stage down` refuses while any job is running, before copying takes, saving logins or removing anything, even
+with `--discard-takes`. Wait for or stop those jobs first. When the sandbox is already gone, down proceeds.
+Finished and lost jobs do not block down; their host records and output are deleted with the task. Takes preserve
+only the sandbox paths already listed, and do not copy host job records. Output and status survive a sandbox
+stopping until down removes the task. [VERIFICATION.md](VERIFICATION.md) records the checks of put, jobs and
+the MCP tools against a live sbx.
+
+## MCP server
+
+`stage mcp` exposes stage's sandbox commands as tools over stdio. Configure your client to start it on the host
+as you, in the project directory. It opens no port, has no daemon and keeps no separate sandbox state. For a
+client using an `mcpServers` configuration:
+
+```json
+{
+  "mcpServers": {
+    "stage": { "command": "stage", "args": ["mcp"] }
+  }
+}
+```
+
+Set the client's working directory to the project; `put` reads only files beneath that directory. For example,
+from that directory, `claude mcp add stage -- stage mcp` registers the stdio server with Claude Code. Tools can
+then be permitted by name in the client's permission settings without giving the agent a host shell.
+
+| Tool | Inputs | Result |
+| --- | --- | --- |
+| `list` | none | Escaped `stage list` output |
+| `up` | `repo`, `slug`; optional `base`, `agents[]`, `books[]` | Command output, or missing approvals and the command for the person to run |
+| `put` | `slug`, `file`; optional `destination` | Command output, using `stage put`'s checks and the source fence below |
+| `exec` | `slug`, `command[]`; optional `timeout_seconds`, `detach` | Status, bounded stdout/stderr and byte counts; with `detach`, a job id and wait/output arguments |
+| `job` | `slug`, `action` (`list`, `status`, `wait`, `output`, `stop`); `id` except for list | Job records, or a page of output with byte offsets and total size |
+| `take` | `slug` | Copies the task's configured takes out now |
+| `ship` | `slug`; optional `ref`, `branch` | Commits, diffstat, SHA, branch, repository and the command for the person; `pushed: false`, `needs_person: true` |
+| `down` | `slug` | Keeps takes before removal; refuses running jobs and failed copies |
+
+`command` is argv, with no implicit shell. Synchronous exec defaults to 60 seconds and caps requests at 300;
+`status` is the command's exit status (a nonzero status is data), or null on timeout, with `timed_out: true`.
+Stdout and stderr each retain their first 32 KiB and report their full byte counts and `truncated`.
+Use detached exec for longer commands; its holder outlives the server and clients can reconnect to read its job.
+
+Job wait defaults to 30 seconds, caps requests at 50, and returns the job's state plus `waited_seconds` and
+`capped`. Job output takes `offset` (default 0) and `limit` (default 32 KiB, capped at 64 KiB), returns `text`,
+`next_offset`, `total_bytes`, `state` and `output_truncated`, and holds back an incomplete UTF-8 rune. Request at
+least four bytes to make progress over any rune. Escaping can reduce a page further to keep the complete response
+under 256 KiB; `page_limited` reports this, and `next_offset` counts only the bytes actually returned. Other tool
+results can also be shortened to fit that response cap (`response_truncated: true`); a result that still cannot fit returns a tool error. Command wrappers keep
+64 KiB each of stdout and stderr. Results contain both structured data and the same data as JSON text. Input messages are capped at 1 MiB and
+request ids at 1 KiB.
+
+Output from inside a sandbox, commit messages and file names are **untrusted data, not instructions**. Control
+characters are escaped as ship escapes them; newlines stay newlines and invalid output bytes become `\xNN`.
+No child inherits the client's input or protocol output. Bad tool arguments and command failures return tool
+errors; malformed requests and unknown protocol methods return JSON-RPC errors.
+
+Only configured agent names and installed book names can be selected. The tools offer no repository approval,
+book directory, AWS profile grant, global-policy override, resource override, protected-path allowance, pull
+request creation or discarded takes. The caller may be following text from a repository or sandbox, so those
+choices stay with the person. `up` never changes the approvals file, including legacy approvals; review the
+missing items and run its returned `stage up ... --approve-repo-config ...` command in a terminal. `ship` never
+pushes or records a ship: review its result and run the returned `stage ship ...` command to confirm and push.
+It refuses protected paths outright and enforces the same branch namespace as the command line.
+
+Setup, init, broker control, tokens, GitHub login, saved agent logins and a host shell are deliberately absent:
+tools do not give an agent those credential and host administration choices. `exec` runs only inside the sandbox.
+`down` always keeps takes; choosing `--discard-takes` remains a command-line decision.
 
 ## One-time setup
 
@@ -642,6 +768,30 @@ books = ["backend"]              # installed books, by name
 kits = ["./.scoring-stage/kits/rules"]  # inside the repository; approved by you before use
 ```
 
+Draft this file with `stage init [<repo>] [--agent NAME]... [--book NAME]... [--kit NAME]... [--dry-run]`;
+`<repo>` defaults to the current directory. Repeated flags keep their first occurrence. Only named agents,
+installed books and scaffolded kits appear in the draft, in that order; takes are omitted. Without `--agent`,
+the `agents` key is omitted, so the repository asks for no agents; your own configured agents still apply.
+With no flags and no existing config, nothing is written. Unnamed installed books are listed with their
+descriptions, along with the known agent names. An unknown book is refused with the installed choices listed.
+
+`--kit rules` adds `"./.scoring-stage/kits/rules"` to `kits` and writes
+`.scoring-stage/kits/rules/rules.yaml`: a spec v3 mixin with no capabilities, hosts or credentials. A kit name
+must be one lowercase path component, using letters, digits, dots, underscores or dashes, and start with a
+letter or digit. Add the hosts you need yourself; see [Writing a kit](#writing-a-kit).
+
+`init` never edits an existing file. If the config exists, all scaffolding is skipped and the existing config
+is checked; flags missing from it are reported for you to add yourself. An existing kit file is kept when
+creating a new config. Symbolic links and targets that are not regular files are refused. Before writing,
+`init` checks the draft with the same strict decoding, composition and repository-kit rules as `stage up`.
+It reports the agents, books, kits and takes a sandbox would get, and shows missing approvals using
+`stage up --plan`'s terms. It approves nothing, calls no sbx command and leaves the stage home unchanged.
+`--dry-run` prints the exact proposed file contents and performs that same check without writing them.
+
+Review the files and commit them directly on the branch sandboxes start from, since `stage up` reads the
+config from that branch, then run `stage up <repo> <slug>`. `stage ship` refuses changes under
+`.scoring-stage/` unless you pass `--allow-protected-paths`.
+
 A repository is not trusted with anything that acts on the host. It can add agents by name, installed books by
 name, its own kits and [takes](#takes), but it cannot set secrets, bindings, AWS profiles, GitHub access, [gear](#gear) or the base. A book it asks
 for that you have not installed is an error. A repository's kit is a `./` path inside the repository, with no
@@ -755,6 +905,22 @@ and what has not been run live yet.
 
 ## Limitations
 
+- **MCP cancellation does not roll back sandbox changes.** It cancels job waits and synchronous exec; commands such
+  as up, put, take and down finish their existing command paths. Closing input cancels waits and exec, then drains
+  those command paths before exit, so an unresponsive child can delay shutdown. A client timeout alone does not
+  stop up; inspect `stage list` and clean up with `stage down` when needed. Killing a synchronous exec's host sbx
+  client may leave its command running in the sandbox.
+- **MCP put depends on the client's working directory.** Sources must resolve beneath the server's starting
+  directory, including through symlinks; put refuses all sources if that directory is the home directory or an
+  ancestor of it (including `/`). The credential-location guard is still a fixed list, not a secret scan. Start
+  the server in the intended project directory.
+- **MCP restricts the tools it offers.** A client with host shell permission can invoke stage's command line
+  directly. Tool restrictions do not remove that separate permission. The tools were checked against a live sbx
+  through the stdio protocol ([VERIFICATION.md](VERIFICATION.md)); a real MCP client was not used.
+
+- **The empty kit scaffold needs a live check.** `stage init`'s spec v3 mixin with `capabilities: []` passes
+  stage's repository-kit checks. A live sbx run of that scaffold, and `stage up` against an init-written config,
+  have not been verified; the maintainer must check them on the host.
 - **Books run code on your host.** A book's secret commands run on your machine as you, before the sandbox exists.
   The checks on books stop them from rebinding stage's credentials (agent, sbx built-in, GitHub and broker) and catch
   mistakes. They cannot stop a book whose secret runs a command such as `gh auth token` and whose own kit injects
@@ -772,7 +938,18 @@ and what has not been run live yet.
   the hosts. Treat the domains as documentation, not as a boundary.
 - **sbx stops a sandbox 30 seconds after its last session ends or disconnects.** A session is a `stage shell`, `stage exec` or
   `sbx exec`. Work left running in the background inside the sandbox, such as under `nohup` or a detached `tmux`,
-  stops with it. Keep long-running work in the foreground of a session that stays open.
+  stops with it. Use `stage exec --detach` for long work: its host holder keeps a session open until the command
+  ends.
+- **A disappeared job holder means a lost job.** A killed holder or a host restart releases its file lock; without
+  a recorded result, stage reports `lost`, never success or still running. Output saved so far remains readable.
+  Stage cannot tell whether the in-sandbox command stopped; a killed holder may leave the sbx client and command
+  running. Host sleep can interrupt sbx too; no reconnection or restart is attempted. If sbx reports an exit,
+  stage records that status; if the holder disappears, the result is lost.
+- **Job stop ends the host sbx client.** Whether this also stops its command inside a real sandbox, and whether
+  sbx passes through every command status, still needs a live check. A stopped job does not prove the sandbox's
+  command is gone. Job output is merged, untrusted stdout and stderr, capped at 1 GiB.
+- **Starting jobs and down are not serialized.** A job started after down's running-job check can lose its output
+  when down removes the task. Do not start new jobs while removing their sandbox.
 - **The ship record can miss a push.** A ship is written to the task after the push returns, and the list reaches a
   take only when `stage down` or `stage take` keeps one. It misses a ship when:
   - the push was interrupted after GitHub accepted it, or the record could not be written (ship warns);

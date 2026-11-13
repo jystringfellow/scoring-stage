@@ -45,22 +45,22 @@ type exitCode int
 func (e exitCode) Error() string { return "exit status " + strconv.Itoa(int(e)) }
 
 type App struct {
-	Stdin           io.Reader
-	Stdout, Stderr  io.Writer
-	FindGh          func() string
-	BrokerPID       func(home string) int
-	BrokerStart     func(home string) error
-	IsTerminal      func() bool
-	HostAWSProfiles func() ([]string, error)
-	GitHub          *github.Client
-	StdinIsTerminal func() bool
-	ReadSecret      func() ([]byte, error)
-	GitHubAPI       config.GitHubAPI
+	Stdin            io.Reader
+	Stdout, Stderr   io.Writer
+	FindGh           func() string
+	BrokerPID        func(home string) int
+	BrokerStart      func(home string) error
+	IsTerminal       func() bool
+	HostAWSProfiles  func() ([]string, error)
+	GitHub           *github.Client
+	StdinIsTerminal  func() bool
+	ReadSecret       func() ([]byte, error)
+	GitHubAPI        config.GitHubAPI
+	approvalReadOnly bool
 }
 
 func New() *App {
 	app := &App{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, FindGh: config.FindGh, BrokerPID: brokerPID, GitHub: github.NewClient()}
-	app.BrokerStart = app.brokerStart
 	app.HostAWSProfiles = hostAWSProfiles
 	app.StdinIsTerminal = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
 	app.ReadSecret = func() ([]byte, error) { return term.ReadPassword(int(os.Stdin.Fd())) }
@@ -102,16 +102,23 @@ commands:
   token set <owner>                 save a fine-grained GitHub token for a repository owner, read from stdin
   broker start|stop|status|serve    manage the host AWS credential broker
   github login|token                log in to your GitHub App ([github] mode = "app"); print a fresh token
+  init [<repo>] [options]           draft and check a repository config and kits
   up <repo> <slug> [options]        create a sandbox for a repository
   shell <slug>                      open a login shell in the repository
   login <slug>                      save the sandbox's copyable agent logins (copy_logins) for future sandboxes
   exec <slug> -- <command> [args]   run a command in the repository
+  exec --detach <slug> -- <command> [args] start a job held open by a host process
+  job list <slug> [--json]           list jobs
+  job status|wait|output|stop <slug> <id> [options]
+                                    read, wait for, follow or stop a job
+  put <slug> <file> [<destination>] copy a host file into a running sandbox
   ship <slug> [--ref R] [--branch B] [--pr]
                                     push the sandbox's commit to <prefix><slug>/<sha> from the host
                                     (prefix: [ship] branch_prefix, agent/ unless set)
   take <slug>                       copy the sandbox's takes to ~/.scoring-stage/takes/<slug>/ now
   list                              list scoring-stage sandboxes
   down <slug> [--discard-takes]     keep the sandbox's takes, then remove it, its secrets and the scratch clone
+  mcp                               serve sandbox tools over stdio
   version                           print the stage version
 `
 
@@ -122,10 +129,11 @@ func (a *App) Main(args []string) int {
 		return 2
 	}
 	commands := map[string]func([]string, string) (int, error){
-		"setup": a.cmdSetup, "broker": a.cmdBroker, "up": a.cmdUp, "shell": a.cmdShell,
+		"init": a.cmdInit, "setup": a.cmdSetup, "broker": a.cmdBroker, "up": a.cmdUp, "shell": a.cmdShell,
 		"exec": a.cmdExec, "ship": a.cmdShip, "list": a.cmdList, "down": a.cmdDown, "login": a.cmdLogin, "take": a.cmdTake,
 		"github": a.cmdGitHub,
 		"token":  a.cmdToken,
+		"put":    a.cmdPut, "job": a.cmdJob, "mcp": a.cmdMCP,
 	}
 	name := args[0]
 	if name == "-h" || name == "--help" || name == "help" {
@@ -260,6 +268,13 @@ func hostAWSProfiles() ([]string, error) {
 	return strings.Fields(string(output)), nil
 }
 
+func (a *App) startBroker(home string) error {
+	if a.BrokerStart != nil {
+		return a.BrokerStart(home)
+	}
+	return a.brokerStart(home)
+}
+
 func (a *App) brokerStart(home string) error {
 	if pid := a.BrokerPID(home); pid != 0 {
 		a.say("broker already running (pid %d)", pid)
@@ -318,7 +333,7 @@ func (a *App) cmdBroker(args []string, home string) (int, error) {
 	}
 	switch positional[0] {
 	case "start":
-		return 0, a.BrokerStart(home)
+		return 0, a.startBroker(home)
 	case "stop":
 		if pid := a.BrokerPID(home); pid != 0 {
 			if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
@@ -651,7 +666,7 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 		return 0, nil
 	}
 	if len(composition.AWSProfiles) > 0 && a.BrokerPID(home) == 0 {
-		if err := a.BrokerStart(home); err != nil {
+		if err := a.startBroker(home); err != nil {
 			return 0, err
 		}
 	}
@@ -678,9 +693,13 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 }
 
 func (a *App) checkRepoApprovals(home string, composition *config.Composition, github string, approve, plan bool) error {
-	cleared, err := config.ClearLegacyTrust(home)
-	if err != nil {
-		return err
+	var cleared bool
+	var err error
+	if !a.approvalReadOnly {
+		cleared, err = config.ClearLegacyTrust(home)
+		if err != nil {
+			return err
+		}
 	}
 	if cleared {
 		a.warn("stage now stores approvals as JSON; earlier approvals were cleared, and you'll be asked again")
@@ -693,19 +712,12 @@ func (a *App) checkRepoApprovals(home string, composition *config.Composition, g
 	if err != nil || len(missing) == 0 {
 		return err
 	}
-	fmt.Fprintf(a.Stderr, "stage: the repository's %s asks for kits, books or takes you have not approved. They can widen the\n"+
-		"  sandbox's network access, send credentials, run commands or copy files out of the sandbox. Review them before approving:\n", config.RepoConfigPath)
-	for _, approval := range missing {
-		fmt.Fprintf(a.Stderr, "  - %s\n", config.Printable(approval.Label))
-		for _, detail := range approval.Details {
-			fmt.Fprintf(a.Stderr, "      %s\n", config.Printable(detail))
-		}
-	}
+	printApprovals(a.Stderr, missing)
 	if plan {
 		return errorf("plan stopped before writing the env file: approve these first by running stage up without --plan, then plan again")
 	}
-	if !approve && !a.confirm("Approve these for this and future sandboxes while they are unchanged?") {
-		return errorf("not approved; review them and answer y, or pass --approve-repo-config to approve them without asking")
+	if a.approvalReadOnly || !approve && !a.confirm("Approve these for this and future sandboxes while they are unchanged?") {
+		return &approvalNeeded{missing: missing}
 	}
 	if err := config.Approve(home, missing); err != nil {
 		return err
@@ -714,6 +726,23 @@ func (a *App) checkRepoApprovals(home string, composition *config.Composition, g
 		a.say("approved %s (%s); a change to it asks again", config.Printable(approval.Label), approval.Fingerprint[:12])
 	}
 	return nil
+}
+
+type approvalNeeded struct{ missing []config.Approval }
+
+func (e *approvalNeeded) Error() string {
+	return "not approved; review them and answer y, or pass --approve-repo-config to approve them without asking"
+}
+
+func printApprovals(w io.Writer, missing []config.Approval) {
+	fmt.Fprintf(w, "stage: the repository's %s asks for kits, books or takes you have not approved. They can widen the\n"+
+		"  sandbox's network access, send credentials, run commands or copy files out of the sandbox. Review them before approving:\n", config.RepoConfigPath)
+	for _, approval := range missing {
+		fmt.Fprintf(w, "  - %s\n", config.Printable(approval.Label))
+		for _, detail := range approval.Details {
+			fmt.Fprintf(w, "      %s\n", config.Printable(detail))
+		}
+	}
 }
 
 const ghModeWarning = "[github] mode = \"gh\": sandboxes use your gh login. GraphQL lets them do anything that login can: " +
@@ -853,6 +882,10 @@ func (a *App) cmdShell(args []string, home string) (int, error) {
 }
 
 func (a *App) cmdExec(args []string, home string) (int, error) {
+	if len(args) > 0 && args[0] == "--detach" || len(args) > 1 && args[1] == "--detach" {
+		return a.cmdDetachedExec(args, home)
+	}
+
 	if len(args) == 0 {
 		return 0, &usageError{"the following arguments are required: slug"}
 	}
@@ -867,12 +900,16 @@ func (a *App) cmdExec(args []string, home string) (int, error) {
 	if len(command) == 0 {
 		return 0, errorf("usage: stage exec <slug> -- <command> [args...]")
 	}
+	return runInteractive("sbx", execArgv(task, command, a.IsTerminal())...)
+}
+
+func execArgv(task *Task, command []string, tty bool) []string {
 	argv := []string{"exec"}
-	if a.IsTerminal() {
+	if tty {
 		argv = append(argv, "-it")
 	}
 	argv = append(argv, "-u", "agent", "-w", task.RepoDir, task.Sandbox)
-	return runInteractive("sbx", append(argv, command...)...)
+	return append(argv, command...)
 }
 
 func PRBody(slug, sha, text, footer string) string {
@@ -900,46 +937,12 @@ func (a *App) cmdShip(args []string, home string) (int, error) {
 		return 0, err
 	}
 	slug := positional[0]
-	task, err := loadTask(home, slug)
+	plan, err := a.prepareShip(home, slug, *ref, *branchFlag)
 	if err != nil {
 		return 0, err
 	}
-	settings, err := config.LoadSettings(home)
-	if err != nil {
-		return 0, err
-	}
-	shipping := settings.Ship
-	repo := task.RepoDir
-	if err := checkGitConfig(task); err != nil {
-		return 0, err
-	}
-	if task.GitConfig == "" {
-		a.warn("task %s was created before stage recorded its git config; it cannot check that the scratch clone's config is unchanged", slug)
-	}
-	remote := "sandbox-" + task.Sandbox
-	if _, err := source.Git(repo, "remote", "get-url", remote); err != nil {
-		return 0, errorf("no %s remote in %s; is %s running?", remote, repo, task.Sandbox)
-	}
-	if _, err := source.Git(repo, "fetch", "--quiet", remote, *ref); err != nil {
-		return 0, err
-	}
-	sha, err := source.Git(repo, "rev-parse", "FETCH_HEAD")
-	if err != nil {
-		return 0, err
-	}
-	branch := *branchFlag
-	if branch == "" {
-		branch = fmt.Sprintf("%s%s/%s", shipping.BranchPrefix, slug, sha[:min(8, len(sha))])
-	}
-	if shipping.BranchPrefix == "" || !strings.HasPrefix(branch, shipping.BranchPrefix) || branch == shipping.BranchPrefix {
-		return 0, errorf("refusing to push %s: branch must start with %s", printable(branch), shipping.BranchPrefix)
-	}
-	if config.HasHidden(branch) {
-		return 0, errorf("refusing to push %s: the branch name has control or invisible characters", strconv.QuoteToASCII(branch))
-	}
-	if _, err := source.Git(repo, "check-ref-format", "refs/heads/"+branch); err != nil {
-		return 0, err
-	}
+	task, shipping := plan.task, plan.shipping
+	repo, sha, branch := task.RepoDir, plan.sha, plan.branch
 	if err := a.reviewShipment(repo, sha, branch, task.GitHubRepo, shipping, *yes, *allowProtected); err != nil {
 		return 0, err
 	}
@@ -974,6 +977,56 @@ func (a *App) cmdShip(args []string, home string) (int, error) {
 	recorded.PullRequest = url
 	a.recordShip(home, slug, recorded)
 	return 0, nil
+}
+
+type shipPlan struct {
+	task        *Task
+	shipping    config.ShipSettings
+	sha, branch string
+}
+
+func (a *App) prepareShip(home, slug, ref, branchFlag string) (*shipPlan, error) {
+	task, err := loadTask(home, slug)
+	if err != nil {
+		return nil, err
+	}
+	settings, err := config.LoadSettings(home)
+	if err != nil {
+		return nil, err
+	}
+	shipping := settings.Ship
+	repo := task.RepoDir
+	if err := checkGitConfig(task); err != nil {
+		return nil, err
+	}
+	if task.GitConfig == "" {
+		a.warn("task %s was created before stage recorded its git config; it cannot check that the scratch clone's config is unchanged", slug)
+	}
+	remote := "sandbox-" + task.Sandbox
+	if _, err := source.Git(repo, "remote", "get-url", remote); err != nil {
+		return nil, errorf("no %s remote in %s; is %s running?", remote, repo, task.Sandbox)
+	}
+	if _, err := source.Git(repo, "fetch", "--quiet", remote, ref); err != nil {
+		return nil, err
+	}
+	sha, err := source.Git(repo, "rev-parse", "FETCH_HEAD")
+	if err != nil {
+		return nil, err
+	}
+	branch := branchFlag
+	if branch == "" {
+		branch = fmt.Sprintf("%s%s/%s", shipping.BranchPrefix, slug, sha[:min(8, len(sha))])
+	}
+	if shipping.BranchPrefix == "" || !strings.HasPrefix(branch, shipping.BranchPrefix) || branch == shipping.BranchPrefix {
+		return nil, errorf("refusing to push %s: branch must start with %s", printable(branch), shipping.BranchPrefix)
+	}
+	if config.HasHidden(branch) {
+		return nil, errorf("refusing to push %s: the branch name has control or invisible characters", strconv.QuoteToASCII(branch))
+	}
+	if _, err := source.Git(repo, "check-ref-format", "refs/heads/"+branch); err != nil {
+		return nil, err
+	}
+	return &shipPlan{task: task, shipping: shipping, sha: sha, branch: branch}, nil
 }
 
 var pullRequestPattern = regexp.MustCompile(`^https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/[0-9]+$`)
@@ -1030,43 +1083,59 @@ func isProtected(path string, added []string) bool {
 	return false
 }
 
-func (a *App) reviewShipment(repo, sha, branch, github string, shipping config.ShipSettings, yes, allowProtected bool) error {
+type shipReview struct {
+	commits, stat, base string
+	protected           []string
+}
+
+func inspectShipment(repo, sha string, shipping config.ShipSettings) (shipReview, error) {
 	base, err := source.Git(repo, "merge-base", "HEAD", sha)
 	if err != nil {
-		return err
+		return shipReview{}, err
 	}
 	if base == sha {
-		return errorf("nothing to ship: %s has no commits beyond the sandbox's starting point", sha[:min(8, len(sha))])
+		return shipReview{}, errorf("nothing to ship: %s has no commits beyond the sandbox's starting point", sha[:min(8, len(sha))])
 	}
 	commits, err := source.Git(repo, "log", "--no-decorate", "--format=%h %s", base+".."+sha)
 	if err != nil {
-		return err
+		return shipReview{}, err
 	}
 	stat, err := source.Git(repo, "diff", "--no-ext-diff", "--no-textconv", "--stat", base, sha)
 	if err != nil {
-		return err
+		return shipReview{}, err
 	}
 	names, err := source.Git(repo, "diff", "--no-ext-diff", "--no-renames", "--name-only", "-z", base, sha)
 	if err != nil {
-		return err
+		return shipReview{}, err
 	}
-	fmt.Fprintf(a.Stdout, "stage: shipping to %s %s:\n%s\n%s\n", github, printable(branch), indent(printable(commits)), indent(printable(stat)))
 	var protected []string
 	for _, name := range strings.Split(names, "\x00") {
 		if name != "" && isProtected(name, shipping.ProtectedPaths) {
 			protected = append(protected, printable(name))
 		}
 	}
-	if len(protected) > 0 {
+	return shipReview{commits: commits, stat: stat, base: base, protected: protected}, nil
+}
+
+func protectedShipmentError(protected []string) error {
+	return errorf("refusing to ship changes to CI, workflow or sandbox config files: %s. These run with the "+
+		"repository's secrets or widen future sandboxes; review them and pass --allow-protected-paths to ship them", strings.Join(protected, ", "))
+}
+
+func (a *App) reviewShipment(repo, sha, branch, github string, shipping config.ShipSettings, yes, allowProtected bool) error {
+	review, err := inspectShipment(repo, sha, shipping)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(a.Stdout, "stage: shipping to %s %s:\n%s\n%s\n", github, printable(branch), indent(printable(review.commits)), indent(printable(review.stat)))
+	if len(review.protected) > 0 {
 		if !allowProtected {
-			return errorf("refusing to ship changes to CI, workflow or sandbox config files: %s. These run with the "+
-				"repository's secrets or widen future sandboxes; review them and pass --allow-protected-paths to ship them",
-				strings.Join(protected, ", "))
+			return protectedShipmentError(review.protected)
 		}
-		a.warn("shipping changes to protected files: %s", strings.Join(protected, ", "))
+		a.warn("shipping changes to protected files: %s", strings.Join(review.protected, ", "))
 	}
 	if shipping.WarnMissingTrailer {
-		unattributed, err := source.Git(repo, "log", "--no-decorate", "--format=%h", "--invert-grep", "-i", "--grep=^co-authored-by:", base+".."+sha)
+		unattributed, err := source.Git(repo, "log", "--no-decorate", "--format=%h", "--invert-grep", "-i", "--grep=^co-authored-by:", review.base+".."+sha)
 		if err != nil {
 			return err
 		}
@@ -1155,6 +1224,21 @@ func (a *App) cmdDown(args []string, home string) (int, error) {
 	task, taskErr := loadTask(home, slug)
 	if _, recordErr := os.Lstat(filepath.Join(directory, "task.json")); taskErr != nil && !os.IsNotExist(recordErr) && existing[sandbox] && !*discardTakes {
 		return 0, errorf("%s, so stage cannot tell which takes to keep; %s is left in place: pass --discard-takes to remove it without its takes", taskErr, sandbox)
+	}
+	if existing[sandbox] {
+		jobs, err := listJobs(home, slug)
+		if err != nil {
+			return 0, err
+		}
+		var running []string
+		for _, job := range jobs {
+			if job.State == "running" {
+				running = append(running, job.ID)
+			}
+		}
+		if len(running) > 0 {
+			return 0, errorf("%s has %d running jobs (%s); wait for them or stop them with stage job stop %s <id>; nothing was removed", sandbox, len(running), strings.Join(running, ", "), slug)
+		}
 	}
 	if taskErr == nil && existing[sandbox] {
 		if len(task.Takes) > 0 && !*discardTakes {

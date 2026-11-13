@@ -70,7 +70,19 @@ func decodeGear(data map[string]any, where string, agents Agents) ([]Gear, error
 }
 
 func (s *Settings) CheckedGear() ([]Gear, error) {
-	if len(s.Gear) == 0 {
+	return s.checkedGear(s.Gear)
+}
+
+func (s *Settings) CheckedPut(from string) (Gear, error) {
+	checked, err := s.checkedGear([]Gear{{From: from}})
+	if err != nil {
+		return Gear{}, err
+	}
+	return checked[0], nil
+}
+
+func (s *Settings) checkedGear(items []Gear) ([]Gear, error) {
+	if len(items) == 0 {
 		return nil, nil
 	}
 	where := filepath.Join(s.Home, "config.toml")
@@ -85,8 +97,8 @@ func (s *Settings) CheckedGear() ([]Gear, error) {
 	if err != nil {
 		return nil, errorf("%s: gear: %v", where, err)
 	}
-	checked := make([]Gear, len(s.Gear))
-	for i, item := range s.Gear {
+	checked := make([]Gear, len(items))
+	for i, item := range items {
 		item.HostPath = Resolve(ExpandUser(item.From))
 		if overlaps(item.HostPath, s.Home) {
 			return nil, errorf("%s: gear: %s is, is inside or holds stage's own directory %s, which keeps tokens, saved logins and broker grants; stage never copies those into a sandbox",
@@ -239,4 +251,17 @@ func decodeGearEntry(entry any) (Gear, error) {
 		return Gear{From: from, To: to}, nil
 	}
 	return Gear{}, errorf("a gear entry is a ~/ path or { from, to }, not %s", Printable(fmt.Sprint(entry)))
+}
+
+func (s *Settings) CheckPutDestination(to, workspace string) error {
+	if !isTakePath(to) {
+		return errorf("to %s must be %s in the sandbox", Printable(to), gearPathRule)
+	}
+	if err := refuseLoginDestination(to, s.Agents); err != nil {
+		return err
+	}
+	if GearLandsIn(Gear{To: to}, workspace) {
+		return errorf("to %s is in the sandbox's workspace (%s) or holds it, where stage ship would find your files among the agent's work; copy it to a place outside the repository", Printable(to), Printable(workspace))
+	}
+	return nil
 }

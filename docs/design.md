@@ -22,6 +22,9 @@ the host, compute a secret, or choose which sandbox gets which grant. Those are 
 | Organisation policy (agents, GitHub modes, AWS profiles, repository kits, `copy_logins`, gear, the global policy override) | `stage`'s managed settings |
 | Keeping files from a sandbox before it is removed (takes) | `stage`: sbx has no copy-out, so stage streams a tar through `sbx exec` and writes only files and directories under `~/.scoring-stage/takes/` |
 | The user's own files in every sandbox (gear) | `stage`, from the user's config only: sbx has no copy-in for an existing sandbox and a kit cannot read the host, so stage streams a tar through `sbx exec -i` after `sbx env create`, as it does a saved login |
+| One host file put into a running sandbox | `stage put`, sharing gear's source and destination checks and its tar stream through `sbx exec -i`; sbx has no copy-in |
+| Detached commands and their host records | `stage`: one holder per job keeps an attached `sbx exec` open; sbx has no detached execution with durable output and status |
+| MCP tools for stage's commands, keeping approvals, ship confirmation and widening choices with the person | `stage`, as a stdio subcommand sharing command paths; no listener, daemon or separate sandbox state |
 | What a kept take belongs to (repository, base branch, ships, pull requests) | `stage`: each `ship` is recorded on the task, and each take carries a `stage.json` stage writes; a sandbox cannot supply it |
 | Reporting sbx's global credential bindings | `stage setup`, read-only; `credentials.yaml` stays sbx's |
 
@@ -65,6 +68,30 @@ config.
 the core kits are embedded with `go:embed` and extracted to `~/.scoring-stage/kits/<content hash>/`; a new build
 with changed kits gets a new directory and never rewrites one an existing sandbox was created from. The broker is
 the same binary run as `stage broker serve`.
+
+## Jobs
+
+A job's holder is one host process per job, the same binary run as `stage job hold`, running as the person with
+only the access ordinary `stage exec` uses. It exits with its attached sbx client; nothing listens on a port.
+A daemon would outlive its job, and sandbox-side tmux or nohup cannot keep sbx from stopping the sandbox after
+its last session ends. A private inherited file lock proves liveness without trusting a pid that can be reused:
+the kernel drops the lock when the holder dies or the host restarts. Without a recorded exit, an unlocked job is
+lost. Output and the atomic result stay in the task directory; down refuses running jobs and removes finished
+or lost records with the task. Copy-in and detached execution remain narrow seams to replace with sbx primitives
+if those become available; their gaps belong upstream at docker/sbx-releases.
+
+## MCP server
+
+`stage mcp` runs on the host as the person and exposes only sandbox lifecycle, copy and execution tools.
+It shares command implementations and checks. Repository approvals are read-only, book and agent inputs are
+names from the user's configuration, and ship returns a review for the person to confirm through the CLI.
+It cannot grant an AWS profile, change global policy, discard takes or allow protected paths.
+
+The client owns the server's stdio lifetime; nothing listens on a port and jobs keep their own holders.
+Subprocesses receive null input instead of the client's pipe and diagnostic output instead of the protocol's
+stdout. Tool results are bounded and escaped data. Cancellation stops waits and synchronous exec; shutdown
+waits for command paths without cancellation to finish before restoring process streams. A server-wide mutex
+serializes up, put, take, ship review and down; it does not serialize separate CLI invocations or job starts.
 
 ## AWS broker
 
