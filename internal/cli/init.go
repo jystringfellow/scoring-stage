@@ -15,8 +15,8 @@ import (
 )
 
 type initFile struct {
-	path, content, skipped string
-	exists, written        bool
+	path, content, skipped    string
+	exists, written, scaffold bool
 }
 
 func uniqueInitNames(names []string) []string {
@@ -61,7 +61,7 @@ func (a *App) cmdInit(args []string, home string) (int, error) {
 	files := []initFile{{path: config.RepoConfigPath, content: config.DraftRepoConfig(agents, books, kits)}}
 	for _, name := range kits {
 		path, content := config.ScaffoldKit(name)
-		files = append(files, initFile{path: path, content: content})
+		files = append(files, initFile{path: path, content: content, scaffold: true})
 	}
 	files[0].exists, err = inspectInitPath(repo, files[0].path)
 	if err != nil {
@@ -349,6 +349,20 @@ func (a *App) finishInit(repo string, settings *config.Settings, named []string,
 				fmt.Fprintf(a.Stdout, "    %s\n", line)
 			}
 		}
+	}
+	scaffolded := false
+	for _, file := range files {
+		if file.scaffold && (file.written || (dryRun && !file.exists && file.skipped == "")) {
+			a.say("%s grants the sandbox nothing yet (capabilities: [])", config.Printable(file.path))
+			scaffolded = true
+		}
+	}
+	if scaffolded {
+		a.say("to use it: add the capabilities this repository needs to the kit file; then stage up and run the repository's own build and tests inside with stage exec <slug> -- <command> to see what is still missing")
+	}
+	if files[0].skipped == "no --agent, --book or --kit given" {
+		a.say("a sandbox for this repository would get the base image, stage's own kit and additions from your config")
+		a.say("this repository adds no agents, books or kits; add --agent, --book or --kit to ask for more")
 	}
 	if !changed {
 		a.say("nothing changed")
