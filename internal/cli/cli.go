@@ -102,7 +102,7 @@ commands:
   token set <owner>                 save a fine-grained GitHub token for a repository owner, read from stdin
   broker start|stop|status|serve    manage the host AWS credential broker
   github login|token                log in to your GitHub App ([github] mode = "app"); print a fresh token
-  init [<repo>] [options]           draft and check a repository config and kits
+  init [<repo>] [options]           draft and check a repository config and kits, or print --guide
   up <repo> <slug> [options]        create a sandbox for a repository
   shell <slug>                      open a login shell in the repository
   login <slug>                      save the sandbox's copyable agent logins (copy_logins) for future sandboxes

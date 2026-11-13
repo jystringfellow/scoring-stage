@@ -30,14 +30,19 @@ func uniqueInitNames(names []string) []string {
 }
 
 func (a *App) cmdInit(args []string, home string) (int, error) {
-	flags := a.newFlags("init", "[<repo>] [--agent NAME]... [--book NAME]... [--kit NAME]... [--dry-run]")
+	flags := a.newFlags("init", "[<repo>] [--agent NAME]... [--book NAME]... [--kit NAME]... [--dry-run] [--guide]")
 	var agents, books, kits stringList
 	flags.Var(&agents, "agent", "name an agent in the repository config (repeatable)")
 	flags.Var(&books, "book", "name an installed book in the repository config (repeatable)")
 	flags.Var(&kits, "kit", "scaffold a repository kit that grants nothing (repeatable)")
 	dryRun := flags.Bool("dry-run", false, "print exactly what would be written, and check it without writing")
+	printGuide := flags.Bool("guide", false, "print how to work out what a repository needs, without reading or writing files")
 	positional, err := flags.parseOptional(args, 1)
 	if err != nil {
+		return 0, err
+	}
+	if *printGuide {
+		_, err := fmt.Fprint(a.Stdout, guide)
 		return 0, err
 	}
 	repo := "."

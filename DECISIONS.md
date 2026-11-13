@@ -378,3 +378,13 @@ exec are cancellable and time-capped; detached holders survive the server. Evide
 Go releases can change gofmt's alignment: Go 1.27 formats the gear tests differently from Go 1.26.
 The module now requires Go 1.27, matching the example Go book. CI and release builds read the version from
 go.mod, and CI already checks gofmt before vet and tests. Evidence: Go 1.27.3's `gofmt -l .` is empty.
+
+## 2026-11-13: The guide is carried text, not detection
+
+`stage init --guide` prints a procedure instead of inspecting repositories: detection would make stage own a
+catalogue of toolchains, which belong in books and kits. One embedded text file supplies the binary's output;
+a test keeps the README's verbatim copy equal to it. The optional skill runs the guide to avoid another copy
+and requires the agent to propose and never approve. Evidence:
+`TestInitGuidePrintsTheProcedureInOrderAndNothingElse`, `TestInitGuideWritesNothingAndCallsNoSbx`,
+`TestTheReadmeCopyOfTheGuideIsTheGuide`,
+`TestTheSkillCarriesNoCopyOfTheGuideAndTellsTheAgentToRunItAndNeverApprove`.

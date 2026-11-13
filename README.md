@@ -66,6 +66,7 @@ or, from a clone, `go build -o bin/stage ./cmd/stage`. `stage version` prints th
 ```
 stage setup --agent claude --agent codex  # save the agents you use; check sbx, the policy and credentials
 stage init --agent claude --book backend --kit rules  # draft and check this repository's config and an empty kit
+stage init --guide                   # print how to work out what a repository needs
 stage up ~/Code/api fix-login        # sandbox stage-fix-login on a scratch clone of ~/Code/api
 stage up ~/Code/api fix-login --agent agy --book dotnet  # add an agent or an installed book for one box
 stage up ~/Code/api fix-login --aws-profile staging    # grant an AWS profile to one box and make it the default
@@ -740,6 +741,23 @@ and allows the hosts `apt` and the Go module proxy need. Try it with
 `stage up <repo> <slug> --book ./examples/books/go`, or copy it as the start of your own. It passes stage's checks
 on a book; its install steps follow a kit that runs in a sandbox, but this copy has not been run in one.
 
+[`examples/books/python`](examples/books/python) installs uv from PyPI and Python 3.12, without a compiler or
+credentials. It grants `pypi.org` and `files.pythonhosted.org` at install and runtime, plus install-only GET
+access to `github.com:443` under `/astral-sh/python-build-standalone/releases/download/**` and
+`release-assets.githubusercontent.com:443` for Python builds. Try
+`stage up <repo> <slug> --book ./examples/books/python`, or copy it as the start of your own book. Like the Go
+book, it passes stage's checks but has not been run in a sandbox.
+
+The Python kit's `python` argument defaults to `3.12` and accepts `major.minor` or `major.minor.patch`.
+To choose another version, copy the book and replace its `kits` entry in `book.toml`, for example:
+
+```toml
+kits = [{source = "./kits/python", args = {python = "3.11"}}]
+```
+
+Python builds can be downloaded only during installation; change the argument and recreate the sandbox when
+another version is needed. The book's grants add to those of the other selected kits.
+
 A book's `name` matches `^[a-z0-9][a-z0-9._-]*$`, and its `description` has no control characters. A book cannot
 set `base`. It cannot set a secret or binding for a reserved service: any service an agent binds (`anthropic`,
 `openai`, `copilot`), sbx's built-in services (such as `google`, `groq` or `xai`), `github` or `stage-broker`. It may
@@ -808,6 +826,58 @@ Review the files and commit them directly on the branch sandboxes start from, si
 config from that branch, then run `stage up <repo> <slug>`. `stage ship` refuses changes under
 `.scoring-stage/` unless you pass `--allow-protected-paths`.
 
+### Working out what a repository needs
+
+`stage init --guide` prints this procedure for a person or any agent. It reads and writes no files and ignores
+the side effects of other flags, including `--dry-run`, `--agent`, `--book` and `--kit`. The repository need
+not exist; malformed flags or extra arguments still produce a usage error. Without `--guide`, `init` behaves
+as described above.
+
+<!-- stage init --guide:begin -->
+```text
+1. Read what the repository says it needs: CI workflow files (toolchain
+   versions, package managers, services), lockfiles, the README's setup steps.
+
+2. Start from the least: stage init --agent NAME with the agents you need and
+   --book NAME for any installed book that matches the toolchain. If nothing
+   matches, add --kit NAME to scaffold an empty repository kit.
+
+3. Bring the sandbox up with stage up <repo> <slug> and run the repository's
+   own install, build and test commands inside with
+   stage exec <slug> -- <command>. Each refusal names what is missing: a
+   blocked host is a network-policy entry, a missing tool is an install step,
+   a wrong version is a pinned toolchain.
+
+4. Add only what a failure showed was needed, to the repository kit, and say
+   why in its description. Never add a credential to get past a failure;
+   stop and ask the person.
+
+5. Repeat until install, build and test pass, then commit the config on the
+   branch sandboxes start from. A person approves the repository's kits on
+   first use: they review stage up --plan and approve through stage up's
+   prompt or --approve-repo-config. An agent must propose and never approve.
+```
+<!-- stage init --guide:end -->
+
+The guide works with stage alone. The optional
+[`stage-repo-needs` skill](examples/skills/stage-repo-needs/SKILL.md) uses Claude Code's skill format and tells
+the agent to run the guide. It requires the agent to propose and never approve. Install it for all projects:
+
+```sh
+mkdir -p ~/.claude/skills
+cp -R examples/skills/stage-repo-needs ~/.claude/skills/
+```
+
+Or install it for one repository:
+
+```sh
+mkdir -p <repo>/.claude/skills
+cp -R examples/skills/stage-repo-needs <repo>/.claude/skills/
+```
+
+Run these commands from a checkout of stage. `stage` must be on PATH on the host where the agent runs;
+the guide itself needs no skill.
+
 A repository is not trusted with anything that acts on the host. It can add agents by name, installed books by
 name, its own kits and [takes](#takes), but it cannot set secrets, bindings, AWS profiles, GitHub access, [gear](#gear) or the base. A book it asks
 for that you have not installed is an error. A repository's kit is a `./` path inside the repository, with no
@@ -851,6 +921,10 @@ this README:
   environment from the tmux server. Set `TERM`, `SHELL` and `LANG` first, and guard with `tmux has-session` so a
   second start does not fail. The kit has to install `tmux`. Like everything else in the sandbox, the server stops
   when the sandbox does, and the `startup` command runs again on the next start.
+
+The [Python example kit](examples/books/python/kits/python/python.yaml) installs uv from PyPI in a venv and
+uses it to install the selected Python version. This example has not been checked against the 16 KB-page
+warning above; verify it on the host before relying on it.
 
 ## Managed settings
 
@@ -937,6 +1011,11 @@ and what has not been run live yet.
 - **The empty kit scaffold needs a live check.** `stage init`'s spec v3 mixin with `capabilities: []` passes
   stage's repository-kit checks. A live sbx run of that scaffold, and `stage up` against an init-written config,
   have not been verified; the maintainer must check them on the host.
+- **The Python book, guide and skill need live checks.** Tests validate the book and its declared grants, and
+  keep the guide and README in sync; they do not run the kit's install hooks or an agent using the skill.
+  Check Python downloads and discovery as the unprivileged user, PyPI installs and the refusal of unrelated
+  hosts on a live sandbox. The reported success of uv in a sandbox conflicts with the 16 KB-page warning under
+  [Writing a kit](#writing-a-kit); this example has not resolved that conflict.
 - **Books run code on your host.** A book's secret commands run on your machine as you, before the sandbox exists.
   The checks on books stop them from rebinding stage's credentials (agent, sbx built-in, GitHub and broker) and catch
   mistakes. They cannot stop a book whose secret runs a command such as `gh auth token` and whose own kit injects

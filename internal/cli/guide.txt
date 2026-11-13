@@ -1,0 +1,21 @@
+1. Read what the repository says it needs: CI workflow files (toolchain
+   versions, package managers, services), lockfiles, the README's setup steps.
+
+2. Start from the least: stage init --agent NAME with the agents you need and
+   --book NAME for any installed book that matches the toolchain. If nothing
+   matches, add --kit NAME to scaffold an empty repository kit.
+
+3. Bring the sandbox up with stage up <repo> <slug> and run the repository's
+   own install, build and test commands inside with
+   stage exec <slug> -- <command>. Each refusal names what is missing: a
+   blocked host is a network-policy entry, a missing tool is an install step,
+   a wrong version is a pinned toolchain.
+
+4. Add only what a failure showed was needed, to the repository kit, and say
+   why in its description. Never add a credential to get past a failure;
+   stop and ask the person.
+
+5. Repeat until install, build and test pass, then commit the config on the
+   branch sandboxes start from. A person approves the repository's kits on
+   first use: they review stage up --plan and approve through stage up's
+   prompt or --approve-repo-config. An agent must propose and never approve.

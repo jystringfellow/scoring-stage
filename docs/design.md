@@ -27,6 +27,7 @@ the host, compute a secret, or choose which sandbox gets which grant. Those are 
 | MCP tools for stage's commands, keeping approvals, ship confirmation and widening choices with the person | `stage`, as a stdio subcommand sharing command paths; no listener, daemon or separate sandbox state |
 | What a kept take belongs to (repository, base branch, ships, pull requests) | `stage`: each `ship` is recorded on the task, and each take carries a `stage.json` stage writes; a sandbox cannot supply it |
 | Reporting sbx's global credential bindings | `stage setup`, read-only; `credentials.yaml` stays sbx's |
+| A procedure for working out a repository's sandbox needs | `stage init --guide`, carried text; books and kits own toolchains and grants |
 
 `stage up` expresses all of it as one sbx environment file and lets `sbx env create` apply it, so a sandbox's
 policy, secrets and bindings are created and removed together.
