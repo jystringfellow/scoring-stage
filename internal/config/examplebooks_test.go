@@ -233,7 +233,7 @@ func TestThePythonKitsInstallCommandsUseOnlyThePinnedArgumentAndInstallUvFromPyP
 	if !reflect.DeepEqual(refs, []string{"${{ kit.args.python }}"}) {
 		t.Errorf("argument references = %v", refs)
 	}
-	for _, required := range []string{"python3 -m venv", "pip install uv", "uv python install", "UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python", "UV_PYTHON_BIN_DIR=/usr/local/bin"} {
+	for _, required := range []string{"python3 -m venv", "pip install --no-cache-dir uv", "UV_NO_CACHE=1", "uv python install", "UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python", "UV_PYTHON_BIN_DIR=/usr/local/bin"} {
 		if !strings.Contains(commands, required) {
 			t.Errorf("install lacks %q", required)
 		}
