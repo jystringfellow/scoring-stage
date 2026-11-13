@@ -26,7 +26,7 @@ and `stage ship` pushes to `https://github.com/`. It runs on Unix hosts: macOS, 
 ## Requirements
 
 macOS or Linux with `sbx` 0.51.0 or later (signed in), `git`, and optionally `gh` (Copilot credentials, `gh`
-mode and `stage ship --pr`) and the `aws` CLI (the AWS broker). Building `stage` needs Go 1.26 or later.
+mode and `stage ship --pr`) and the `aws` CLI (the AWS broker). Building `stage` needs Go 1.27 or later.
 
 ## Install
 
@@ -53,7 +53,7 @@ from the release workflow. With these flags, `gh attestation verify` checks that
 built the archive from the tag you asked for, and prints the commit it was built from. `SHA256SUMS` catches a
 corrupted download, not a tampered one; the attestation is the provenance check.
 
-**With Go** (1.26 or later):
+**With Go** (1.27 or later):
 
 ```
 go install github.com/jystringfellow/scoring-stage/cmd/stage@latest
