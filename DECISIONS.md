@@ -302,3 +302,30 @@ Nothing here has run against a live sandbox; VERIFICATION.md lists what is unche
 [docs/design.md](docs/design.md#nothing-by-default) makes each agent's egress and credential bindings an
 explicit choice; drafting a repository config must not widen every contributor's sandbox without evidence.
 The user's configured agents still apply. Evidence: `TestInitWithoutAnAgentFlagWritesNoAgentsKey`.
+
+## 2026-11-13: Put shares gear's rules and copy path
+
+Putting one host file into an existing sandbox needs the same source credential guard, managed refusal and
+sandbox destination rules as gear. It shares those checks and streams the same tar as `agent`, rather than
+putting bytes on a command line. Missing and nonregular sources are errors for an explicit put.
+Evidence: `TestPutCopiesAFileByteForByteAsTheAgentWithoutItsContentOnACommandLine`,
+`TestPutRefusesUnsafeSourcesAndDestinationsBeforeExec`, `TestPutAndGearRefuseTheSameSandboxPaths`.
+
+## 2026-11-13: One holder per job, with file-lock liveness
+
+An attached host sbx client is the available way to keep a sandbox running for an unattended command.
+Each detached job gets one host holder, with no shared daemon or listener, and private output and an atomic
+result under its task. A file lock inherited from the starter proves liveness; no pid decides state or is
+used to stop a job. A missing result and a released lock mean lost, including after a host restart, because
+stage cannot prove what happened to the sandbox's command. Evidence:
+`TestAnExecCallerCanExitBeforeItsDetachedCommand`, `TestAJobWhoseHolderWasKilledIsReportedLost`,
+`TestAJobLeftRunningByAHostThatRestartedIsReportedLost`, `TestJobReadersNeverMistakeAnotherReadersLockForAHolder`.
+
+## 2026-11-13: Down refuses running jobs, and wait reserves two result codes
+
+Down deletes the task and its job output, so refusing running jobs avoids silently ending unattended work.
+Stop is explicit and keeps its output; finished and lost jobs do not block down. Wait returns a command's
+status, 124 for a timeout while running, and 125 for lost or stopped; JSON state resolves a command that itself
+exits 124 or 125. Evidence: `TestDownRefusesWhileAJobIsRunningAndRemovesFinishedJobsWithTheTask`,
+`TestDownRemovesLostJobsAndJobsOfASandboxThatIsAlreadyGone`, `TestWaitReturnsTheJobsStatusAndHonoursItsTimeout`,
+`TestStopEndsARunningJobAndKeepsItsOutput`.

@@ -72,6 +72,13 @@ stage up ~/Code/api fix-login --aws-profile staging    # grant an AWS profile to
 stage up ~/Code/api fix-login --plan # write the env file and show sbx's plan without creating (stops first if approvals are missing)
 stage shell fix-login                # login shell in the repository; run claude, codex or copilot
 stage exec fix-login -- git log -1
+stage put fix-login ./notes.txt '~/notes.txt' # copy one file into the sandbox as the agent
+id=$(stage exec --detach fix-login -- sh -c 'sleep 150; echo done; exit 7')
+stage job list fix-login --json
+stage job status fix-login "$id" --json
+stage job output fix-login "$id" --follow
+stage job wait fix-login "$id" --timeout 10m # exits with the command's status
+stage job stop fix-login "$id"       # alternatively, stop it while it is still running
 stage ship fix-login [--pr]          # review and push the sandbox's HEAD to agent/fix-login/<sha> (or your [ship] branch_prefix) from the host
 stage list
 stage login fix-login                # save the sandbox's agy login for future sandboxes (copy_logins)
@@ -155,9 +162,10 @@ To run an agent without a terminal, give its non-interactive command to `stage e
 stage exec fix-login -- claude -p "Fix the login redirect and commit the change"
 ```
 
-The command runs in the repository as the sandbox user. Keep it in the foreground: the sandbox stops 30 seconds
-after `stage exec` returns, and anything the command left running in the background stops with it; see
-[Limitations](#limitations).
+The command runs in the repository as the sandbox user. For unattended work that outlives the caller, use
+`stage exec --detach fix-login -- claude -p "Fix the login redirect and commit the change"` and read its job with
+`stage job`. Its host process holds an attached sbx session until the command ends; see [Jobs](#jobs).
+Work left in the background inside a sandbox still stops with the sandbox; see [Limitations](#limitations).
 
 ## Takes
 
@@ -291,6 +299,60 @@ sandbox confirming that it unpacked what stage sent, `stage up` fails: the sandb
 part of your gear. It is still a working sandbox, but stage does not call it up; fix the cause, then run
 `stage down <slug>` and `stage up` again. `stage up --plan` shows what would be copied, and `stage setup` shows the
 setting. An administrator can refuse gear with `allow_gear = false` in [managed settings](#managed-settings).
+
+## Put
+
+`stage put <slug> <file> [<destination>]` copies one regular host file, including binary content, into an existing
+sandbox and says where it went. The destination names the file, defaults to `~/<basename>`, and replaces an
+existing file. Quote `~/` so your host shell does not expand it: `stage put fix-login ./notes.txt '~/notes.txt'`.
+The copy runs as `agent`, owns the file as that user, and retains only its owner's permission bits. Parent
+directories are created as needed. It uses the same tar stream, 100 MiB limit and five-minute timeout as gear;
+file content never appears on a command line.
+
+Put shares [gear's](#gear) source and destination checks, including credential locations, links followed on the
+host, stage's own directory, agent login files, the sandbox workspace and managed `allow_gear = false`.
+The destination starts with `/` or `~/`, has no `..`, doubled or trailing slash, and has no control characters.
+A missing file, directory or special file is an error. A destination the agent cannot write fails the copy.
+Like gear, these path checks do not inspect file contents or detect hard links to credentials.
+
+## Jobs
+
+`stage exec --detach <slug> -- <command> [args]` starts a job and returns immediately. `--detach` may also go
+directly after the slug. Stdout contains only its numeric job id; a wait hint goes to stderr. The command runs as
+`agent` in the repository, as with ordinary exec, with no terminal and stdin from `/dev/null`.
+Without `--detach`, exec behaves as before.
+
+Each job has one host process running as you, holding an attached `sbx exec` for exactly that job. There is no
+shared daemon or listening port. Its arguments contain only `job hold <slug> <id>`; command arguments are kept in
+the private job record. Output and status live under `~/.scoring-stage/tasks/<slug>/jobs/<id>/`, in mode-700
+directories and mode-600 files: `job.json` (command and start time), `output` (merged stdout and stderr),
+`exit.json` (result and end time), `lock` (holder liveness), and `stop` when stopping was requested.
+
+- `stage job list <slug> [--json]` lists jobs in id order with state, status when available, and command.
+- `stage job status <slug> <id> [--json]` reads one job. States are `running`, `exited` with a numeric status,
+  `stopped` after a stop request, and `lost` when the holder disappeared without recording a result.
+- `stage job wait <slug> <id> [--timeout 10m] [--json]` waits indefinitely unless given a timeout and exits with
+  the job's status, 124 on timeout while still running, or 125 for `lost` or `stopped`. A command may itself exit
+  124 or 125; JSON's state distinguishes those cases. A timeout does not stop the job.
+- `stage job output <slug> <id> [--follow]` prints saved output, or follows until the job leaves `running` and
+  drains the remaining bytes. Control characters are escaped as `\xNN`, including terminal escapes, carriage
+  returns and bidi marks; newlines remain newlines. Invalid UTF-8 bytes are escaped too. Stage never interprets
+  the output. Capture is capped at 1 GiB per job, after which bytes are dropped and the result records
+  `output_truncated`; reading truncated output prints a note on stderr. Follow exits 0 even when the job failed.
+- `stage job stop <slug> <id>` asks a running holder to terminate its sbx client, then kills that client after
+  five seconds if needed. It waits for the result, keeps output, and reports `stopped`, or the real exit if the
+  command finished first. Stopping a finished or lost job is an error.
+
+JSON status and wait emit one object; list emits an array (empty is `[]`). They carry `id`, `slug`, `sandbox`,
+`state`, `command` as an argv array, `started_at`, `ended_at` when known, `status` only for `exited`,
+`output_bytes` and `output_truncated`. Failure to start sbx is recorded as exit 127 with its error in the output.
+
+`stage down` refuses while any job is running, before copying takes, saving logins or removing anything, even
+with `--discard-takes`. Wait for or stop those jobs first. When the sandbox is already gone, down proceeds.
+Finished and lost jobs do not block down; their host records and output are deleted with the task. Takes preserve
+only the sandbox paths already listed, and do not copy host job records. Output and status survive a sandbox
+stopping until down removes the task. Put and jobs have been tested against fakes only; the host maintainer must
+check real sbx lifetime, exit status propagation and stop behavior.
 
 ## One-time setup
 
@@ -800,7 +862,18 @@ and what has not been run live yet.
   the hosts. Treat the domains as documentation, not as a boundary.
 - **sbx stops a sandbox 30 seconds after its last session ends or disconnects.** A session is a `stage shell`, `stage exec` or
   `sbx exec`. Work left running in the background inside the sandbox, such as under `nohup` or a detached `tmux`,
-  stops with it. Keep long-running work in the foreground of a session that stays open.
+  stops with it. Use `stage exec --detach` for long work: its host holder keeps a session open until the command
+  ends.
+- **A disappeared job holder means a lost job.** A killed holder or a host restart releases its file lock; without
+  a recorded result, stage reports `lost`, never success or still running. Output saved so far remains readable.
+  Stage cannot tell whether the in-sandbox command stopped; a killed holder may leave the sbx client and command
+  running. Host sleep can interrupt sbx too; no reconnection or restart is attempted. If sbx reports an exit,
+  stage records that status; if the holder disappears, the result is lost.
+- **Job stop ends the host sbx client.** Whether this also stops its command inside a real sandbox, and whether
+  sbx passes through every command status, still needs a live check. A stopped job does not prove the sandbox's
+  command is gone. Job output is merged, untrusted stdout and stderr, capped at 1 GiB.
+- **Starting jobs and down are not serialized.** A job started after down's running-job check can lose its output
+  when down removes the task. Do not start new jobs while removing their sandbox.
 - **The ship record can miss a push.** A ship is written to the task after the push returns, and the list reaches a
   take only when `stage down` or `stage take` keeps one. It misses a ship when:
   - the push was interrupted after GitHub accepted it, or the record could not be written (ship warns);

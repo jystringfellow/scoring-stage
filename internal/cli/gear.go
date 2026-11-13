@@ -27,9 +27,8 @@ func (a *App) surveyGear(settings *config.Settings, workspace string) (gear.Surv
 		return gear.Survey{}, err
 	}
 	for _, item := range checked {
-		if config.GearLandsIn(item, workspace) {
-			return gear.Survey{}, errorf("gear: to %s is in the sandbox's workspace (%s) or holds it, where stage ship would find your files among the agent's work; copy it to a place outside the repository",
-				config.Printable(item.To), workspace)
+		if err := settings.CheckPutDestination(item.To, workspace); err != nil {
+			return gear.Survey{}, errorf("gear: %s", err)
 		}
 	}
 	survey, err := gear.Look(checked, gearLimits)

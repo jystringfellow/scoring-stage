@@ -107,6 +107,11 @@ commands:
   shell <slug>                      open a login shell in the repository
   login <slug>                      save the sandbox's copyable agent logins (copy_logins) for future sandboxes
   exec <slug> -- <command> [args]   run a command in the repository
+  exec --detach <slug> -- <command> [args] start a job held open by a host process
+  job list <slug> [--json]           list jobs
+  job status|wait|output|stop <slug> <id> [options]
+                                    read, wait for, follow or stop a job
+  put <slug> <file> [<destination>] copy a host file into a running sandbox
   ship <slug> [--ref R] [--branch B] [--pr]
                                     push the sandbox's commit to <prefix><slug>/<sha> from the host
                                     (prefix: [ship] branch_prefix, agent/ unless set)
@@ -127,6 +132,7 @@ func (a *App) Main(args []string) int {
 		"exec": a.cmdExec, "ship": a.cmdShip, "list": a.cmdList, "down": a.cmdDown, "login": a.cmdLogin, "take": a.cmdTake,
 		"github": a.cmdGitHub,
 		"token":  a.cmdToken,
+		"put":    a.cmdPut, "job": a.cmdJob,
 	}
 	name := args[0]
 	if name == "-h" || name == "--help" || name == "help" {
@@ -858,6 +864,10 @@ func (a *App) cmdShell(args []string, home string) (int, error) {
 }
 
 func (a *App) cmdExec(args []string, home string) (int, error) {
+	if len(args) > 0 && args[0] == "--detach" || len(args) > 1 && args[1] == "--detach" {
+		return a.cmdDetachedExec(args, home)
+	}
+
 	if len(args) == 0 {
 		return 0, &usageError{"the following arguments are required: slug"}
 	}
@@ -1160,6 +1170,21 @@ func (a *App) cmdDown(args []string, home string) (int, error) {
 	task, taskErr := loadTask(home, slug)
 	if _, recordErr := os.Lstat(filepath.Join(directory, "task.json")); taskErr != nil && !os.IsNotExist(recordErr) && existing[sandbox] && !*discardTakes {
 		return 0, errorf("%s, so stage cannot tell which takes to keep; %s is left in place: pass --discard-takes to remove it without its takes", taskErr, sandbox)
+	}
+	if existing[sandbox] {
+		jobs, err := listJobs(home, slug)
+		if err != nil {
+			return 0, err
+		}
+		var running []string
+		for _, job := range jobs {
+			if job.State == "running" {
+				running = append(running, job.ID)
+			}
+		}
+		if len(running) > 0 {
+			return 0, errorf("%s has %d running jobs (%s); wait for them or stop them with stage job stop %s <id>; nothing was removed", sandbox, len(running), strings.Join(running, ", "), slug)
+		}
 	}
 	if taskErr == nil && existing[sandbox] {
 		if len(task.Takes) > 0 && !*discardTakes {
