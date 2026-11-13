@@ -66,6 +66,15 @@ func expectInitOutput(t *testing.T, h *harness, fragments ...string) {
 	}
 }
 
+func expectNoInitScaffoldGuidance(t *testing.T, h *harness) {
+	t.Helper()
+	for _, fragment := range []string{"grants the sandbox nothing", "to use it:"} {
+		if strings.Contains(h.stdout.String(), fragment) {
+			t.Fatalf("described an unscaffolded kit as scaffolded:\n%s", h.stdout.String())
+		}
+	}
+}
+
 func TestInitWritesAConfigNamingOnlyWhatWasAskedFor(t *testing.T) {
 	h := setup(t)
 	installInitBooks(t, h)
@@ -99,6 +108,117 @@ func TestInitWithoutFlagsWritesNothingAndSaysWhy(t *testing.T) {
 	}
 	expectInitOutput(t, h, "no --agent, --book or --kit given", "known agents:", "no installed books", "check passed")
 	h.expect(2, "init", dir, "extra")
+}
+
+func TestInitSaysAScaffoldedKitGrantsNothingAndNamesTheNextSteps(t *testing.T) {
+	h := setup(t)
+	dir := t.TempDir()
+	h.expect(0, "init", dir, "--kit", "rules")
+	expectInitOutput(t, h,
+		"written .scoring-stage/kits/rules/rules.yaml",
+		"stage: .scoring-stage/kits/rules/rules.yaml grants the sandbox nothing yet (capabilities: [])\n",
+		"stage: to use it: add the capabilities this repository needs to the kit file; then stage up and run the repository's own build and tests inside with stage exec <slug> -- <command> to see what is still missing\n")
+}
+
+func TestInitDryRunSaysAScaffoldedKitGrantsNothingAndNamesTheNextSteps(t *testing.T) {
+	h := setup(t)
+	dir := t.TempDir()
+	before := initTree(t, dir)
+	h.expect(0, "init", dir, "--kit", "rules", "--dry-run")
+	expectInitOutput(t, h,
+		"would write .scoring-stage/kits/rules/rules.yaml",
+		"stage: .scoring-stage/kits/rules/rules.yaml grants the sandbox nothing yet (capabilities: [])\n",
+		"stage: to use it: add the capabilities this repository needs to the kit file; then stage up and run the repository's own build and tests inside with stage exec <slug> -- <command> to see what is still missing\n")
+	if !reflect.DeepEqual(before, initTree(t, dir)) {
+		t.Fatal("dry run wrote files")
+	}
+}
+
+func TestInitDoesNotSayAKitGrantsNothingWhenTheKitAlreadyExists(t *testing.T) {
+	for _, dryRun := range []bool{false, true} {
+		t.Run(fmt.Sprint(dryRun), func(t *testing.T) {
+			h := setup(t)
+			dir := t.TempDir()
+			path, content := config.ScaffoldKit("rules")
+			testutil.WriteFile(t, filepath.Join(dir, path), content)
+			args := []string{"init", dir, "--kit", "rules"}
+			if dryRun {
+				args = append(args, "--dry-run")
+			}
+			h.expect(0, args...)
+			expectInitOutput(t, h, "kept "+path)
+			expectNoInitScaffoldGuidance(t, h)
+		})
+	}
+}
+
+func TestInitSaysWhatASandboxWithNoKitBookOrAgentWouldHave(t *testing.T) {
+	for _, dryRun := range []bool{false, true} {
+		t.Run(fmt.Sprint(dryRun), func(t *testing.T) {
+			h := setup(t)
+			dir := t.TempDir()
+			before := initTree(t, dir)
+			args := []string{"init", dir}
+			if dryRun {
+				args = append(args, "--dry-run")
+			}
+			h.expect(0, args...)
+			expectInitOutput(t, h,
+				"stage: a sandbox for this repository would get the base image, stage's own kit and additions from your config\n",
+				"stage: this repository adds no agents, books or kits; add --agent, --book or --kit to ask for more\n")
+			if !reflect.DeepEqual(before, initTree(t, dir)) {
+				t.Fatal("wrote files")
+			}
+		})
+	}
+}
+
+func TestInitDoesNotDescribeABareConfigWhenFlagsOrAConfigExist(t *testing.T) {
+	for _, selection := range []string{"agent", "book", "kit", "existing"} {
+		t.Run(selection, func(t *testing.T) {
+			h := setup(t)
+			dir := t.TempDir()
+			args := []string{"init", dir}
+			switch selection {
+			case "agent":
+				args = append(args, "--agent", "claude")
+			case "book":
+				installInitBooks(t, h)
+				args = append(args, "--book", "backend")
+			case "kit":
+				args = append(args, "--kit", "rules")
+			case "existing":
+				testutil.WriteFile(t, filepath.Join(dir, config.RepoConfigPath), "")
+			}
+			h.expect(0, args...)
+			if strings.Contains(h.stdout.String(), "a sandbox for this repository would get") || strings.Contains(h.stdout.String(), "this repository adds no agents") {
+				t.Fatalf("described a bare config:\n%s", h.stdout.String())
+			}
+		})
+	}
+}
+
+func TestInitDescribesEachScaffoldedKitAndPrintsTheNextStepsOnce(t *testing.T) {
+	for _, dryRun := range []bool{false, true} {
+		t.Run(fmt.Sprint(dryRun), func(t *testing.T) {
+			h := setup(t)
+			dir := t.TempDir()
+			args := []string{"init", dir, "--kit", "rules", "--kit", "other", "--kit", "rules"}
+			if dryRun {
+				args = append(args, "--dry-run")
+			}
+			h.expect(0, args...)
+			for _, name := range []string{"rules", "other"} {
+				line := fmt.Sprintf("stage: .scoring-stage/kits/%s/%s.yaml grants the sandbox nothing yet (capabilities: [])\n", name, name)
+				if count := strings.Count(h.stdout.String(), line); count != 1 {
+					t.Fatalf("kit message count = %d:\n%s", count, h.stdout.String())
+				}
+			}
+			if count := strings.Count(h.stdout.String(), "stage: to use it:"); count != 1 {
+				t.Fatalf("next steps count = %d:\n%s", count, h.stdout.String())
+			}
+		})
+	}
 }
 
 func TestInitRefusesABookThatIsNotInstalledAndListsTheInstalledOnesWithTheirDescriptions(t *testing.T) {
@@ -167,6 +287,7 @@ func TestInitLeavesAnExistingConfigAndKitByteIdenticalAndStillChecksThem(t *test
 		t.Fatal("changed mtimes")
 	}
 	expectInitOutput(t, h, "kept .scoring-stage/config.toml", "skipped .scoring-stage/kits/other/other.yaml", "--agent claude", "check passed", "nothing changed")
+	expectNoInitScaffoldGuidance(t, h)
 	testutil.WriteFile(t, filepath.Join(dir, config.RepoConfigPath), "secrets = {}\n")
 	before = initTree(t, dir)
 	h.expect(1, "init", dir)
@@ -191,6 +312,7 @@ func TestInitKeepsAnExistingKitAndChecksEveryFileInItBeforeWriting(t *testing.T)
 	testutil.WriteFile(t, filepath.Join(other, ".scoring-stage/kits/rules/extra.yaml"), "capabilities:\n  - type: unknown@1\n")
 	before := initTree(t, other)
 	h.expect(1, "init", other, "--kit", "rules")
+	expectNoInitScaffoldGuidance(t, h)
 	if !reflect.DeepEqual(before, initTree(t, other)) {
 		t.Fatal("wrote before check")
 	}
@@ -213,6 +335,7 @@ func TestInitDoesNotFollowASymbolicLinkOutOfTheRepository(t *testing.T) {
 			outsideBefore := initTree(t, outside)
 			h.expect(1, "init", dir, "--kit", "rules")
 			expectInitOutput(t, h, "skipped", "symbolic link")
+			expectNoInitScaffoldGuidance(t, h)
 			if !reflect.DeepEqual(before, initTree(t, dir)) || !reflect.DeepEqual(outsideBefore, initTree(t, outside)) {
 				t.Fatal("followed link or changed repository")
 			}
@@ -321,6 +444,7 @@ func TestInitRefusesWhenManagedSettingsDenyRepositoryKitsAndWritesNothing(t *tes
 	before := initTree(t, dir)
 	h.expect(1, "init", dir, "--kit", "rules")
 	h.expectStderr("repo_kits = \"deny\"")
+	expectNoInitScaffoldGuidance(t, h)
 	if !reflect.DeepEqual(before, initTree(t, dir)) {
 		t.Fatal("wrote refused files")
 	}
@@ -391,6 +515,7 @@ func TestInitSkipsTargetsThatAreNotRegularFiles(t *testing.T) {
 			before := initTree(t, dir)
 			h.expect(1, "init", dir, "--kit", "rules")
 			expectInitOutput(t, h, "skipped", "not a regular file")
+			expectNoInitScaffoldGuidance(t, h)
 			if !reflect.DeepEqual(before, initTree(t, dir)) {
 				t.Fatal("changed nonregular target")
 			}

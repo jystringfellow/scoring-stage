@@ -772,13 +772,29 @@ Draft this file with `stage init [<repo>] [--agent NAME]... [--book NAME]... [--
 `<repo>` defaults to the current directory. Repeated flags keep their first occurrence. Only named agents,
 installed books and scaffolded kits appear in the draft, in that order; takes are omitted. Without `--agent`,
 the `agents` key is omitted, so the repository asks for no agents; your own configured agents still apply.
-With no flags and no existing config, nothing is written. Unnamed installed books are listed with their
-descriptions, along with the known agent names. An unknown book is refused with the installed choices listed.
+With no flags and no existing config, nothing is written, and `init` explains what a sandbox would get:
+
+```text
+stage: a sandbox for this repository would get the base image, stage's own kit and additions from your config
+stage: this repository adds no agents, books or kits; add --agent, --book or --kit to ask for more
+```
+
+Unnamed installed books are listed with their descriptions, along with the known agent names. An unknown book
+is refused with the installed choices listed.
 
 `--kit rules` adds `"./.scoring-stage/kits/rules"` to `kits` and writes
 `.scoring-stage/kits/rules/rules.yaml`: a spec v3 mixin with no capabilities, hosts or credentials. A kit name
 must be one lowercase path component, using letters, digits, dots, underscores or dashes, and start with a
-letter or digit. Add the hosts you need yourself; see [Writing a kit](#writing-a-kit).
+letter or digit. When `stage init --kit rules` scaffolds the kit, it prints these lines after the file list
+(`--dry-run` prints them after the proposed contents):
+
+```text
+stage: .scoring-stage/kits/rules/rules.yaml grants the sandbox nothing yet (capabilities: [])
+stage: to use it: add the capabilities this repository needs to the kit file; then stage up and run the repository's own build and tests inside with stage exec <slug> -- <command> to see what is still missing
+```
+
+These lines are omitted for existing or skipped kits. With several new kits, each file is named and the next
+steps are printed once. See [Writing a kit](#writing-a-kit).
 
 `init` never edits an existing file. If the config exists, all scaffolding is skipped and the existing config
 is checked; flags missing from it are reported for you to add yourself. An existing kit file is kept when
