@@ -342,7 +342,9 @@ directories and mode-600 files: `job.json` (command and start time), `output` (m
   `output_truncated`; reading truncated output prints a note on stderr. Follow exits 0 even when the job failed.
 - `stage job stop <slug> <id>` asks a running holder to terminate its sbx client, then kills that client after
   five seconds if needed. It waits for the result, keeps output, and reports `stopped`, or the real exit if the
-  command finished first. Stopping a finished or lost job is an error.
+  command finished first. Stopping a finished or lost job is an error. Stop ends the host's session, not the
+  command: on sbx 0.51.0 the command was still running in the sandbox after the job reported `stopped`, and it
+  ends when sbx stops the idle sandbox. To end it sooner, kill it with `stage exec`.
 
 JSON status and wait emit one object; list emits an array (empty is `[]`). They carry `id`, `slug`, `sandbox`,
 `state`, `command` as an argv array, `started_at`, `ended_at` when known, `status` only for `exited`,
@@ -352,8 +354,8 @@ JSON status and wait emit one object; list emits an array (empty is `[]`). They 
 with `--discard-takes`. Wait for or stop those jobs first. When the sandbox is already gone, down proceeds.
 Finished and lost jobs do not block down; their host records and output are deleted with the task. Takes preserve
 only the sandbox paths already listed, and do not copy host job records. Output and status survive a sandbox
-stopping until down removes the task. Put, jobs and MCP have been tested against fakes only; the host maintainer must
-check real sbx lifetime, exit status propagation and stop behavior.
+stopping until down removes the task. [VERIFICATION.md](VERIFICATION.md) records the checks of put, jobs and
+the MCP tools against a live sbx.
 
 ## MCP server
 
@@ -913,8 +915,8 @@ and what has not been run live yet.
   ancestor of it (including `/`). The credential-location guard is still a fixed list, not a secret scan. Start
   the server in the intended project directory.
 - **MCP restricts the tools it offers.** A client with host shell permission can invoke stage's command line
-  directly. Tool restrictions do not remove that separate permission. MCP and its subprocess isolation have
-  been tested against fakes only; the maintainer must check them with a real client and sbx on the host.
+  directly. Tool restrictions do not remove that separate permission. The tools were checked against a live sbx
+  through the stdio protocol ([VERIFICATION.md](VERIFICATION.md)); a real MCP client was not used.
 
 - **The empty kit scaffold needs a live check.** `stage init`'s spec v3 mixin with `capabilities: []` passes
   stage's repository-kit checks. A live sbx run of that scaffold, and `stage up` against an init-written config,
