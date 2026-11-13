@@ -72,7 +72,7 @@ func signalJobGroup(parent context.Context, sandbox, pidfile, mode string) (int,
 	command.WaitDelay = time.Second
 	output, err := command.Output()
 	if err == nil {
-		if string(output) != "stage-job-gone\n" {
+		if !jobGoneConfirmed(output) {
 			return 0, errors.New("sandbox did not confirm the job process group is gone")
 		}
 		return 0, nil
@@ -143,4 +143,8 @@ func endJobClient(command *exec.Cmd, done <-chan error) {
 		_ = command.Process.Kill()
 		<-done
 	}
+}
+
+func jobGoneConfirmed(output []byte) bool {
+	return string(output) == "stage-job-gone\n" || strings.HasSuffix(string(output), "\nstage-job-gone\n")
 }

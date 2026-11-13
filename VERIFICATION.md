@@ -382,3 +382,30 @@ Checked:
 
 Not checked: a repository whose config needs approval, `take` with takes present, the exec and wait caps,
 cancellation, and an MCP client application.
+
+## 2026-11-13: stopping a detached job against a live sbx
+
+- **sbx:** 0.51.0, macOS.
+- **stage:** built from 0b0b5a4 plus the banner fix described below.
+- **Credentials:** none used. Sandboxes of this repository with the `shell` and `stage` kits only, in the usual
+  stage home.
+- **Restoration:** each sandbox was removed with `stage down`; no holder process remained.
+
+Checked:
+
+- The sandbox image has `perl` (5.40.1), which the job launcher needs.
+- A detached `sh -c 'sleep N & echo started; wait'` ran as a process group of its own: the shell and the `sleep`
+  shared a group id equal to the shell's pid, and the pid file under `/tmp` held that id.
+- `stage job stop` on that job exited 0 within a second, the job reported `stopped`, `stage job wait` exited 125,
+  its output was still readable, and no process of the job remained in the sandbox. Six jobs in a row behaved the
+  same.
+- A job that ignores TERM (`trap "" TERM; while :; do sleep 1; done`) was sent TERM, checked for about six
+  seconds, then killed. `stage job stop` exited 0 and nothing remained.
+- **The first job in a new sandbox failed to stop before the banner fix.** The first `bash` run as the agent user
+  in a new sandbox prints the sandbox's welcome banner to standard output, ahead of the script's confirmation
+  line. Stop compared the whole output with that line, reported that it could not confirm the command had
+  stopped, and the job ended `lost`. With the comparison made against the last line, the first job in a new
+  sandbox stopped like the others.
+
+Not checked: a holder killed outright while its command runs, a host restart, the `job` tool's `stop` action
+through `stage mcp`, and a command that moves itself into another session.

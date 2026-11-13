@@ -169,3 +169,17 @@ func TestADetachedCommandReportsMissingAndNonExecutableFirstWordsLikeAShell(t *t
 		}
 	}
 }
+
+func TestAShellBannerBeforeTheConfirmationDoesNotHideIt(t *testing.T) {
+	for output, want := range map[string]bool{
+		"stage-job-gone\n":                   true,
+		"Docker Sandbox\n\nstage-job-gone\n": true,
+		"":                                   false,
+		"stage-job-gone\nmore\n":             false,
+		"not-stage-job-gone\n":               false,
+	} {
+		if got := jobGoneConfirmed([]byte(output)); got != want {
+			t.Errorf("%q: got %v, want %v", output, got, want)
+		}
+	}
+}
