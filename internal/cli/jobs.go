@@ -245,16 +245,20 @@ func (a *App) cmdDetachedExec(args []string, home string) (int, error) {
 	if len(argv) == 0 {
 		return 0, &usageError{"usage: stage exec --detach <slug> -- <command> [args...]"}
 	}
-	if err := requireSandbox(task); err != nil {
-		return 0, err
-	}
-	id, err := startJob(home, task, argv)
+	id, err := startDetached(home, task, argv)
 	if err != nil {
 		return 0, err
 	}
 	fmt.Fprintln(a.Stdout, id)
 	fmt.Fprintf(a.Stderr, "stage: stage job wait %s %s\n", task.Slug, id)
 	return 0, nil
+}
+
+func startDetached(home string, task *Task, argv []string) (string, error) {
+	if err := requireSandbox(task); err != nil {
+		return "", err
+	}
+	return startJob(home, task, argv)
 }
 
 func (a *App) cmdJob(args []string, home string) (int, error) {
@@ -350,21 +354,9 @@ func (a *App) cmdJob(args []string, home string) (int, error) {
 	case "output":
 		return 0, a.outputJob(home, task.Slug, id, follow)
 	case "stop":
-		if job.State != "running" {
-			return 0, errorf("job %s is %s", id, job.State)
-		}
-		if err := os.WriteFile(filepath.Join(jobDir(home, task.Slug, id), "stop"), nil, 0600); err != nil {
-			return 0, err
-		}
-		job, err = waitJob(home, task.Slug, id, jobStopGrace+5*time.Second)
+		job, err = stopJob(home, task.Slug, id)
 		if err != nil {
 			return 0, err
-		}
-		if job.State == "running" {
-			return 0, errorf("job %s is still running after its stop request", id)
-		}
-		if job.State == "lost" {
-			return 0, errorf("job %s is lost; its command may still be running or may have stopped", id)
 		}
 		if job.State == "exited" {
 			return 0, a.printJob(job, false)
@@ -372,6 +364,30 @@ func (a *App) cmdJob(args []string, home string) (int, error) {
 		a.say("job %s stopped", id)
 	}
 	return 0, nil
+}
+
+func stopJob(home, slug, id string) (jobStatus, error) {
+	job, err := readJob(home, slug, id)
+	if err != nil {
+		return job, err
+	}
+	if job.State != "running" {
+		return job, errorf("job %s is %s", id, job.State)
+	}
+	if err := os.WriteFile(filepath.Join(jobDir(home, slug, id), "stop"), nil, 0600); err != nil {
+		return job, err
+	}
+	job, err = waitJob(home, slug, id, jobStopGrace+5*time.Second)
+	if err != nil {
+		return job, err
+	}
+	if job.State == "running" {
+		return job, errorf("job %s is still running after its stop request", id)
+	}
+	if job.State == "lost" {
+		return job, errorf("job %s is lost; its command may still be running or may have stopped", id)
+	}
+	return job, nil
 }
 
 func (a *App) printJob(job jobStatus, asJSON bool) error {
@@ -558,6 +574,27 @@ func holdJob(home, slug, id string) error {
 	return writeJobJSON(filepath.Join(dir, "exit.json"), ended)
 }
 
+func escapeOutput(pending []byte, final bool) (string, []byte) {
+	var escaped strings.Builder
+	for len(pending) > 0 {
+		if !final && !utf8.FullRune(pending) {
+			break
+		}
+		r, size := utf8.DecodeRune(pending)
+		text := string(r)
+		if r == '\n' {
+			text = "\n"
+		} else if r == utf8.RuneError && size == 1 {
+			text = fmt.Sprintf("\\x%02x", pending[0])
+		} else {
+			text = config.Printable(text)
+		}
+		escaped.WriteString(text)
+		pending = pending[size:]
+	}
+	return escaped.String(), pending
+}
+
 func (a *App) outputJob(home, slug, id string, follow bool) error {
 	file, err := os.Open(filepath.Join(jobDir(home, slug, id), "output"))
 	if err != nil {
@@ -568,24 +605,9 @@ func (a *App) outputJob(home, slug, id string, follow bool) error {
 	pending := []byte{}
 	chunk := make([]byte, max(jobReadBuffer, 1))
 	emit := func(final bool) error {
-		var escaped strings.Builder
-		for len(pending) > 0 {
-			if !final && !utf8.FullRune(pending) {
-				break
-			}
-			r, size := utf8.DecodeRune(pending)
-			text := string(r)
-			if r == '\n' {
-				text = "\n"
-			} else if r == utf8.RuneError && size == 1 {
-				text = fmt.Sprintf("\\x%02x", pending[0])
-			} else {
-				text = config.Printable(text)
-			}
-			escaped.WriteString(text)
-			pending = pending[size:]
-		}
-		_, err := io.WriteString(a.Stdout, escaped.String())
+		text, rest := escapeOutput(pending, final)
+		pending = rest
+		_, err := io.WriteString(a.Stdout, text)
 		return err
 	}
 	for {

@@ -75,6 +75,10 @@ func GitHubRemote(t *testing.T) Remote {
 
 const fakeSbx = `#!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_SBX_LOG"
+if [ "${FAKE_SBX_NOISE:-}" = 1 ]; then
+  echo child-noise >&2
+  case "$1 $2" in "env create"|"env rm") echo child-noise; cat > /dev/null ;; esac
+fi
 if [ "$1" = exec ]; then
   case " $* " in
     *"tar -cf -"*) if [ -f "$FAKE_SBX_STATE/takes.hang" ]; then sleep 30; fi; if [ -f "$FAKE_SBX_STATE/takes.fail" ]; then cat "$FAKE_SBX_STATE/takes.fail" >&2; exit 1; fi; [ -f "$FAKE_SBX_STATE/takes.tar" ] && cat "$FAKE_SBX_STATE/takes.tar" ;;
@@ -136,6 +140,8 @@ func NewFakeSbx(t *testing.T) *FakeSbx {
 	t.Setenv("FAKE_SBX_STATE", state)
 	return &FakeSbx{t: t, State: state}
 }
+
+func (f *FakeSbx) Noisy() { f.t.Setenv("FAKE_SBX_NOISE", "1") }
 
 func (f *FakeSbx) Calls() []string {
 	text := strings.TrimSuffix(ReadFile(f.t, filepath.Join(f.State, "calls.log")), "\n")

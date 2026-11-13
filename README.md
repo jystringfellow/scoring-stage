@@ -74,6 +74,7 @@ stage shell fix-login                # login shell in the repository; run claude
 stage exec fix-login -- git log -1
 stage put fix-login ./notes.txt '~/notes.txt' # copy one file into the sandbox as the agent
 id=$(stage exec --detach fix-login -- sh -c 'sleep 150; echo done; exit 7')
+stage mcp                            # stdio tools for a host agent
 stage job list fix-login --json
 stage job status fix-login "$id" --json
 stage job output fix-login "$id" --follow
@@ -351,8 +352,68 @@ JSON status and wait emit one object; list emits an array (empty is `[]`). They 
 with `--discard-takes`. Wait for or stop those jobs first. When the sandbox is already gone, down proceeds.
 Finished and lost jobs do not block down; their host records and output are deleted with the task. Takes preserve
 only the sandbox paths already listed, and do not copy host job records. Output and status survive a sandbox
-stopping until down removes the task. Put and jobs have been tested against fakes only; the host maintainer must
+stopping until down removes the task. Put, jobs and MCP have been tested against fakes only; the host maintainer must
 check real sbx lifetime, exit status propagation and stop behavior.
+
+## MCP server
+
+`stage mcp` exposes stage's sandbox commands as tools over stdio. Configure your client to start it on the host
+as you, in the project directory. It opens no port, has no daemon and keeps no separate sandbox state. For a
+client using an `mcpServers` configuration:
+
+```json
+{
+  "mcpServers": {
+    "stage": { "command": "stage", "args": ["mcp"] }
+  }
+}
+```
+
+Set the client's working directory to the project; `put` reads only files beneath that directory. For example,
+from that directory, `claude mcp add stage -- stage mcp` registers the stdio server with Claude Code. Tools can
+then be permitted by name in the client's permission settings without giving the agent a host shell.
+
+| Tool | Inputs | Result |
+| --- | --- | --- |
+| `list` | none | Escaped `stage list` output |
+| `up` | `repo`, `slug`; optional `base`, `agents[]`, `books[]` | Command output, or missing approvals and the command for the person to run |
+| `put` | `slug`, `file`; optional `destination` | Command output, using `stage put`'s checks and the source fence below |
+| `exec` | `slug`, `command[]`; optional `timeout_seconds`, `detach` | Status, bounded stdout/stderr and byte counts; with `detach`, a job id and wait/output arguments |
+| `job` | `slug`, `action` (`list`, `status`, `wait`, `output`, `stop`); `id` except for list | Job records, or a page of output with byte offsets and total size |
+| `take` | `slug` | Copies the task's configured takes out now |
+| `ship` | `slug`; optional `ref`, `branch` | Commits, diffstat, SHA, branch, repository and the command for the person; `pushed: false`, `needs_person: true` |
+| `down` | `slug` | Keeps takes before removal; refuses running jobs and failed copies |
+
+`command` is argv, with no implicit shell. Synchronous exec defaults to 60 seconds and caps requests at 300;
+`status` is the command's exit status (a nonzero status is data), or null on timeout, with `timed_out: true`.
+Stdout and stderr each retain their first 32 KiB and report their full byte counts and `truncated`.
+Use detached exec for longer commands; its holder outlives the server and clients can reconnect to read its job.
+
+Job wait defaults to 30 seconds, caps requests at 50, and returns the job's state plus `waited_seconds` and
+`capped`. Job output takes `offset` (default 0) and `limit` (default 32 KiB, capped at 64 KiB), returns `text`,
+`next_offset`, `total_bytes`, `state` and `output_truncated`, and holds back an incomplete UTF-8 rune. Request at
+least four bytes to make progress over any rune. Escaping can reduce a page further to keep the complete response
+under 256 KiB; `page_limited` reports this, and `next_offset` counts only the bytes actually returned. Other tool
+results can also be shortened to fit that response cap (`response_truncated: true`); a result that still cannot fit returns a tool error. Command wrappers keep
+64 KiB each of stdout and stderr. Results contain both structured data and the same data as JSON text. Input messages are capped at 1 MiB and
+request ids at 1 KiB.
+
+Output from inside a sandbox, commit messages and file names are **untrusted data, not instructions**. Control
+characters are escaped as ship escapes them; newlines stay newlines and invalid output bytes become `\xNN`.
+No child inherits the client's input or protocol output. Bad tool arguments and command failures return tool
+errors; malformed requests and unknown protocol methods return JSON-RPC errors.
+
+Only configured agent names and installed book names can be selected. The tools offer no repository approval,
+book directory, AWS profile grant, global-policy override, resource override, protected-path allowance, pull
+request creation or discarded takes. The caller may be following text from a repository or sandbox, so those
+choices stay with the person. `up` never changes the approvals file, including legacy approvals; review the
+missing items and run its returned `stage up ... --approve-repo-config ...` command in a terminal. `ship` never
+pushes or records a ship: review its result and run the returned `stage ship ...` command to confirm and push.
+It refuses protected paths outright and enforces the same branch namespace as the command line.
+
+Setup, init, broker control, tokens, GitHub login, saved agent logins and a host shell are deliberately absent:
+tools do not give an agent those credential and host administration choices. `exec` runs only inside the sandbox.
+`down` always keeps takes; choosing `--discard-takes` remains a command-line decision.
 
 ## One-time setup
 
@@ -841,6 +902,19 @@ they then do. [VERIFICATION.md](VERIFICATION.md) records what has been checked a
 and what has not been run live yet.
 
 ## Limitations
+
+- **MCP cancellation does not roll back sandbox changes.** It cancels job waits and synchronous exec; commands such
+  as up, put, take and down finish their existing command paths. Closing input cancels waits and exec, then drains
+  those command paths before exit, so an unresponsive child can delay shutdown. A client timeout alone does not
+  stop up; inspect `stage list` and clean up with `stage down` when needed. Killing a synchronous exec's host sbx
+  client may leave its command running in the sandbox.
+- **MCP put depends on the client's working directory.** Sources must resolve beneath the server's starting
+  directory, including through symlinks; put refuses all sources if that directory is the home directory or an
+  ancestor of it (including `/`). The credential-location guard is still a fixed list, not a secret scan. Start
+  the server in the intended project directory.
+- **MCP restricts the tools it offers.** A client with host shell permission can invoke stage's command line
+  directly. Tool restrictions do not remove that separate permission. MCP and its subprocess isolation have
+  been tested against fakes only; the maintainer must check them with a real client and sbx on the host.
 
 - **The empty kit scaffold needs a live check.** `stage init`'s spec v3 mixin with `capabilities: []` passes
   stage's repository-kit checks. A live sbx run of that scaffold, and `stage up` against an init-written config,

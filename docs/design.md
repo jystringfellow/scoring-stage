@@ -24,6 +24,7 @@ the host, compute a secret, or choose which sandbox gets which grant. Those are 
 | The user's own files in every sandbox (gear) | `stage`, from the user's config only: sbx has no copy-in for an existing sandbox and a kit cannot read the host, so stage streams a tar through `sbx exec -i` after `sbx env create`, as it does a saved login |
 | One host file put into a running sandbox | `stage put`, sharing gear's source and destination checks and its tar stream through `sbx exec -i`; sbx has no copy-in |
 | Detached commands and their host records | `stage`: one holder per job keeps an attached `sbx exec` open; sbx has no detached execution with durable output and status |
+| MCP tools for stage's commands, keeping approvals, ship confirmation and widening choices with the person | `stage`, as a stdio subcommand sharing command paths; no listener, daemon or separate sandbox state |
 | What a kept take belongs to (repository, base branch, ships, pull requests) | `stage`: each `ship` is recorded on the task, and each take carries a `stage.json` stage writes; a sandbox cannot supply it |
 | Reporting sbx's global credential bindings | `stage setup`, read-only; `credentials.yaml` stays sbx's |
 
@@ -78,6 +79,19 @@ the kernel drops the lock when the holder dies or the host restarts. Without a r
 lost. Output and the atomic result stay in the task directory; down refuses running jobs and removes finished
 or lost records with the task. Copy-in and detached execution remain narrow seams to replace with sbx primitives
 if those become available; their gaps belong upstream at docker/sbx-releases.
+
+## MCP server
+
+`stage mcp` runs on the host as the person and exposes only sandbox lifecycle, copy and execution tools.
+It shares command implementations and checks. Repository approvals are read-only, book and agent inputs are
+names from the user's configuration, and ship returns a review for the person to confirm through the CLI.
+It cannot grant an AWS profile, change global policy, discard takes or allow protected paths.
+
+The client owns the server's stdio lifetime; nothing listens on a port and jobs keep their own holders.
+Subprocesses receive null input instead of the client's pipe and diagnostic output instead of the protocol's
+stdout. Tool results are bounded and escaped data. Cancellation stops waits and synchronous exec; shutdown
+waits for command paths without cancellation to finish before restoring process streams. A server-wide mutex
+serializes up, put, take, ship review and down; it does not serialize separate CLI invocations or job starts.
 
 ## AWS broker
 
