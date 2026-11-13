@@ -326,3 +326,31 @@ Checked:
   exit 0. One listed directory held a full source checkout, which is where most of the files came from.
 
 Not checked: checksums against the sandbox for this run, and any of the refusals.
+
+## 2026-11-12: put and detached jobs against a live sbx
+
+- **sbx:** 0.51.0, macOS.
+- **stage:** built from 1a30a13.
+- **Credentials:** none used. A sandbox of this repository with the `shell` and `stage` kits only, in the usual
+  stage home.
+- **Restoration:** the sandbox was removed with `stage down`; its task directory and job records went with it and
+  no holder process remained. The SHA-256 of sbx's `credentials.yaml` was the same before and after.
+
+Checked:
+
+- `stage put` of a 70,000-byte and a 6,000,000-byte file of random bytes: each had the same SHA-256 in the sandbox
+  as on the host and was owned by `agent`. Both arrived mode 600, though the larger was mode 644 on the host.
+- `stage put` refused a directory, a missing file and the destination `~/../x`, each with exit 1.
+- `stage exec --detach` of `sleep 150; echo done; exit 7` printed only the job id on stdout. After 80 seconds
+  `stage job wait --timeout 80s` exited 124, `sbx ls` showed the sandbox running and the job was `running`. A later
+  `stage job wait` exited 7 and `stage job output` printed `done`.
+- The holder's arguments in `ps` were `job hold <slug> <id>`, without the command.
+- `stage down` refused while a job was running and removed nothing.
+- `stage job stop` reported `stopped` and `stage job wait` then exited 125. **The command was still running in the
+  sandbox afterwards** (`kill -0` of its recorded pid succeeded): stop ends the host's session, not the command.
+- A holder killed with SIGKILL: the job was reported `lost`, `stage job wait` exited 125 and the output written
+  before the kill stayed readable.
+- Ordinary `stage exec` behaved as before alongside jobs.
+
+Not checked: a host restart with a job running, the sandbox stopping by itself after a job ends, the put timeout,
+and put's refusal of the workspace and of agent login files.
