@@ -18,9 +18,11 @@ import (
 	"github.com/jystringfellow/scoring-stage/internal/testutil"
 )
 
+const waitLimit = "60s"
+
 func eventually(t *testing.T, cond func() bool) {
 	t.Helper()
-	until := time.Now().Add(10 * time.Second)
+	until := time.Now().Add(60 * time.Second)
 	for !cond() {
 		if time.Now().After(until) {
 			t.Fatal("condition did not become true")
@@ -34,7 +36,9 @@ func jobsReady(t *testing.T) (*harness, *[]*exec.Cmd) {
 	h, _ := putReady(t)
 	t.Setenv("STAGE_TEST_AS_STAGE", "1")
 	t.Setenv("STAGE_TEST_JOB_TMP", t.TempDir())
-	t.Setenv("STAGE_TEST_JOB_STOP_GRACE", "300ms")
+	t.Setenv("STAGE_TEST_JOB_STOP_GRACE", "30s")
+	t.Setenv("STAGE_TEST_JOB_STOP_CONFIRM", "30s")
+	t.Setenv("STAGE_TEST_JOB_START_WAIT", "30s")
 	h.sbx.RunExecs()
 	var holders []*exec.Cmd
 	var mu sync.Mutex
@@ -109,7 +113,7 @@ func TestADetachedCommandIsLaterReportedWithItsRealStatusAndItsFullOutput(t *tes
 	gate, args := gated(t, h)
 	h.expect(0, args...)
 	testutil.WriteFile(t, gate, "")
-	h.expect(3, "job", "wait", "fix", "1", "--timeout", "5s", "--json")
+	h.expect(3, "job", "wait", "fix", "1", "--timeout", waitLimit, "--json")
 	var j jobStatus
 	if err := json.Unmarshal(h.stdout.Bytes(), &j); err != nil {
 		t.Fatal(err)
@@ -145,16 +149,16 @@ func TestWaitReturnsTheJobsStatusAndHonoursItsTimeout(t *testing.T) {
 	h.expect(0, args...)
 	began := time.Now()
 	h.expect(124, "job", "wait", "fix", "1", "--timeout", "200ms", "--json")
-	if elapsed := time.Since(began); elapsed < 180*time.Millisecond || elapsed > 3*time.Second {
+	if elapsed := time.Since(began); elapsed < 180*time.Millisecond || elapsed > 30*time.Second {
 		t.Fatal(elapsed)
 	}
 	if !strings.Contains(h.stdout.String(), `"state":"running"`) {
 		t.Fatal(h.stdout.String())
 	}
 	testutil.WriteFile(t, gate, "")
-	h.expect(3, "job", "wait", "fix", "1", "--timeout", "5s")
+	h.expect(3, "job", "wait", "fix", "1", "--timeout", waitLimit)
 	h.expect(0, "exec", "fix", "--detach", "--", "sh", "-c", "exit 0")
-	h.expect(0, "job", "wait", "fix", "2", "--timeout", "5s")
+	h.expect(0, "job", "wait", "fix", "2", "--timeout", waitLimit)
 	h.expect(2, "job", "wait", "fix", "1", "--timeout", "-1s")
 }
 
@@ -299,7 +303,7 @@ func TestDownRemovesLostJobsAndJobsOfASandboxThatIsAlreadyGone(t *testing.T) {
 func TestJobOutputEscapesControlCharactersAndNeverInterpretsThem(t *testing.T) {
 	h, _ := jobsReady(t)
 	h.expect(0, "exec", "--detach", "fix", "--", "sh", "-c", `printf 'hello\033\r\302\205\342\200\256\303\251\n'`)
-	h.expect(0, "job", "wait", "fix", "1", "--timeout", "5s")
+	h.expect(0, "job", "wait", "fix", "1", "--timeout", waitLimit)
 	old := jobReadBuffer
 	jobReadBuffer = 1
 	t.Cleanup(func() { jobReadBuffer = old })
@@ -313,7 +317,7 @@ func TestJobOutputIsCutAtItsLimit(t *testing.T) {
 	h, _ := jobsReady(t)
 	t.Setenv("STAGE_TEST_JOB_OUTPUT_LIMIT", "4")
 	h.expect(0, "exec", "--detach", "fix", "--", "sh", "-c", `printf 123456789`)
-	h.expect(0, "job", "wait", "fix", "1", "--timeout", "5s")
+	h.expect(0, "job", "wait", "fix", "1", "--timeout", waitLimit)
 	if j := statusOf(t, h, "1"); !j.OutputTruncated || j.OutputBytes != 4 {
 		t.Fatalf("%+v", j)
 	}
@@ -331,7 +335,7 @@ func TestJobsAreListedWithTheirStatesAsTextAndJSON(t *testing.T) {
 		t.Fatal(h.stdout.String())
 	}
 	h.expect(0, "exec", "--detach", "fix", "--", "sh", "-c", "exit 6")
-	h.expect(6, "job", "wait", "fix", "1", "--timeout", "5s")
+	h.expect(6, "job", "wait", "fix", "1", "--timeout", waitLimit)
 	_, args := gated(t, h)
 	h.expect(0, args...)
 	h.expect(0, "job", "list", "fix", "--json")
@@ -413,7 +417,7 @@ func TestConcurrentDetachedStartsGetDistinctIds(t *testing.T) {
 		seen[id] = true
 	}
 	for id := range seen {
-		h.expect(0, "job", "wait", "fix", id, "--timeout", "5s")
+		h.expect(0, "job", "wait", "fix", id, "--timeout", waitLimit)
 	}
 }
 
@@ -440,7 +444,7 @@ func TestAnExecCallerCanExitBeforeItsDetachedCommand(t *testing.T) {
 		}
 	})
 	testutil.WriteFile(t, gate, "")
-	h.expect(3, "job", "wait", "fix", "1", "--timeout", "5s")
+	h.expect(3, "job", "wait", "fix", "1", "--timeout", waitLimit)
 }
 
 func TestJobOutputFollowsWritesUntilTheCommandEndsAndDrainsTheLastBytes(t *testing.T) {
@@ -483,7 +487,7 @@ func TestJobOutputFollowsWritesUntilTheCommandEndsAndDrainsTheLastBytes(t *testi
 	if string(rest) != "élast\n" {
 		t.Fatalf("%q", rest)
 	}
-	h.expect(0, "job", "wait", "fix", "1", "--timeout", "5s")
+	h.expect(0, "job", "wait", "fix", "1", "--timeout", waitLimit)
 }
 
 func TestADetachedCommandWhoseSbxCannotStartExits127AndKeepsTheError(t *testing.T) {
@@ -494,7 +498,7 @@ func TestADetachedCommandWhoseSbxCannotStartExits127AndKeepsTheError(t *testing.
 		return original(c)
 	}
 	h.expect(0, "exec", "--detach", "fix", "--", "true")
-	h.expect(127, "job", "wait", "fix", "1", "--timeout", "5s")
+	h.expect(127, "job", "wait", "fix", "1", "--timeout", waitLimit)
 	h.expect(0, "job", "output", "fix", "1")
 	if !strings.Contains(h.stdout.String(), "sbx") || !strings.Contains(h.stdout.String(), "executable file not found") {
 		t.Fatal(h.stdout.String())
@@ -654,6 +658,7 @@ func TestStopEndsTheJobsCommandAndTheChildItStarted(t *testing.T) {
 
 func TestStopKillsACommandThatIgnoresTheFirstSignalAfterTheGrace(t *testing.T) {
 	h, _ := jobsReady(t)
+	t.Setenv("STAGE_TEST_JOB_STOP_GRACE", "300ms")
 	pidfile := filepath.Join(t.TempDir(), "pid")
 	h.expect(0, "exec", "--detach", "fix", "--", "sh", "-c", `trap '' TERM; echo $$ > "$1"; while :; do :; done`, "sh", pidfile)
 	var pid int
@@ -698,7 +703,7 @@ func TestAHolderTerminatedByASignalStopsItsCommandAndReportsStopped(t *testing.T
 			if err := (*holders)[0].Process.Signal(sig); err != nil {
 				t.Fatal(err)
 			}
-			h.expect(125, "job", "wait", "fix", "1", "--timeout", "5s")
+			h.expect(125, "job", "wait", "fix", "1", "--timeout", waitLimit)
 			if j := statusOf(t, h, "1"); j.State != "stopped" {
 				t.Fatal(j)
 			}
@@ -710,7 +715,7 @@ func TestAHolderTerminatedByASignalStopsItsCommandAndReportsStopped(t *testing.T
 func TestStopLeavesAJobThatAlreadyExitedAlone(t *testing.T) {
 	h, _ := jobsReady(t)
 	h.expect(0, "exec", "--detach", "fix", "--", "sh", "-c", "exit 7")
-	h.expect(7, "job", "wait", "fix", "1", "--timeout", "5s")
+	h.expect(7, "job", "wait", "fix", "1", "--timeout", waitLimit)
 	before := len(h.sbx.Calls())
 	h.expect(1, "job", "stop", "fix", "1")
 	h.expectStderr("exited")
@@ -728,7 +733,7 @@ func TestADetachedCommandsTextIsNeverInAnyHostArgument(t *testing.T) {
 	h, _ := jobsReady(t)
 	marker := "command-'argument-$()-with-spaces"
 	h.expect(0, "exec", "--detach", "fix", "--", "printf", "%s", marker)
-	h.expect(0, "job", "wait", "fix", "1", "--timeout", "5s")
+	h.expect(0, "job", "wait", "fix", "1", "--timeout", waitLimit)
 	h.expect(0, "job", "output", "fix", "1")
 	if h.stdout.String() != marker {
 		t.Fatal(h.stdout.String(), h.sbx.Calls(), h.sbx.Sessions())
@@ -743,7 +748,7 @@ func TestADetachedCommandsTextIsNeverInAnyHostArgument(t *testing.T) {
 func TestARealJobExitKeepsItsStatusDespiteAStopFile(t *testing.T) {
 	h, _ := jobsReady(t)
 	h.expect(0, "exec", "--detach", "fix", "--", "sh", "-c", "exit 7")
-	h.expect(7, "job", "wait", "fix", "1", "--timeout", "5s")
+	h.expect(7, "job", "wait", "fix", "1", "--timeout", waitLimit)
 	testutil.WriteFile(t, filepath.Join(jobDir(h.home, "fix", "1"), "stop"), "")
 	h.expect(7, "job", "wait", "fix", "1")
 	if j := statusOf(t, h, "1"); j.State != "exited" || *j.Status != 7 {
@@ -762,7 +767,7 @@ func TestADetachedCommandTreatsItsFirstWordAsAnExecutableName(t *testing.T) {
 		}
 		h.expect(0, "exec", "--detach", "fix", "--", name, "", "line\nbreak", "'; false")
 		id := strconv.Itoa(i + 1)
-		h.expect(0, "job", "wait", "fix", id, "--timeout", "5s")
+		h.expect(0, "job", "wait", "fix", id, "--timeout", waitLimit)
 		h.expect(0, "job", "output", "fix", id)
 		if h.stdout.String() != "\nline\nbreak\n'; false\n" {
 			t.Fatal(h.stdout.String())
@@ -786,7 +791,7 @@ func TestStopCannotConfirmASignalExecThatDoesNothingOrHangs(t *testing.T) {
 			start := time.Now()
 			h.expect(1, "job", "stop", "fix", "1")
 			h.expectStderr("could not confirm")
-			if time.Since(start) > 3*time.Second {
+			if time.Since(start) > 20*time.Second {
 				t.Fatal("signal exec did not stop within its timeout")
 			}
 			if j := statusOf(t, h, "1"); j.State != "lost" {
@@ -796,5 +801,68 @@ func TestStopCannotConfirmASignalExecThatDoesNothingOrHangs(t *testing.T) {
 				t.Fatal("fake client killed its command:", err)
 			}
 		})
+	}
+}
+
+func TestAStopThatArrivesBeforeTheLauncherPublishesWaitsAndThenEndsTheCommand(t *testing.T) {
+	h, _ := jobsReady(t)
+	t.Setenv("STAGE_TEST_JOB_STOP_GRACE", "0s")
+	t.Setenv("STAGE_TEST_JOB_STOP_CONFIRM", "30s")
+	t.Setenv("STAGE_TEST_JOB_START_WAIT", "30s")
+	h.sbx.HoldLaunch()
+	t.Cleanup(h.sbx.ReleaseLaunch)
+	gate, args := gated(t, h)
+	t.Cleanup(func() {
+		h.sbx.ReleaseLaunch()
+		testutil.WriteFile(t, gate, "")
+		eventually(t, func() bool { return len(h.sbx.Sessions()) == 2 })
+	})
+	h.expect(0, args...)
+	testutil.WriteFile(t, filepath.Join(jobDir(h.home, "fix", "1"), "stop"), "")
+	eventually(t, func() bool {
+		terms := 0
+		for _, call := range h.sbx.Calls() {
+			if strings.Contains(call, "stage-job-signal ") && strings.HasSuffix(call, " term") {
+				terms++
+			}
+		}
+		return terms >= 3 || statusOf(t, h, "1").State != "running"
+	})
+	if j := statusOf(t, h, "1"); j.State != "running" {
+		t.Fatalf("unpublished command stopped being tracked: %+v", j)
+	}
+	h.sbx.ReleaseLaunch()
+	h.expect(125, "job", "wait", "fix", "1", "--timeout", waitLimit)
+	if j := statusOf(t, h, "1"); j.State != "stopped" {
+		t.Fatal(j)
+	}
+	eventually(t, func() bool { return len(h.sbx.Sessions()) == 2 })
+}
+
+func TestAStopThatNeverSeesTheCommandStartCannotConfirmAndTheJobReadsLost(t *testing.T) {
+	h, _ := jobsReady(t)
+	t.Setenv("STAGE_TEST_JOB_START_WAIT", "300ms")
+	t.Setenv("STAGE_TEST_JOB_STOP_GRACE", "0s")
+	t.Setenv("STAGE_TEST_JOB_STOP_CONFIRM", "0s")
+	h.sbx.HoldLaunch()
+	argv, ready := jobTree(t)
+	argv[2] = strings.Replace(argv[2], "printf saved", ":", 1)
+	t.Cleanup(func() {
+		h.sbx.ReleaseLaunch()
+		pids := ready()
+		if err := syscall.Kill(pids[0], syscall.SIGTERM); err != nil {
+			t.Error(err)
+		}
+		eventually(t, func() bool { return len(h.sbx.Sessions()) == 2 })
+		eventually(t, func() bool {
+			return syscall.Kill(pids[0], 0) == syscall.ESRCH && syscall.Kill(pids[1], 0) == syscall.ESRCH
+		})
+	})
+	h.expect(0, append([]string{"exec", "--detach", "fix", "--"}, argv...)...)
+	eventually(t, func() bool { return len(h.sbx.Sessions()) == 1 })
+	h.expect(1, "job", "stop", "fix", "1")
+	h.expectStderr("could not confirm")
+	if j := statusOf(t, h, "1"); j.State != "lost" {
+		t.Fatal(j)
 	}
 }

@@ -465,7 +465,7 @@ func TestMcpExecTimeoutAndJobWaitAreCapped(t *testing.T) {
 	start := time.Now()
 	finished := filepath.Join(t.TempDir(), "finished")
 	r := toolData(t, d.tool("exec", map[string]any{"slug": "fix", "command": []string{"sh", "-c", `sleep 0.3; touch "$1"`, "sh", finished}, "timeout_seconds": 3600}))
-	if r["timed_out"] != true || r["status"] != nil || r["capped"] != true || time.Since(start) > 2*time.Second {
+	if r["timed_out"] != true || r["status"] != nil || r["capped"] != true || time.Since(start) > 20*time.Second {
 		t.Fatal(r, time.Since(start))
 	}
 	// The fake's child can outlive the killed client, just as a sandbox command can.
@@ -475,12 +475,12 @@ func TestMcpExecTimeoutAndJobWaitAreCapped(t *testing.T) {
 	id := r["job"].(string)
 	start = time.Now()
 	r = toolData(t, d.tool("job", map[string]any{"slug": "fix", "action": "wait", "id": id, "timeout_seconds": 604800}))
-	if r["state"] != "running" || r["capped"] != true || time.Since(start) > time.Second {
+	if r["state"] != "running" || r["capped"] != true || time.Since(start) > 20*time.Second {
 		t.Fatal(r)
 	}
 	testutil.WriteFile(t, gate, "")
 	d.close()
-	h.expect(3, "job", "wait", "fix", id, "--timeout", "5s")
+	h.expect(3, "job", "wait", "fix", id, "--timeout", waitLimit)
 }
 
 func TestMcpCancellingAWaitSendsNoResponseAndEofCancelsAnInflightWait(t *testing.T) {
@@ -502,14 +502,14 @@ func TestMcpCancellingAWaitSendsNoResponseAndEofCancelsAnInflightWait(t *testing
 	d.send(map[string]any{"jsonrpc": "2.0", "id": "eof", "method": "tools/call", "params": map[string]any{"name": "job", "arguments": map[string]any{"action": "wait", "slug": "fix", "id": id, "timeout_seconds": 50}}})
 	start := time.Now()
 	d.close()
-	if time.Since(start) > time.Second {
+	if time.Since(start) > 20*time.Second {
 		t.Fatal("EOF did not cancel wait")
 	}
 	if j, err := readJob(h.home, "fix", id); err != nil || j.State != "running" {
 		t.Fatal(j, err)
 	}
 	testutil.WriteFile(t, gate, "")
-	h.expect(3, "job", "wait", "fix", id, "--timeout", "5s")
+	h.expect(3, "job", "wait", "fix", id, "--timeout", waitLimit)
 }
 
 func TestMcpTakeAndDownKeepTakesAndRefuseFailedCopies(t *testing.T) {

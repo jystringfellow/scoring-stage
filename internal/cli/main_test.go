@@ -22,6 +22,12 @@ func TestMain(m *testing.M) {
 		if grace := os.Getenv("STAGE_TEST_JOB_STOP_GRACE"); grace != "" {
 			jobStopGrace, _ = time.ParseDuration(grace)
 		}
+		if confirm := os.Getenv("STAGE_TEST_JOB_STOP_CONFIRM"); confirm != "" {
+			jobStopConfirm, _ = time.ParseDuration(confirm)
+		}
+		if wait := os.Getenv("STAGE_TEST_JOB_START_WAIT"); wait != "" {
+			jobStartWait, _ = time.ParseDuration(wait)
+		}
 		if timeout := os.Getenv("STAGE_TEST_JOB_SIGNAL_TIMEOUT"); timeout != "" {
 			jobSignalTimeout, _ = time.ParseDuration(timeout)
 		}

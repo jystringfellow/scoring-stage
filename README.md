@@ -326,8 +326,8 @@ Without `--detach`, exec behaves as before.
 Each job has one host process running as you, holding an attached `sbx exec` for exactly that job. There is no
 shared daemon or listening port. Its arguments contain only `job hold <slug> <id>`; command arguments are kept in
 the private job record and fed to the sandbox launcher over stdin, so no host subprocess arguments contain the
-command text. Detached jobs require Bash in the sandbox for process-group job control. Output and status live
-under `~/.scoring-stage/tasks/<slug>/jobs/<id>/`, in mode-700 directories and mode-600 files: `job.json` (command and start time), `output` (merged stdout and stderr),
+command text. Detached jobs require Bash and Perl in the sandbox; missing Perl exits 127 with a diagnostic
+before the command runs. Output and status live under `~/.scoring-stage/tasks/<slug>/jobs/<id>/`, in mode-700 directories and mode-600 files: `job.json` (command and start time), `output` (merged stdout and stderr),
 `exit.json` (result and end time), `lock` (holder liveness), and `stop` when stopping was requested.
 
 - `stage job list <slug> [--json]` lists jobs in id order with state, status when available, and command.
@@ -341,9 +341,9 @@ under `~/.scoring-stage/tasks/<slug>/jobs/<id>/`, in mode-700 directories and mo
   returns and bidi marks; newlines remain newlines. Invalid UTF-8 bytes are escaped too. Stage never interprets
   the output. Capture is capped at 1 GiB per job, after which bytes are dropped and the result records
   `output_truncated`; reading truncated output prints a note on stderr. Follow exits 0 even when the job failed.
-- `stage job stop <slug> <id>` sends SIGTERM to the command's process group inside the sandbox, waits up to
-  five seconds, then sends SIGKILL to what remains and checks for up to three more seconds. Each sandbox signal
-  or check has a ten-second timeout. It ends the host sbx client after cleanup, keeps output, and reports
+- `stage job stop <slug> <id>` waits up to ten seconds for the launcher to publish its process group, sends
+  SIGTERM to that group inside the sandbox, waits up to five seconds, then sends SIGKILL to what remains and
+  checks for up to three more seconds. Each sandbox signal or check has a ten-second timeout. It ends the host sbx client after cleanup, keeps output, and reports
   `stopped` only after confirming the group is gone. If it cannot confirm that, stop returns an error and the job
   reads `lost`. A real exit already observed takes precedence over a concurrent stop. Stopping a finished or
   lost job is an error. SIGTERM, SIGINT and SIGHUP to the holder perform the same cleanup.
@@ -968,6 +968,9 @@ and what has not been run live yet.
   or process group (`setsid` or `setpgid`) escapes it. If a command exits leaving children, the job is `exited`
   and stop refuses it; stop those children with ordinary exec. The process-group launcher and concurrent signal
   exec still need a live sbx check. Job output is merged, untrusted stdout and stderr, capped at 1 GiB.
+- **A stop can time out before a command starts.** If the launcher has not published its group id within ten
+  seconds, stop cannot confirm cleanup and the job reads `lost`. A launcher that starts later may still run
+  the command untracked: sbx does not forward host-client termination to its command.
 - **Starting jobs and down are not serialized.** A job started after down's running-job check can lose its output
   when down removes the task. Do not start new jobs while removing their sandbox.
 - **The ship record can miss a push.** A ship is written to the task after the push returns, and the list reaches a

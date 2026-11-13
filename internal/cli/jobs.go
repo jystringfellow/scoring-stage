@@ -379,7 +379,7 @@ func stopJob(home, slug, id string) (jobStatus, error) {
 	if err := os.WriteFile(filepath.Join(jobDir(home, slug, id), "stop"), nil, 0600); err != nil {
 		return job, err
 	}
-	job, err = waitJob(home, slug, id, jobStopGrace+jobStopConfirm+jobSignalTimeout+5*time.Second)
+	job, err = waitJob(home, slug, id, jobStartWait+jobStopGrace+jobStopConfirm+jobSignalTimeout+5*time.Second)
 	if err != nil {
 		return job, err
 	}

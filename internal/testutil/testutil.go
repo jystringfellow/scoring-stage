@@ -106,7 +106,12 @@ if [ "$1" = exec ]; then
       sandbox=$1; shift
       printf 'session-start %s %s\n' "$$" "$sandbox" >> "$FAKE_SBX_STATE/sessions.log"
       exec 4<&0
-      "$@" <&4 4<&- &
+      (
+        case " $* " in
+          *" stage-job-run "*) while [ -f "$FAKE_SBX_STATE/launch.hold" ]; do sleep 0.02; done ;;
+        esac
+        "$@"
+      ) <&4 4<&- &
       exec 4<&-
       child=$!
       trap 'echo "session-end stopped" >> "$FAKE_SBX_STATE/sessions.log"; exit 143' TERM
@@ -237,4 +242,14 @@ func (f *FakeSbx) IgnoreSignals() {
 
 func (f *FakeSbx) HangSignals() {
 	WriteFile(f.t, filepath.Join(f.State, "signal.hang"), "")
+}
+
+func (f *FakeSbx) HoldLaunch() {
+	WriteFile(f.t, filepath.Join(f.State, "launch.hold"), "")
+}
+
+func (f *FakeSbx) ReleaseLaunch() {
+	if err := os.Remove(filepath.Join(f.State, "launch.hold")); err != nil && !os.IsNotExist(err) {
+		f.t.Fatal(err)
+	}
 }

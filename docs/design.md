@@ -79,13 +79,14 @@ the kernel drops the lock when the holder dies or the host restarts. Without a r
 lost. Output and the atomic result stay in the task directory; down refuses running jobs and removes finished
 or lost records with the task.
 
-The holder feeds a Bash launcher over stdin; `set -m` gives the command its own process group, whose id is
-published atomically in a private file under `/tmp` in the sandbox. Stop and catchable holder termination use a
-second `sbx exec` to signal that group, allow five seconds after SIGTERM, then SIGKILL and three seconds to
-confirm disappearance before ending the host client. An unconfirmed stop leaves no result and reads lost.
+The holder feeds a Bash launcher over stdin. A forked Perl child creates its own process group with
+`setpgrp(0,0)`, atomically publishes its own id in a private file under `/tmp`, then execs the command.
+Stop and catchable holder termination wait up to ten seconds for publication, then use a second `sbx exec`
+to signal that group, allow five seconds after SIGTERM, then SIGKILL and three seconds to confirm disappearance
+before ending the host client. An unconfirmed stop leaves no result and reads lost.
 The group id is only a sandbox-side signal target; the host lock and result still determine job state.
 This seam exists because sbx 0.51.0 did not forward host-client termination to its command (the 2026-11-12 entry
-in VERIFICATION.md). Bash is needed because dash disables job control without a terminal.
+in VERIFICATION.md). The launcher needs Bash and Perl in the sandbox; missing Perl fails before the command runs.
 
 Copy-in and detached execution remain narrow seams to replace with sbx primitives
 if those become available; their gaps belong upstream at docker/sbx-releases.

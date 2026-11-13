@@ -379,9 +379,9 @@ Terminating the host sbx client left its sandbox command running on sbx 0.51.0 (
 A Bash launcher fed over stdin now creates a process group and records its id inside the sandbox. Stop sends
 SIGTERM through a second exec, allows five seconds, then SIGKILL and a three-second confirmation window.
 SIGTERM, SIGINT and SIGHUP to the holder share cleanup. An unconfirmed stop has no result and reads lost.
-Command text stays out of host arguments. Bash's runtime `set -m` works without a terminal, whereas dash's does
-not; detached jobs therefore require Bash. The earlier holder decision still governs host liveness: no host
-pid decides state or stops the holder; the sandbox group id is used only to signal and confirm cleanup.
+Command text stays out of host arguments. Process-group creation follows the command-owned group decision
+below. The earlier holder decision still governs host liveness: no host pid decides state or stops the holder;
+the sandbox group id is used only to signal and confirm cleanup.
 Evidence: `TestStopEndsTheJobsCommandAndTheChildItStarted`,
 `TestStopKillsACommandThatIgnoresTheFirstSignalAfterTheGrace`,
 `TestStopReportsStoppedOnlyAfterTheCommandIsGone`,
@@ -396,3 +396,26 @@ Evidence: `TestStopEndsTheJobsCommandAndTheChildItStarted`,
 Go releases can change gofmt's alignment: Go 1.27 formats the gear tests differently from Go 1.26.
 The module now requires Go 1.27, matching the example Go book. CI and release builds read the version from
 go.mod, and CI already checks gofmt before vet and tests. Evidence: Go 1.27.3's `gofmt -l .` is empty.
+
+## 2026-11-13: The command's own process creates its process group
+
+The launcher depends on Bash for `bash -s` and Perl in the sandbox's PATH, with no Perl modules needed.
+Perl is supplied by Debian's `perl-base` and stock macOS; a Linux test host must also provide it.
+A forked Perl child calls `setpgrp(0,0)`, then atomically publishes its own pid with a temporary file and rename,
+then list-execs the command. The launcher only waits: it never calls setpgid or publishes another process's id.
+This avoids Bash 3.2's parent/child job-control race and ensures a published id names a group already created.
+Forking also works when sbx starts the launcher as a session leader. Missing Perl exits 127 with a diagnostic
+before running any command; group creation or publication failure also refuses to run it. There is no fallback.
+Shell job control is unreliable without a terminal; `setsid(1)` is absent on stock macOS and `python3` may be a stub.
+
+Stop treats a missing pidfile as not started, retries TERM for up to ten seconds, and starts the grace period
+only after publication. Expiring that wait cannot confirm a stop and leaves the job lost. A launcher that
+starts after that timeout can still run untracked because sbx does not forward client termination.
+Evidence: `TestTheJobsGroupExistsAndIsLedByTheCommandItsPidfileNamesWhenTheCommandStarts`,
+`TestTheLauncherAndSignalScriptRunUnderBashAndDash`,
+`TestTheSignalScriptReportsNotStartedNotGoneWhenNoGroupWasPublished`,
+`TestAStopThatArrivesBeforeTheLauncherPublishesWaitsAndThenEndsTheCommand`,
+`TestAStopThatNeverSeesTheCommandStartCannotConfirmAndTheJobReadsLost`,
+`TestADetachedCommandWithoutPerlFailsWithItsReasonBeforeRunningAnything`,
+`TestADetachedCommandStartsWithDefaultInterruptAndQuitHandling`,
+`TestADetachedCommandReportsMissingAndNonExecutableFirstWordsLikeAShell`.
