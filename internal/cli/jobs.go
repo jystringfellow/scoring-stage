@@ -2,12 +2,14 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -377,7 +379,7 @@ func stopJob(home, slug, id string) (jobStatus, error) {
 	if err := os.WriteFile(filepath.Join(jobDir(home, slug, id), "stop"), nil, 0600); err != nil {
 		return job, err
 	}
-	job, err = waitJob(home, slug, id, jobStopGrace+5*time.Second)
+	job, err = waitJob(home, slug, id, jobStopGrace+jobStopConfirm+jobSignalTimeout+5*time.Second)
 	if err != nil {
 		return job, err
 	}
@@ -385,7 +387,7 @@ func stopJob(home, slug, id string) (jobStatus, error) {
 		return job, errorf("job %s is still running after its stop request", id)
 	}
 	if job.State == "lost" {
-		return job, errorf("job %s is lost; its command may still be running or may have stopped", id)
+		return job, errorf("could not confirm that job %s's command stopped; it may still be running in the sandbox", id)
 	}
 	return job, nil
 }
@@ -502,7 +504,12 @@ func holdJob(home, slug, id string) error {
 	}
 	defer output.Close()
 	writer := &jobWriter{file: output, remaining: jobOutputLimit}
-	command := exec.Command("sbx", append([]string{"exec", "-u", "agent", "-w", task.RepoDir, task.Sandbox}, record.Command...)...)
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+	defer signal.Stop(signals)
+	pidfile := jobPidFile(id)
+	command := exec.Command("sbx", "exec", "-i", "-u", "agent", "-w", task.RepoDir, task.Sandbox, "bash", "-s", "stage-job-run", pidfile)
+	command.Stdin = strings.NewReader(jobLauncher(record.Command))
 	command.Stdout, command.Stderr = writer, writer
 	command.WaitDelay = time.Second
 	ended := jobExit{}
@@ -516,36 +523,39 @@ func holdJob(home, slug, id string) error {
 		ticker := time.NewTicker(jobPoll)
 		defer ticker.Stop()
 		var waitErr error
+		stop := func() error {
+			confirmed := endJobCommand(task.Sandbox, pidfile)
+			endJobClient(command, done)
+			if !confirmed {
+				return errorf("could not confirm that job %s's command stopped; it may still be running in the sandbox", id)
+			}
+			ended.Stopped = true
+			return nil
+		}
 	waiting:
 		for {
 			select {
 			case waitErr = <-done:
 				break waiting
+			case <-signals:
 			case <-ticker.C:
-				if _, err := os.Stat(filepath.Join(dir, "stop")); err == nil {
-					// Prefer a real exit already observed over a concurrent stop request.
-					select {
-					case waitErr = <-done:
-						break waiting
-					default:
-					}
-					ended.Stopped = true
-					_ = command.Process.Signal(syscall.SIGTERM)
-					timer := time.NewTimer(jobStopGrace)
-					select {
-					case waitErr = <-done:
-						if !timer.Stop() {
-							<-timer.C
-						}
-					case <-timer.C:
-						_ = command.Process.Kill()
-						waitErr = <-done
-					}
-					break waiting
+				if _, err := os.Stat(filepath.Join(dir, "stop")); err != nil {
+					continue
 				}
 			}
+			// Prefer a real exit already observed over a concurrent stop request.
+			select {
+			case waitErr = <-done:
+				break waiting
+			default:
+			}
+			if err := stop(); err != nil {
+				return err
+			}
+			break
 		}
 		if !ended.Stopped {
+			_, _ = signalJobGroup(context.Background(), task.Sandbox, pidfile, "check")
 			code := 0
 			if waitErr != nil {
 				var exit *exec.ExitError

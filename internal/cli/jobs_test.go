@@ -33,6 +33,8 @@ func jobsReady(t *testing.T) (*harness, *[]*exec.Cmd) {
 	t.Helper()
 	h, _ := putReady(t)
 	t.Setenv("STAGE_TEST_AS_STAGE", "1")
+	t.Setenv("STAGE_TEST_JOB_TMP", t.TempDir())
+	t.Setenv("STAGE_TEST_JOB_STOP_GRACE", "300ms")
 	h.sbx.RunExecs()
 	var holders []*exec.Cmd
 	var mu sync.Mutex
@@ -67,6 +69,7 @@ func jobsReady(t *testing.T) (*harness, *[]*exec.Cmd) {
 func gated(t *testing.T, h *harness) (string, []string) {
 	t.Helper()
 	gate := filepath.Join(t.TempDir(), "gate")
+	t.Cleanup(func() { testutil.WriteFile(t, gate, "") })
 	return gate, []string{"exec", "--detach", "fix", "--", "sh", "-c", `while [ ! -f "$1" ]; do sleep 0.02; done; echo out; echo err >&2; exit 3`, "sh", gate}
 }
 
@@ -93,7 +96,7 @@ func TestADetachedCommandPrintsOnlyItsIdAndReturnsWhileItKeepsRunning(t *testing
 		t.Fatalf("%+v", j)
 	}
 	call := h.sbx.LastCall()
-	if !strings.HasPrefix(call, "exec -u agent -w "+filepath.Join(h.task("fix"), "src")+" stage-fix sh -c ") {
+	if !strings.HasPrefix(call, "exec -i -u agent -w "+filepath.Join(h.task("fix"), "src")+" stage-fix bash -s stage-job-run ") {
 		t.Fatal(call)
 	}
 	if sessions := h.sbx.Sessions(); !strings.HasPrefix(sessions[0], "session-start ") {
@@ -238,7 +241,7 @@ func TestStopEndsARunningJobAndKeepsItsOutput(t *testing.T) {
 	if h.stdout.String() != "saved" {
 		t.Fatal(h.stdout.String())
 	}
-	if sessions := h.sbx.Sessions(); len(sessions) != 2 || sessions[1] != "session-end stopped" {
+	if sessions := h.sbx.Sessions(); len(sessions) != 2 || (sessions[1] != "session-end stopped" && sessions[1] != "session-end 143") {
 		t.Fatal(sessions)
 	}
 	h.expect(1, "job", "stop", "fix", "1")
@@ -578,5 +581,220 @@ func TestJobHoldRefusesARecordedCommandWithoutItsInheritedExclusiveLock(t *testi
 	}
 	if len(h.sbx.Sessions()) != 0 {
 		t.Fatal(h.sbx.Sessions())
+	}
+}
+
+func jobTree(t *testing.T) ([]string, func() []int) {
+	t.Helper()
+	dir := t.TempDir()
+	pids, gate := filepath.Join(dir, "pids"), filepath.Join(dir, "gate")
+	argv := []string{"sh", "-c", `trap 'kill -TERM "$child" 2>/dev/null; wait "$child"; exit 0' TERM
+sleep 60 &
+child=$!
+printf '%s %s\n' "$$" "$child" > "$1"
+printf saved
+while [ ! -f "$2" ]; do sleep 0.02; done
+kill -TERM "$child" 2>/dev/null
+wait "$child"`, "sh", pids, gate}
+	t.Cleanup(func() { testutil.WriteFile(t, gate, "") })
+	return argv, func() []int {
+		t.Helper()
+		var fields []string
+		eventually(t, func() bool {
+			data, _ := os.ReadFile(pids)
+			fields = strings.Fields(string(data))
+			return len(fields) == 2
+		})
+		var result []int
+		for _, field := range fields {
+			pid, err := strconv.Atoi(field)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result = append(result, pid)
+		}
+		t.Cleanup(func() {
+			testutil.WriteFile(t, gate, "")
+			eventually(t, func() bool { return syscall.Kill(result[0], 0) != nil && syscall.Kill(result[1], 0) != nil })
+		})
+		return result
+	}
+}
+
+func assertJobProcessesGone(t *testing.T, pids []int) {
+	t.Helper()
+	for _, pid := range pids {
+		if err := syscall.Kill(pid, 0); err != syscall.ESRCH {
+			t.Errorf("job process %d still exists: %v", pid, err)
+		}
+	}
+}
+
+func TestStopEndsTheJobsCommandAndTheChildItStarted(t *testing.T) {
+	h, _ := jobsReady(t)
+	argv, ready := jobTree(t)
+	h.expect(0, append([]string{"exec", "--detach", "fix", "--"}, argv...)...)
+	pids := ready()
+	h.expect(0, "job", "stop", "fix", "1")
+	assertJobProcessesGone(t, pids)
+	for _, call := range h.sbx.Calls() {
+		if strings.Contains(call, "stage-job-signal ") && strings.HasSuffix(call, " kill") {
+			t.Fatal("TERM-obeying command needed KILL:", call)
+		}
+	}
+	if j := statusOf(t, h, "1"); j.State != "stopped" {
+		t.Fatal(j)
+	}
+	h.expect(125, "job", "wait", "fix", "1")
+	h.expect(0, "job", "output", "fix", "1")
+	if !strings.HasPrefix(h.stdout.String(), "saved") {
+		t.Fatal(h.stdout.String())
+	}
+}
+
+func TestStopKillsACommandThatIgnoresTheFirstSignalAfterTheGrace(t *testing.T) {
+	h, _ := jobsReady(t)
+	pidfile := filepath.Join(t.TempDir(), "pid")
+	h.expect(0, "exec", "--detach", "fix", "--", "sh", "-c", `trap '' TERM; echo $$ > "$1"; while :; do :; done`, "sh", pidfile)
+	var pid int
+	eventually(t, func() bool {
+		data, _ := os.ReadFile(pidfile)
+		pid, _ = strconv.Atoi(strings.TrimSpace(string(data)))
+		return pid > 0
+	})
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	start := time.Now()
+	h.expect(0, "job", "stop", "fix", "1")
+	if elapsed := time.Since(start); elapsed < 300*time.Millisecond {
+		t.Fatal("kill preceded grace:", elapsed)
+	}
+	assertJobProcessesGone(t, []int{pid})
+}
+
+func TestStopReportsStoppedOnlyAfterTheCommandIsGone(t *testing.T) {
+	h, _ := jobsReady(t)
+	argv, ready := jobTree(t)
+	h.expect(0, append([]string{"exec", "--detach", "fix", "--"}, argv...)...)
+	pids := ready()
+	h.sbx.RefuseSignals()
+	h.expect(1, "job", "stop", "fix", "1")
+	h.expectStderr("could not confirm")
+	if j := statusOf(t, h, "1"); j.State != "lost" {
+		t.Fatal(j)
+	}
+	if err := syscall.Kill(pids[0], 0); err != nil {
+		t.Fatal("fake client killed its command:", err)
+	}
+	h.expect(125, "job", "wait", "fix", "1")
+}
+
+func TestAHolderTerminatedByASignalStopsItsCommandAndReportsStopped(t *testing.T) {
+	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP} {
+		t.Run(sig.String(), func(t *testing.T) {
+			h, holders := jobsReady(t)
+			argv, ready := jobTree(t)
+			h.expect(0, append([]string{"exec", "--detach", "fix", "--"}, argv...)...)
+			pids := ready()
+			if err := (*holders)[0].Process.Signal(sig); err != nil {
+				t.Fatal(err)
+			}
+			h.expect(125, "job", "wait", "fix", "1", "--timeout", "5s")
+			if j := statusOf(t, h, "1"); j.State != "stopped" {
+				t.Fatal(j)
+			}
+			assertJobProcessesGone(t, pids)
+		})
+	}
+}
+
+func TestStopLeavesAJobThatAlreadyExitedAlone(t *testing.T) {
+	h, _ := jobsReady(t)
+	h.expect(0, "exec", "--detach", "fix", "--", "sh", "-c", "exit 7")
+	h.expect(7, "job", "wait", "fix", "1", "--timeout", "5s")
+	before := len(h.sbx.Calls())
+	h.expect(1, "job", "stop", "fix", "1")
+	h.expectStderr("exited")
+	if j := statusOf(t, h, "1"); j.State != "exited" || *j.Status != 7 {
+		t.Fatal(j)
+	}
+	for _, call := range h.sbx.Calls()[before:] {
+		if strings.Contains(call, "stage-job-signal") {
+			t.Fatal(call)
+		}
+	}
+}
+
+func TestADetachedCommandsTextIsNeverInAnyHostArgument(t *testing.T) {
+	h, _ := jobsReady(t)
+	marker := "command-'argument-$()-with-spaces"
+	h.expect(0, "exec", "--detach", "fix", "--", "printf", "%s", marker)
+	h.expect(0, "job", "wait", "fix", "1", "--timeout", "5s")
+	h.expect(0, "job", "output", "fix", "1")
+	if h.stdout.String() != marker {
+		t.Fatal(h.stdout.String(), h.sbx.Calls(), h.sbx.Sessions())
+	}
+	for _, call := range h.sbx.Calls() {
+		if strings.Contains(call, marker) {
+			t.Fatal(call)
+		}
+	}
+}
+
+func TestARealJobExitKeepsItsStatusDespiteAStopFile(t *testing.T) {
+	h, _ := jobsReady(t)
+	h.expect(0, "exec", "--detach", "fix", "--", "sh", "-c", "exit 7")
+	h.expect(7, "job", "wait", "fix", "1", "--timeout", "5s")
+	testutil.WriteFile(t, filepath.Join(jobDir(h.home, "fix", "1"), "stop"), "")
+	h.expect(7, "job", "wait", "fix", "1")
+	if j := statusOf(t, h, "1"); j.State != "exited" || *j.Status != 7 {
+		t.Fatal(j)
+	}
+}
+
+func TestADetachedCommandTreatsItsFirstWordAsAnExecutableName(t *testing.T) {
+	h, _ := jobsReady(t)
+	bin := t.TempDir()
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	for i, name := range []string{"if", "job=value", "-name"} {
+		script := testutil.WriteFile(t, filepath.Join(bin, name), "#!/bin/sh\nprintf '%s\\n' \"$@\"\n")
+		if err := os.Chmod(script, 0700); err != nil {
+			t.Fatal(err)
+		}
+		h.expect(0, "exec", "--detach", "fix", "--", name, "", "line\nbreak", "'; false")
+		id := strconv.Itoa(i + 1)
+		h.expect(0, "job", "wait", "fix", id, "--timeout", "5s")
+		h.expect(0, "job", "output", "fix", id)
+		if h.stdout.String() != "\nline\nbreak\n'; false\n" {
+			t.Fatal(h.stdout.String())
+		}
+	}
+}
+
+func TestStopCannotConfirmASignalExecThatDoesNothingOrHangs(t *testing.T) {
+	for _, mode := range []string{"ignore", "hang"} {
+		t.Run(mode, func(t *testing.T) {
+			h, _ := jobsReady(t)
+			t.Setenv("STAGE_TEST_JOB_SIGNAL_TIMEOUT", "100ms")
+			argv, ready := jobTree(t)
+			h.expect(0, append([]string{"exec", "--detach", "fix", "--"}, argv...)...)
+			pids := ready()
+			if mode == "ignore" {
+				h.sbx.IgnoreSignals()
+			} else {
+				h.sbx.HangSignals()
+			}
+			start := time.Now()
+			h.expect(1, "job", "stop", "fix", "1")
+			h.expectStderr("could not confirm")
+			if time.Since(start) > 3*time.Second {
+				t.Fatal("signal exec did not stop within its timeout")
+			}
+			if j := statusOf(t, h, "1"); j.State != "lost" {
+				t.Fatal(j)
+			}
+			if err := syscall.Kill(pids[0], 0); err != nil {
+				t.Fatal("fake client killed its command:", err)
+			}
+		})
 	}
 }

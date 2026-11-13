@@ -372,3 +372,27 @@ exec are cancellable and time-capped; detached holders survive the server. Evide
 `TestMcpUpNeverRewritesLegacyApprovalsAndCanOnlyUseInstalledNames`,
 `TestMcpPutSharesTheCommandChecksAndRestrictsSourcesToItsWorkingDirectory`,
 `TestMcpExecTimeoutAndJobWaitAreCapped`, `TestMcpTakeAndDownKeepTakesAndRefuseFailedCopies`.
+
+## 2026-11-13: Stop signals the sandbox command's process group before ending its holder
+
+Terminating the host sbx client left its sandbox command running on sbx 0.51.0 (VERIFICATION.md, 2026-11-12).
+A Bash launcher fed over stdin now creates a process group and records its id inside the sandbox. Stop sends
+SIGTERM through a second exec, allows five seconds, then SIGKILL and a three-second confirmation window.
+SIGTERM, SIGINT and SIGHUP to the holder share cleanup. An unconfirmed stop has no result and reads lost.
+Command text stays out of host arguments. Bash's runtime `set -m` works without a terminal, whereas dash's does
+not; detached jobs therefore require Bash. The earlier holder decision still governs host liveness: no host
+pid decides state or stops the holder; the sandbox group id is used only to signal and confirm cleanup.
+Evidence: `TestStopEndsTheJobsCommandAndTheChildItStarted`,
+`TestStopKillsACommandThatIgnoresTheFirstSignalAfterTheGrace`,
+`TestStopReportsStoppedOnlyAfterTheCommandIsGone`,
+`TestAHolderTerminatedByASignalStopsItsCommandAndReportsStopped`,
+`TestMcpJobStopEndsTheCommandAndItsChildLikeTheCommandLine`,
+`TestADetachedCommandsTextIsNeverInAnyHostArgument`,
+`TestADetachedCommandTreatsItsFirstWordAsAnExecutableName`,
+`TestStopCannotConfirmASignalExecThatDoesNothingOrHangs`.
+
+## 2026-11-13: Build and format with Go 1.27
+
+Go releases can change gofmt's alignment: Go 1.27 formats the gear tests differently from Go 1.26.
+The module now requires Go 1.27, matching the example Go book. CI and release builds read the version from
+go.mod, and CI already checks gofmt before vet and tests. Evidence: Go 1.27.3's `gofmt -l .` is empty.

@@ -81,25 +81,39 @@ if [ "${FAKE_SBX_NOISE:-}" = 1 ]; then
 fi
 if [ "$1" = exec ]; then
   case " $* " in
-    *"tar -cf -"*) if [ -f "$FAKE_SBX_STATE/takes.hang" ]; then sleep 30; fi; if [ -f "$FAKE_SBX_STATE/takes.fail" ]; then cat "$FAKE_SBX_STATE/takes.fail" >&2; exit 1; fi; [ -f "$FAKE_SBX_STATE/takes.tar" ] && cat "$FAKE_SBX_STATE/takes.tar" ;;
-    *" -i "*) for last; do :; done; if [ -f "$FAKE_SBX_STATE/feed.hang" ]; then sleep 30; fi; if [ -f "$FAKE_SBX_STATE/feed.ignore" ]; then exit 0; fi; if [ -f "$FAKE_SBX_STATE/feed.fail" ]; then cat > /dev/null; cat "$FAKE_SBX_STATE/feed.fail" >&2; exit 1; fi; mkdir -p "$FAKE_SBX_STATE/box"; cat > "$FAKE_SBX_STATE/box/$(basename "$last")"; case " $* " in *"tar -xf -"*) echo stage-gear-unpacked ;; esac ;;
-    *" cat "*) for last; do :; done; file="$FAKE_SBX_STATE/box/$(basename "$last")"; [ -s "$file" ] || { echo "cat: No such file or directory" >&2; exit 1; }; cat "$file" ;;
-    *) if [ -f "$FAKE_SBX_STATE/exec.run" ]; then
+    *" stage-job-signal "*)
+      [ ! -f "$FAKE_SBX_STATE/signal.refuse" ] || exit 2
+      [ ! -f "$FAKE_SBX_STATE/signal.ignore" ] || exit 0
+      [ ! -f "$FAKE_SBX_STATE/signal.hang" ] || exec sleep 30
+      shift
+      while :; do
+        case "$1" in -i|-t|-it) shift ;; -u|-w) shift 2 ;; *) break ;; esac
+      done
+      shift
+      exec "$@"
+      ;;
+    *" stage-job-run "*) ;;
+    *"tar -cf -"*) if [ -f "$FAKE_SBX_STATE/takes.hang" ]; then sleep 30; fi; if [ -f "$FAKE_SBX_STATE/takes.fail" ]; then cat "$FAKE_SBX_STATE/takes.fail" >&2; exit 1; fi; [ -f "$FAKE_SBX_STATE/takes.tar" ] && cat "$FAKE_SBX_STATE/takes.tar"; exit 0 ;;
+    *" -i "*) for last; do :; done; if [ -f "$FAKE_SBX_STATE/feed.hang" ]; then sleep 30; fi; if [ -f "$FAKE_SBX_STATE/feed.ignore" ]; then exit 0; fi; if [ -f "$FAKE_SBX_STATE/feed.fail" ]; then cat > /dev/null; cat "$FAKE_SBX_STATE/feed.fail" >&2; exit 1; fi; mkdir -p "$FAKE_SBX_STATE/box"; cat > "$FAKE_SBX_STATE/box/$(basename "$last")"; case " $* " in *"tar -xf -"*) echo stage-gear-unpacked ;; esac; exit 0 ;;
+    *" cat "*) for last; do :; done; file="$FAKE_SBX_STATE/box/$(basename "$last")"; [ -s "$file" ] || { echo "cat: No such file or directory" >&2; exit 1; }; cat "$file"; exit 0 ;;
+    *) ;;
+  esac
+  if [ -f "$FAKE_SBX_STATE/exec.run" ]; then
       shift
       while :; do
         case "$1" in -i|-t|-it) shift ;; -u|-w) shift 2 ;; *) break ;; esac
       done
       sandbox=$1; shift
       printf 'session-start %s %s\n' "$$" "$sandbox" >> "$FAKE_SBX_STATE/sessions.log"
-      "$@" &
+      exec 4<&0
+      "$@" <&4 4<&- &
+      exec 4<&-
       child=$!
-      trap 'kill -TERM "$child" 2>/dev/null; wait "$child" 2>/dev/null; echo "session-end stopped" >> "$FAKE_SBX_STATE/sessions.log"; exit 143' TERM
+      trap 'echo "session-end stopped" >> "$FAKE_SBX_STATE/sessions.log"; exit 143' TERM
       wait "$child"; code=$?
       printf 'session-end %s\n' "$code" >> "$FAKE_SBX_STATE/sessions.log"
       exit "$code"
-    fi ;;
-
-  esac
+  fi
   exit 0
 fi
 case "$1 $2" in
@@ -211,4 +225,16 @@ func (f *FakeSbx) RunExecs() {
 
 func (f *FakeSbx) Sessions() []string {
 	return strings.FieldsFunc(ReadFile(f.t, filepath.Join(f.State, "sessions.log")), func(r rune) bool { return r == '\n' })
+}
+
+func (f *FakeSbx) RefuseSignals() {
+	WriteFile(f.t, filepath.Join(f.State, "signal.refuse"), "")
+}
+
+func (f *FakeSbx) IgnoreSignals() {
+	WriteFile(f.t, filepath.Join(f.State, "signal.ignore"), "")
+}
+
+func (f *FakeSbx) HangSignals() {
+	WriteFile(f.t, filepath.Join(f.State, "signal.hang"), "")
 }

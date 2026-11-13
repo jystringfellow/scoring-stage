@@ -716,3 +716,16 @@ func TestMcpShipEscapesUntrustedCommitSubjects(t *testing.T) {
 		t.Fatal(r)
 	}
 }
+
+func TestMcpJobStopEndsTheCommandAndItsChildLikeTheCommandLine(t *testing.T) {
+	h, _ := jobsReady(t)
+	argv, ready := jobTree(t)
+	d := readyMcp(t, h)
+	r := toolData(t, d.tool("exec", map[string]any{"slug": "fix", "command": argv, "detach": true}))
+	pids := ready()
+	r = toolData(t, d.tool("job", map[string]any{"slug": "fix", "id": r["job"], "action": "stop"}))
+	if r["state"] != "stopped" {
+		t.Fatal(r)
+	}
+	assertJobProcessesGone(t, pids)
+}

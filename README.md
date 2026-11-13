@@ -26,7 +26,7 @@ and `stage ship` pushes to `https://github.com/`. It runs on Unix hosts: macOS, 
 ## Requirements
 
 macOS or Linux with `sbx` 0.51.0 or later (signed in), `git`, and optionally `gh` (Copilot credentials, `gh`
-mode and `stage ship --pr`) and the `aws` CLI (the AWS broker). Building `stage` needs Go 1.26 or later.
+mode and `stage ship --pr`) and the `aws` CLI (the AWS broker). Building `stage` needs Go 1.27 or later.
 
 ## Install
 
@@ -53,7 +53,7 @@ from the release workflow. With these flags, `gh attestation verify` checks that
 built the archive from the tag you asked for, and prints the commit it was built from. `SHA256SUMS` catches a
 corrupted download, not a tampered one; the attestation is the provenance check.
 
-**With Go** (1.26 or later):
+**With Go** (1.27 or later):
 
 ```
 go install github.com/jystringfellow/scoring-stage/cmd/stage@latest
@@ -325,8 +325,9 @@ Without `--detach`, exec behaves as before.
 
 Each job has one host process running as you, holding an attached `sbx exec` for exactly that job. There is no
 shared daemon or listening port. Its arguments contain only `job hold <slug> <id>`; command arguments are kept in
-the private job record. Output and status live under `~/.scoring-stage/tasks/<slug>/jobs/<id>/`, in mode-700
-directories and mode-600 files: `job.json` (command and start time), `output` (merged stdout and stderr),
+the private job record and fed to the sandbox launcher over stdin, so no host subprocess arguments contain the
+command text. Detached jobs require Bash in the sandbox for process-group job control. Output and status live
+under `~/.scoring-stage/tasks/<slug>/jobs/<id>/`, in mode-700 directories and mode-600 files: `job.json` (command and start time), `output` (merged stdout and stderr),
 `exit.json` (result and end time), `lock` (holder liveness), and `stop` when stopping was requested.
 
 - `stage job list <slug> [--json]` lists jobs in id order with state, status when available, and command.
@@ -340,11 +341,12 @@ directories and mode-600 files: `job.json` (command and start time), `output` (m
   returns and bidi marks; newlines remain newlines. Invalid UTF-8 bytes are escaped too. Stage never interprets
   the output. Capture is capped at 1 GiB per job, after which bytes are dropped and the result records
   `output_truncated`; reading truncated output prints a note on stderr. Follow exits 0 even when the job failed.
-- `stage job stop <slug> <id>` asks a running holder to terminate its sbx client, then kills that client after
-  five seconds if needed. It waits for the result, keeps output, and reports `stopped`, or the real exit if the
-  command finished first. Stopping a finished or lost job is an error. Stop ends the host's session, not the
-  command: on sbx 0.51.0 the command was still running in the sandbox after the job reported `stopped`, and it
-  ends when sbx stops the idle sandbox. To end it sooner, kill it with `stage exec`.
+- `stage job stop <slug> <id>` sends SIGTERM to the command's process group inside the sandbox, waits up to
+  five seconds, then sends SIGKILL to what remains and checks for up to three more seconds. Each sandbox signal
+  or check has a ten-second timeout. It ends the host sbx client after cleanup, keeps output, and reports
+  `stopped` only after confirming the group is gone. If it cannot confirm that, stop returns an error and the job
+  reads `lost`. A real exit already observed takes precedence over a concurrent stop. Stopping a finished or
+  lost job is an error. SIGTERM, SIGINT and SIGHUP to the holder perform the same cleanup.
 
 JSON status and wait emit one object; list emits an array (empty is `[]`). They carry `id`, `slug`, `sandbox`,
 `state`, `command` as an argv array, `started_at`, `ended_at` when known, `status` only for `exited`,
@@ -390,6 +392,7 @@ then be permitted by name in the client's permission settings without giving the
 `status` is the command's exit status (a nonzero status is data), or null on timeout, with `timed_out: true`.
 Stdout and stderr each retain their first 32 KiB and report their full byte counts and `truncated`.
 Use detached exec for longer commands; its holder outlives the server and clients can reconnect to read its job.
+The `job` tool's `stop` action uses the same process-group cleanup and confirmation as `stage job stop`.
 
 Job wait defaults to 30 seconds, caps requests at 50, and returns the job's state plus `waited_seconds` and
 `capped`. Job output takes `offset` (default 0) and `limit` (default 32 KiB, capped at 64 KiB), returns `text`,
@@ -956,14 +959,15 @@ and what has not been run live yet.
   `sbx exec`. Work left running in the background inside the sandbox, such as under `nohup` or a detached `tmux`,
   stops with it. Use `stage exec --detach` for long work: its host holder keeps a session open until the command
   ends.
-- **A disappeared job holder means a lost job.** A killed holder or a host restart releases its file lock; without
-  a recorded result, stage reports `lost`, never success or still running. Output saved so far remains readable.
-  Stage cannot tell whether the in-sandbox command stopped; a killed holder may leave the sbx client and command
-  running. Host sleep can interrupt sbx too; no reconnection or restart is attempted. If sbx reports an exit,
-  stage records that status; if the holder disappears, the result is lost.
-- **Job stop ends the host sbx client.** Whether this also stops its command inside a real sandbox, and whether
-  sbx passes through every command status, still needs a live check. A stopped job does not prove the sandbox's
-  command is gone. Job output is merged, untrusted stdout and stderr, capped at 1 GiB.
+- **A disappeared job holder means a lost job.** SIGKILL or a host restart prevents cleanup and releases its file
+  lock; without a recorded result, stage reports `lost`. Output saved so far remains readable. The sbx client and
+  sandbox command may remain running until sbx stops the sandbox after its last session ends; if the orphaned
+  client keeps its session attached, the sandbox can remain running. After the last session ends, sbx's idle
+  timeout is about 30 seconds. Host sleep can interrupt sbx too; no reconnection or restart is attempted.
+- **Job stop reaches only the command's process group.** A descendant that deliberately creates another session
+  or process group (`setsid` or `setpgid`) escapes it. If a command exits leaving children, the job is `exited`
+  and stop refuses it; stop those children with ordinary exec. The process-group launcher and concurrent signal
+  exec still need a live sbx check. Job output is merged, untrusted stdout and stderr, capped at 1 GiB.
 - **Starting jobs and down are not serialized.** A job started after down's running-job check can lose its output
   when down removes the task. Do not start new jobs while removing their sandbox.
 - **The ship record can miss a push.** A ship is written to the task after the push returns, and the list reaches a

@@ -23,7 +23,7 @@ the host, compute a secret, or choose which sandbox gets which grant. Those are 
 | Keeping files from a sandbox before it is removed (takes) | `stage`: sbx has no copy-out, so stage streams a tar through `sbx exec` and writes only files and directories under `~/.scoring-stage/takes/` |
 | The user's own files in every sandbox (gear) | `stage`, from the user's config only: sbx has no copy-in for an existing sandbox and a kit cannot read the host, so stage streams a tar through `sbx exec -i` after `sbx env create`, as it does a saved login |
 | One host file put into a running sandbox | `stage put`, sharing gear's source and destination checks and its tar stream through `sbx exec -i`; sbx has no copy-in |
-| Detached commands and their host records | `stage`: one holder per job keeps an attached `sbx exec` open; sbx has no detached execution with durable output and status |
+| Detached commands, stopping their process groups and their host records | `stage`: one holder per job keeps an attached `sbx exec` open; sbx has no detached execution with durable output and status or forwarding of host-client stop signals |
 | MCP tools for stage's commands, keeping approvals, ship confirmation and widening choices with the person | `stage`, as a stdio subcommand sharing command paths; no listener, daemon or separate sandbox state |
 | What a kept take belongs to (repository, base branch, ships, pull requests) | `stage`: each `ship` is recorded on the task, and each take carries a `stage.json` stage writes; a sandbox cannot supply it |
 | Reporting sbx's global credential bindings | `stage setup`, read-only; `credentials.yaml` stays sbx's |
@@ -77,7 +77,17 @@ A daemon would outlive its job, and sandbox-side tmux or nohup cannot keep sbx f
 its last session ends. A private inherited file lock proves liveness without trusting a pid that can be reused:
 the kernel drops the lock when the holder dies or the host restarts. Without a recorded exit, an unlocked job is
 lost. Output and the atomic result stay in the task directory; down refuses running jobs and removes finished
-or lost records with the task. Copy-in and detached execution remain narrow seams to replace with sbx primitives
+or lost records with the task.
+
+The holder feeds a Bash launcher over stdin; `set -m` gives the command its own process group, whose id is
+published atomically in a private file under `/tmp` in the sandbox. Stop and catchable holder termination use a
+second `sbx exec` to signal that group, allow five seconds after SIGTERM, then SIGKILL and three seconds to
+confirm disappearance before ending the host client. An unconfirmed stop leaves no result and reads lost.
+The group id is only a sandbox-side signal target; the host lock and result still determine job state.
+This seam exists because sbx 0.51.0 did not forward host-client termination to its command (the 2026-11-12 entry
+in VERIFICATION.md). Bash is needed because dash disables job control without a terminal.
+
+Copy-in and detached execution remain narrow seams to replace with sbx primitives
 if those become available; their gaps belong upstream at docker/sbx-releases.
 
 ## MCP server
