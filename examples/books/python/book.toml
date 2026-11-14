@@ -1,0 +1,3 @@
+name = "python"
+description = "Python (default 3.12) and uv, with PyPI access (pypi.org, files.pythonhosted.org) at install and runtime. Install-only GET access to github.com:443 under /astral-sh/python-build-standalone/releases/download/** and release-assets.githubusercontent.com:443 for Python builds. No compilers or credentials."
+kits = ["./kits/python"]
