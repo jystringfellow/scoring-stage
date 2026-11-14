@@ -25,8 +25,10 @@ do, not what they then do.
 
 - **Behavior:** tests.
 - **Why a change was made:** commit messages and PR descriptions.
-- **Decisions that span many changes:** `DECISIONS.md`, one short entry each, with the date and the evidence. Read
-  it before proposing to reverse one.
+- **Decisions that constrain future work:** `decisions/`, one short file each, with the date in its name and the
+  evidence. Add one only when a later change could undo the choice without knowing why; most changes need none.
+  Never edit a shared log; `decisions/README.md` has the rules. List the directory and read the relevant files
+  before proposing to reverse one.
 - **How the tool is shaped, and what stage owns:** `docs/design.md`, including its ownership table. Read it before
   proposing to move a concern between stage and a kit.
 - **What has been checked against a live sbx or GitHub:** `VERIFICATION.md`, dated entries that are added and
@@ -143,7 +145,7 @@ CI runs the same on Linux and macOS.
 - Own as little as possible; stage is a thin wrapper. Use an sbx primitive wherever one exists: egress,
   credential injection, files and guidance belong in kits, and a sandbox's policy, secrets and bindings are created
   together from one env file. stage owns only what sbx cannot do; the ownership table in `docs/design.md` lists what,
-  and `DECISIONS.md` records why. Update both when a concern moves. Put anything stage must own behind a narrow
+  and `decisions/` records why. Update both when a concern moves. Put anything stage must own behind a narrow
   seam shaped like the sbx primitive it stands in for, or would be, so it can be dropped when sbx gains one, and
   propose the gap upstream at [docker/sbx-releases](https://github.com/docker/sbx-releases/issues).
 - What one organisation or team needs belongs in a book, not in stage. Add to stage only what is general, useful to
