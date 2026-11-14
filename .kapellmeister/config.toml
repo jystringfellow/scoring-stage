@@ -1,0 +1,2 @@
+[test]
+verify = "scripts/verify"
