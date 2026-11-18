@@ -22,8 +22,9 @@ func Handle(kit config.Kit) string {
 }
 
 type Options struct {
-	CPUs   *int
-	Memory string
+	CPUs     *int
+	Memory   string
+	RootSize string
 }
 
 func Build(composition *config.Composition, sandbox, envDir string, options Options) yamlout.Map {
@@ -44,6 +45,9 @@ func Build(composition *config.Composition, sandbox, envDir string, options Opti
 	}
 	if options.Memory != "" {
 		sandboxOptions = append(sandboxOptions, yamlout.Item{Key: "memory", Value: options.Memory})
+	}
+	if options.RootSize != "" {
+		sandboxOptions = append(sandboxOptions, yamlout.Item{Key: "rootSize", Value: options.RootSize})
 	}
 	if len(sandboxOptions) > 0 {
 		env = append(env, yamlout.Item{Key: "sandboxOptions", Value: sandboxOptions})

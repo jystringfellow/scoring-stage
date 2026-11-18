@@ -341,6 +341,12 @@ func (a *App) cmdJob(args []string, home string) (int, error) {
 		if err := a.printJob(job, asJSON); err != nil {
 			return 0, err
 		}
+		if (job.State == "running" || job.State == "exited") && sandboxIsRunning(task.Sandbox) {
+			if use := sandboxDisk(task, diskTimeout); len(use) > 0 {
+				fmt.Fprintf(a.Stderr, "stage: disk in %s: %s\n", task.Sandbox, describeDisk(use))
+				a.warnOfFullDisk(task, use)
+			}
+		}
 		switch job.State {
 		case "exited":
 			return *job.Status, nil

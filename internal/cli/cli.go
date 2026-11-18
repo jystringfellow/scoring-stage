@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -503,7 +504,7 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 }
 
 func (a *App) cmdUp(args []string, home string) (int, error) {
-	fs := a.newFlags("up", "<repo> <slug> [--agent NAME]... [--book NAME|DIR]... [--aws-profile NAME] [--base B] [--cpus N] [--memory M] [--allow-global-policy] [--plan]")
+	fs := a.newFlags("up", "<repo> <slug> [--agent NAME]... [--book NAME|DIR]... [--aws-profile NAME] [--base B] [--cpus N] [--memory M] [--disk SIZE] [--allow-global-policy] [--plan]")
 	base := fs.String("base", "", "branch to start from (default: the repository's default branch)")
 	var agentFlags, books stringList
 	fs.Var(&agentFlags, "agent", "add an agent: "+strings.Join(config.AgentNames(home), ", ")+", or a kit reference (repeatable)")
@@ -511,12 +512,16 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	awsProfile := fs.String("aws-profile", "", "grant this AWS profile to the sandbox and make it the default")
 	cpus := fs.intFlag("cpus", "CPUs for the sandbox")
 	memory := fs.String("memory", "", "memory for the sandbox, such as 16g")
+	disk := fs.String("disk", "", "size of the sandbox's root disk, such as 40g")
 	allowGlobal := fs.Bool("allow-global-policy", false, "continue even if the global sbx policy has allow rules")
 	approveRepoConfig := fs.Bool("approve-repo-config", false, "approve, and remember, the kits and books the repository's config asks for")
 	plan := fs.Bool("plan", false, "write the env file and show sbx's plan without creating")
 	positional, err := fs.parse(args, "repo", "slug")
 	if err != nil {
 		return 0, err
+	}
+	if *disk != "" && !rootDiskSize.MatchString(*disk) {
+		return 0, &usageError{"argument --disk: give the root disk's size in whole gigabytes, such as 40g, not " + strconv.QuoteToASCII(*disk)}
 	}
 	if _, err := sbx.RequireVersion(); err != nil {
 		return 0, err
@@ -643,7 +648,7 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 		return 0, err
 	}
 
-	env := envfile.Build(composition, sandbox, directory, envfile.Options{CPUs: *cpus, Memory: *memory})
+	env := envfile.Build(composition, sandbox, directory, envfile.Options{CPUs: *cpus, Memory: *memory, RootSize: *disk})
 	envPath, err := envfile.Write(env, directory)
 	if err != nil {
 		return 0, err
@@ -1199,12 +1204,45 @@ func (a *App) cmdList(args []string, home string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	var lines []string
 	for index, line := range strings.Split(strings.TrimSuffix(output, "\n"), "\n") {
 		if index == 0 || strings.HasPrefix(line, sandboxPrefix) {
-			fmt.Fprintln(a.Stdout, line)
+			lines = append(lines, line)
 		}
 	}
+	disks := make([][]diskUse, len(lines))
+	tasks := make([]*Task, len(lines))
+	var asking sync.WaitGroup
+	for index, line := range lines {
+		if tasks[index] = runningTaskListed(home, line); tasks[index] != nil {
+			asking.Add(1)
+			go func() {
+				defer asking.Done()
+				disks[index] = sandboxDisk(tasks[index], listDiskTimeout)
+			}()
+		}
+	}
+	asking.Wait()
+	for index, line := range lines {
+		if len(disks[index]) > 0 {
+			a.warnOfFullDisk(tasks[index], disks[index])
+			line += "   disk: " + describeDisk(disks[index])
+		}
+		fmt.Fprintln(a.Stdout, line)
+	}
 	return 0, nil
+}
+
+func runningTaskListed(home, line string) *Task {
+	fields := strings.Fields(line)
+	if len(fields) == 0 || !listedAsRunning(line, fields[0]) {
+		return nil
+	}
+	task, err := loadTask(home, strings.TrimPrefix(fields[0], sandboxPrefix))
+	if err != nil || task.Sandbox != fields[0] {
+		return nil
+	}
+	return task
 }
 
 func (a *App) cmdDown(args []string, home string) (int, error) {
