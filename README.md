@@ -896,7 +896,11 @@ and let later `stage up` calls, including ones an agent makes through `stage mcp
 repository's config as GitHub has it on the default branch, or on `--base B`, shows the same list and asks. It only
 runs in a terminal, records nothing unless you answer `y`, and has no flag that answers for you; the MCP tools have
 no counterpart. The approval is still for that exact content: a change to a kit, a book or the takes asks again.
-A program that can type into your terminal can answer the question, as it can for `stage up`.
+What this keeps out is an agent that reaches stage through `stage mcp`, or that runs inside a sandbox. It does not
+keep out a process with a shell on your host: the record is a plain file in your home directory, so such a process
+can write it, set `STAGE_HOME` to a directory of its own, answer the question through a pseudo-terminal or pass
+`--approve-repo-config` to `stage up`. An interrupt at the question removes the copy of the repository it was
+reviewing.
 
 Known gap: a book you turn on yourself, with `--book` or a `[[repos]]` rule, is not reviewed. Its host commands
 (such as `secrets` commands) run as code on your host, with whatever the book's files say after your last

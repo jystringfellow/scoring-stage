@@ -2,9 +2,11 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/jystringfellow/scoring-stage/internal/testutil"
@@ -159,4 +161,58 @@ func TestApproveNeedsNoSandboxRuntimeState(t *testing.T) {
 	if calls := h.sbx.Calls(); len(calls) != 0 {
 		t.Fatalf("approve ran sbx: %v", calls)
 	}
+}
+
+type heldPrompt struct {
+	asked   chan struct{}
+	release chan struct{}
+}
+
+func (p *heldPrompt) Read([]byte) (int, error) {
+	select {
+	case <-p.asked:
+	default:
+		close(p.asked)
+	}
+	<-p.release
+	return 0, io.EOF
+}
+
+func reviewCopies(t *testing.T, dir string) []string {
+	t.Helper()
+	copies, err := filepath.Glob(filepath.Join(dir, "stage-approve-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return copies
+}
+
+func TestAnInterruptAtTheApprovalPromptRemovesTheCopyOfTheRepositoryAndRecordsNothing(t *testing.T) {
+	h := repositoryAskingForAKit(t)
+	temp := t.TempDir()
+	t.Setenv("TMPDIR", temp)
+	exited := make(chan int, 1)
+	exitAfterInterrupt = func(code int) { exited <- code }
+	t.Cleanup(func() { exitAfterInterrupt = os.Exit })
+	prompt := &heldPrompt{asked: make(chan struct{}), release: make(chan struct{})}
+	h.terminal, h.stdinReader = true, prompt
+	finished := make(chan int, 1)
+	go func() { finished <- h.stage("approve", h.remote.Checkout) }()
+
+	<-prompt.asked
+	if len(reviewCopies(t, temp)) != 1 {
+		t.Fatalf("no copy of the repository under review in %s", temp)
+	}
+	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
+		t.Fatal(err)
+	}
+	if code := <-exited; code != 130 {
+		t.Errorf("exit status %d, want 130", code)
+	}
+	if left := reviewCopies(t, temp); len(left) != 0 {
+		t.Errorf("the interrupt left %v behind", left)
+	}
+	close(prompt.release)
+	<-finished
+	h.expectNoApprovalsRecorded()
 }

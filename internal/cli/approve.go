@@ -2,9 +2,11 @@ package cli
 
 import (
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/jystringfellow/scoring-stage/internal/config"
 	"github.com/jystringfellow/scoring-stage/internal/envfile"
@@ -42,6 +44,7 @@ func (a *App) cmdApprove(args []string, home string) (int, error) {
 		return 0, err
 	}
 	defer os.RemoveAll(review)
+	defer removeOnInterrupt(review)()
 	clone := filepath.Join(review, envfile.SourceDir)
 	branch, head, err := source.Prepare(repo, clone, github, *base)
 	if err != nil {
@@ -99,4 +102,24 @@ func (a *App) cmdApprove(args []string, home string) (int, error) {
 		a.say("approved %s (%s); a change to it asks again", config.Printable(approval.Label), approval.Fingerprint[:12])
 	}
 	return 0, nil
+}
+
+var exitAfterInterrupt = os.Exit
+
+func removeOnInterrupt(dir string) (stop func()) {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-signals:
+			os.RemoveAll(dir)
+			exitAfterInterrupt(130)
+		case <-done:
+		}
+	}()
+	return func() {
+		signal.Stop(signals)
+		close(done)
+	}
 }
