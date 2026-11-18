@@ -187,32 +187,42 @@ func reviewCopies(t *testing.T, dir string) []string {
 	return copies
 }
 
-func TestAnInterruptAtTheApprovalPromptRemovesTheCopyOfTheRepositoryAndRecordsNothing(t *testing.T) {
-	h := repositoryAskingForAKit(t)
-	temp := t.TempDir()
-	t.Setenv("TMPDIR", temp)
-	exited := make(chan int, 1)
-	exitAfterInterrupt = func(code int) { exited <- code }
-	t.Cleanup(func() { exitAfterInterrupt = os.Exit })
-	prompt := &heldPrompt{asked: make(chan struct{}), release: make(chan struct{})}
-	h.terminal, h.stdinReader = true, prompt
-	finished := make(chan int, 1)
-	go func() { finished <- h.stage("approve", h.remote.Checkout) }()
+func TestASignalAtTheApprovalPromptRemovesTheCopyOfTheRepositoryAndRecordsNothing(t *testing.T) {
+	for name, sent := range map[string]struct {
+		signal syscall.Signal
+		status int
+	}{
+		"interrupt": {syscall.SIGINT, 130},
+		"terminate": {syscall.SIGTERM, 143},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := repositoryAskingForAKit(t)
+			temp := t.TempDir()
+			t.Setenv("TMPDIR", temp)
+			exited := make(chan int, 1)
+			exitAfterInterrupt = func(code int) { exited <- code }
+			t.Cleanup(func() { exitAfterInterrupt = os.Exit })
+			prompt := &heldPrompt{asked: make(chan struct{}), release: make(chan struct{})}
+			h.terminal, h.stdinReader = true, prompt
+			finished := make(chan int, 1)
+			go func() { finished <- h.stage("approve", h.remote.Checkout) }()
 
-	<-prompt.asked
-	if len(reviewCopies(t, temp)) != 1 {
-		t.Fatalf("no copy of the repository under review in %s", temp)
+			<-prompt.asked
+			if len(reviewCopies(t, temp)) != 1 {
+				t.Fatalf("no copy of the repository under review in %s", temp)
+			}
+			if err := syscall.Kill(os.Getpid(), sent.signal); err != nil {
+				t.Fatal(err)
+			}
+			if code := <-exited; code != sent.status {
+				t.Errorf("exit status %d, want %d", code, sent.status)
+			}
+			if left := reviewCopies(t, temp); len(left) != 0 {
+				t.Errorf("the signal left %v behind", left)
+			}
+			close(prompt.release)
+			<-finished
+			h.expectNoApprovalsRecorded()
+		})
 	}
-	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
-		t.Fatal(err)
-	}
-	if code := <-exited; code != 130 {
-		t.Errorf("exit status %d, want 130", code)
-	}
-	if left := reviewCopies(t, temp); len(left) != 0 {
-		t.Errorf("the interrupt left %v behind", left)
-	}
-	close(prompt.release)
-	<-finished
-	h.expectNoApprovalsRecorded()
 }

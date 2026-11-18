@@ -26,6 +26,8 @@ func makeDueForGitMaintenance(t *testing.T, repo string) {
 }
 
 func TestASecondShipIsNotRefusedWhenTheFirstShipsFetchFindsTheScratchCloneDueForGitMaintenance(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	h := setup(t)
 	h.expect(0, "up", h.remote.Checkout, "fix")
 	scratch := filepath.Join(h.task("fix"), "src")

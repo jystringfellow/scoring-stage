@@ -112,9 +112,13 @@ func removeOnInterrupt(dir string) (stop func()) {
 	done := make(chan struct{})
 	go func() {
 		select {
-		case <-signals:
+		case received := <-signals:
 			os.RemoveAll(dir)
-			exitAfterInterrupt(130)
+			status := 130
+			if number, ok := received.(syscall.Signal); ok {
+				status = 128 + int(number)
+			}
+			exitAfterInterrupt(status)
 		case <-done:
 		}
 	}()
