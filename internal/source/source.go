@@ -172,8 +172,42 @@ func Prepare(repo, scratch, github, base string) (string, string, error) {
 	if _, err := Git(scratch, "checkout", "--quiet", "--detach", "refs/remotes/origin/"+base); err != nil {
 		return "", "", err
 	}
+	branches := []string{base}
+	if defaultBranch != "" && defaultBranch != base {
+		branches = append(branches, defaultBranch)
+	}
+	if err := keepOnlyBranchesAtOrigin(scratch, branches); err != nil {
+		return "", "", err
+	}
+	if _, err := Git(scratch, "symbolic-ref", "HEAD", "refs/heads/"+base); err != nil {
+		return "", "", err
+	}
 	head, err := Git(scratch, "rev-parse", "HEAD")
 	return base, head, err
+}
+
+func keepOnlyBranchesAtOrigin(scratch string, branches []string) error {
+	var commands strings.Builder
+	kept := map[string]bool{}
+	for _, branch := range branches {
+		commit, err := Git(scratch, "rev-parse", "--verify", "refs/remotes/origin/"+branch+"^{commit}")
+		if err != nil {
+			return err
+		}
+		kept["refs/heads/"+branch] = true
+		commands.WriteString("update refs/heads/" + branch + " " + commit + "\n")
+	}
+	refs, err := Git(scratch, "for-each-ref", "--format=%(refname)", "refs/heads/")
+	if err != nil {
+		return err
+	}
+	for _, ref := range strings.Split(refs, "\n") {
+		if ref != "" && !kept[ref] {
+			commands.WriteString("delete " + ref + "\n")
+		}
+	}
+	_, err = git(true, strings.NewReader(commands.String()), scratch, []string{"update-ref", "--stdin"})
+	return err
 }
 
 // ConfigFingerprint hashes the parts of a clone's .git that tell git what to

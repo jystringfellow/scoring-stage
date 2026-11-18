@@ -40,7 +40,7 @@ func mustGit(t *testing.T, repo string, args ...string) string {
 	return out
 }
 
-func TestPrepareClonesDetachedAtTheDefaultBranchWithAGitHubOrigin(t *testing.T) {
+func TestPrepareClonesOnTheDefaultBranchWithAGitHubOrigin(t *testing.T) {
 	remote := testutil.GitHubRemote(t)
 	scratch := filepath.Join(t.TempDir(), "task", "src")
 	base, head, err := Prepare(remote.Checkout, scratch, "acme/api", "")
@@ -56,8 +56,8 @@ func TestPrepareClonesDetachedAtTheDefaultBranchWithAGitHubOrigin(t *testing.T) 
 	if url := mustGit(t, scratch, "config", "--get", "remote.origin.url"); url != "https://github.com/acme/api.git" {
 		t.Errorf("origin = %q", url)
 	}
-	if ref := mustGit(t, scratch, "rev-parse", "--abbrev-ref", "HEAD"); ref != "HEAD" {
-		t.Errorf("HEAD = %q, want detached", ref)
+	if ref := mustGit(t, scratch, "rev-parse", "--abbrev-ref", "HEAD"); ref != "main" {
+		t.Errorf("HEAD = %q, want main", ref)
 	}
 }
 
@@ -183,8 +183,8 @@ func TestPrepareFetchesBothTheBaseAndTheDefaultBranchWhenTheyDiffer(t *testing.T
 			t.Errorf("origin/%s = %q, want %q", branch, got, want)
 		}
 	}
-	if got := mustGit(t, scratch, "rev-parse", "--abbrev-ref", "HEAD"); got != "HEAD" {
-		t.Errorf("HEAD = %q, want detached", got)
+	if got := mustGit(t, scratch, "rev-parse", "--abbrev-ref", "HEAD"); got != "release" {
+		t.Errorf("HEAD = %q, want release", got)
 	}
 }
 
