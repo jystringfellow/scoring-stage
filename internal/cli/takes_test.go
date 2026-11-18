@@ -87,7 +87,7 @@ func TestDownKeepsTheTakesOnTheHostBeforeRemovingTheSandbox(t *testing.T) {
 	if got := testutil.ReadFile(t, file); got != "{}" {
 		t.Fatalf("kept %q", got)
 	}
-	taking, removing := h.callIndex("exec -u agent stage-fix sh -c"), h.callIndex("env rm")
+	taking, removing := h.callIndex("exec -u agent stage-fix sh -c cd / && for p"), h.callIndex("env rm")
 	if taking < 0 || removing < taking {
 		t.Errorf("take at call %d, removal at call %d in %v", taking, removing, h.sbx.Calls())
 	}
@@ -214,13 +214,25 @@ func TestTakeOnASandboxWithoutTakesSaysWhereToListThem(t *testing.T) {
 	}
 }
 
-func TestDownWithoutTakesAsksTheSandboxForNothing(t *testing.T) {
+func TestDownWithoutTakesAsksTheSandboxOnlyWhatWouldBeLostAndNothingWhenDiscarding(t *testing.T) {
 	h := setup(t)
 	h.expect(0, "up", h.remote.Checkout, "fix")
 	h.sbx.SetSandboxes("stage-fix\n")
 	h.expect(0, "down", "fix")
-	if h.anyCallContaining("exec") {
-		t.Errorf("down ran something in the sandbox: %v", h.sbx.Calls())
+	for _, call := range h.sbx.Calls() {
+		if strings.Contains(call, "exec") && !strings.Contains(call, "git status --porcelain") {
+			t.Errorf("down ran something else in the sandbox: %q", call)
+		}
+	}
+
+	h.expect(0, "up", h.remote.Checkout, "again")
+	h.sbx.SetSandboxes("stage-again\n")
+	before := len(h.sbx.Calls())
+	h.expect(0, "down", "again", "--discard-takes")
+	for _, call := range h.sbx.Calls()[before:] {
+		if strings.Contains(call, "exec") {
+			t.Errorf("down --discard-takes ran something in the sandbox: %q", call)
+		}
 	}
 }
 

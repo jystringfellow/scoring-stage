@@ -210,6 +210,13 @@ file: an entry named `stage.json` at the root of what it sends, in any letter ca
 If a task's own record cannot be read, `stage down` cannot tell which takes to keep, so it leaves the sandbox in
 place unless you pass `--discard-takes`.
 
+Before it removes a sandbox, `stage down` asks it how many files in the repository are uncommitted or untracked and
+which commit it is on, and warns when files would be lost or when that commit is not the one the sandbox started
+from and was never shipped. It is a warning, not a refusal, and the sandbox is still removed. It looks only at the
+repository: a file written anywhere else in the sandbox is lost without a warning unless a take lists it, files git
+ignores are not counted, and only the checked-out commit is compared. `--discard-takes` skips the question, so it
+still removes a sandbox that cannot answer.
+
 Takes are records for you and your tools to read. stage never copies them into a sandbox; only [gear](#gear),
 which you list yourself, goes in. A repository's takes
 need your approval like its kits, and `repo_kits = "deny"` in managed settings refuses them. The approval is for

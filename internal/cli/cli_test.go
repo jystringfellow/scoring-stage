@@ -699,7 +699,7 @@ func TestLoginsAreLeftAloneUnlessCopyLoginsAsksForThem(t *testing.T) {
 	h.expect(0, "up", h.remote.Checkout, "fix", "--agent", "agy")
 	h.sbx.SetSandboxes("stage-fix\n")
 	h.expect(0, "down", "fix")
-	if h.anyCall("exec") {
+	if h.anyCallContaining(" cat ") || h.anyCallContaining(".gemini") {
 		t.Errorf("touched logins without copy_logins: %v", h.sbx.Calls())
 	}
 	h.sbx.SetSandboxes("")
