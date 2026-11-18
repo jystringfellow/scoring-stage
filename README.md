@@ -1054,7 +1054,8 @@ and what has not been run live yet.
 - **A job keeps the host from idle sleep only, and only where the host has a tool for it.** Each holder runs
   `caffeinate -i` on macOS, or `systemd-inhibit` on Linux when it is installed, for as long as its job runs, so the
   host stays awake until the last job ends. Closing a laptop's lid, choosing Sleep, or a low battery still puts
-  the host to sleep, and other hosts get no assertion. That a held assertion keeps a real job alive through a long
+  the host to sleep, and other hosts get no assertion. A job that hangs keeps its holder, and so the host, awake
+  until you run `stage job stop`. That a held assertion keeps a real job alive through a long
   idle period still needs a live check.
 - **Job stop ends the host sbx client.** Whether this also stops its command inside a real sandbox, and whether
   sbx passes through every command status, still needs a live check. A stopped job does not prove the sandbox's
