@@ -103,6 +103,7 @@ commands:
   broker start|stop|status|serve    manage the host AWS credential broker
   github login|token                log in to your GitHub App ([github] mode = "app"); print a fresh token
   init [<repo>] [options]           draft and check a repository config and kits, or print --guide
+  approve <repo> [--base B]         review what a repository's config asks for and record your approval, in a terminal
   up <repo> <slug> [options]        create a sandbox for a repository
   shell <slug>                      open a login shell in the repository
   login <slug>                      save the sandbox's copyable agent logins (copy_logins) for future sandboxes
@@ -134,6 +135,7 @@ func (a *App) Main(args []string) int {
 		"github": a.cmdGitHub,
 		"token":  a.cmdToken,
 		"put":    a.cmdPut, "job": a.cmdJob, "mcp": a.cmdMCP,
+		"approve": a.cmdApprove,
 	}
 	name := args[0]
 	if name == "-h" || name == "--help" || name == "help" {
@@ -731,7 +733,8 @@ func (a *App) checkRepoApprovals(home string, composition *config.Composition, g
 type approvalNeeded struct{ missing []config.Approval }
 
 func (e *approvalNeeded) Error() string {
-	return "not approved; review them and answer y, or pass --approve-repo-config to approve them without asking"
+	return "not approved; review them and answer y, pass --approve-repo-config to approve them without asking, " +
+		"or run `stage approve <repo>` in a terminal once so later sandboxes need no flag"
 }
 
 func printApprovals(w io.Writer, missing []config.Approval) {

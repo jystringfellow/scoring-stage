@@ -67,6 +67,7 @@ or, from a clone, `go build -o bin/stage ./cmd/stage`. `stage version` prints th
 stage setup --agent claude --agent codex  # save the agents you use; check sbx, the policy and credentials
 stage init --agent claude --book backend --kit rules  # draft and check this repository's config and an empty kit
 stage init --guide                   # print how to work out what a repository needs
+stage approve ~/Code/api             # review what the repository's config asks for and approve it once, in a terminal
 stage up ~/Code/api fix-login        # sandbox stage-fix-login on a scratch clone of ~/Code/api
 stage up ~/Code/api fix-login --agent agy --book dotnet  # add an agent or an installed book for one box
 stage up ~/Code/api fix-login --aws-profile staging    # grant an AWS profile to one box and make it the default
@@ -410,7 +411,7 @@ Only configured agent names and installed book names can be selected. The tools 
 book directory, AWS profile grant, global-policy override, resource override, protected-path allowance, pull
 request creation or discarded takes. The caller may be following text from a repository or sandbox, so those
 choices stay with the person. `up` never changes the approvals file, including legacy approvals; review the
-missing items and run its returned `stage up ... --approve-repo-config ...` command in a terminal. `ship` never
+missing items and run its returned `stage up ... --approve-repo-config ...` command, or `stage approve <repo>`, in a terminal. `ship` never
 pushes or records a ship: review its result and run the returned `stage ship ...` command to confirm and push.
 It refuses protected paths outright and enforces the same branch namespace as the command line.
 
@@ -889,6 +890,13 @@ what it does (network rules, credentials, host commands, AWS profiles) and asks.
 `--approve-repo-config` after reviewing them. An approval covers that exact content (a local kit's files, a published
 kit's digest and arguments, a book's files) and is kept in `~/.scoring-stage/trusted-kits`, one JSON object per
 line, so a change asks again. `stage up --plan` lists what needs approving and stops before writing the env file.
+
+`stage approve <repo>` records the same approvals without creating a sandbox, so you can approve a repository once
+and let later `stage up` calls, including ones an agent makes through `stage mcp`, run with no flag. It reads the
+repository's config as GitHub has it on the default branch, or on `--base B`, shows the same list and asks. It only
+runs in a terminal, records nothing unless you answer `y`, and has no flag that answers for you; the MCP tools have
+no counterpart. The approval is still for that exact content: a change to a kit, a book or the takes asks again.
+A program that can type into your terminal can answer the question, as it can for `stage up`.
 
 Known gap: a book you turn on yourself, with `--book` or a `[[repos]]` rule, is not reviewed. Its host commands
 (such as `secrets` commands) run as code on your host, with whatever the book's files say after your last
