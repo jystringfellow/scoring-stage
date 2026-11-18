@@ -451,3 +451,9 @@ Checked:
   complaint. Only `30g` was tried in a creation, so stage accepts only whole gigabytes written that way.
 
 Not checked: a size below sbx's default, a disk that actually fills, and the 90% warning.
+
+## 2026-11-18: the probe branch from the entry above is gone
+
+The entry above says the probe branch `agent/probe-fetch/1eeef6d3` was left for the maintainer to delete. It has
+since been deleted: `git ls-remote origin 'refs/heads/agent/probe-fetch/*'` from the host printed nothing. Nothing
+from that run remains on the remote.
