@@ -1198,10 +1198,27 @@ func (a *App) cmdList(args []string, home string) (int, error) {
 	}
 	for index, line := range strings.Split(strings.TrimSuffix(output, "\n"), "\n") {
 		if index == 0 || strings.HasPrefix(line, sandboxPrefix) {
-			fmt.Fprintln(a.Stdout, line)
+			fmt.Fprintln(a.Stdout, line+a.listedDisk(home, line))
 		}
 	}
 	return 0, nil
+}
+
+func (a *App) listedDisk(home, line string) string {
+	fields := strings.Fields(line)
+	if len(fields) < 2 || !slices.Contains(fields[1:], "running") {
+		return ""
+	}
+	task, err := loadTask(home, strings.TrimPrefix(fields[0], sandboxPrefix))
+	if err != nil || task.Sandbox != fields[0] {
+		return ""
+	}
+	use := sandboxDisk(task)
+	if len(use) == 0 {
+		return ""
+	}
+	a.warnOfFullDisk(task, use)
+	return "   disk: " + describeDisk(use)
 }
 
 func (a *App) cmdDown(args []string, home string) (int, error) {

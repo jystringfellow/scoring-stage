@@ -131,7 +131,7 @@ func TestADetachedCommandIsLaterReportedWithItsRealStatusAndItsFullOutput(t *tes
 	if err != nil || info.Mode().Perm() != 0700 {
 		t.Fatalf("directory mode: %v %v", info, err)
 	}
-	if sessions := h.sbx.Sessions(); len(sessions) != 2 || sessions[1] != "session-end 3" {
+	if sessions := h.sbx.Sessions(); len(sessions) != 4 || sessions[1] != "session-end 3" || sessions[3] != "session-end 0" {
 		t.Fatal(sessions)
 	}
 }
