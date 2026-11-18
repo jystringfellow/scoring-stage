@@ -133,7 +133,10 @@ reach the host scratch clone, and that the host source mount, if sbx adds one, i
 [sbx environment file](https://docs.docker.com/ai/sandboxes/configuration/environment-files/) next to it and runs
 `sbx env create`. The sandbox sees the repository at the scratch clone's host path. `stage down` deletes the scratch
 clone, so ship anything you want to keep first.
-The scratch clone's `origin/*` refs come from GitHub as of `stage up`.
+The scratch clone's `origin/*` refs come from GitHub as of `stage up`. Its only local branches are the base and the
+repository's default branch, both at GitHub's commit, with the base checked out; branches of your checkout are not
+carried over. sbx clones the scratch clone into the sandbox, so the sandbox starts on the base, tracking
+`origin/<base>`.
 
 ## First task
 
