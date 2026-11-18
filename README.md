@@ -324,6 +324,10 @@ directly after the slug. Stdout contains only its numeric job id; a wait hint go
 `agent` in the repository, as with ordinary exec, with no terminal and stdin from `/dev/null`.
 Without `--detach`, exec behaves as before.
 
+While a job runs, its holder asks the host not to go to sleep when idle (`caffeinate -i` on macOS, `systemd-inhibit`
+on Linux when installed) and stops asking when the job ends; see [Limitations](#limitations) for what that does not
+cover.
+
 Each job has one host process running as you, holding an attached `sbx exec` for exactly that job. There is no
 shared daemon or listening port. Its arguments contain only `job hold <slug> <id>`; command arguments are kept in
 the private job record. Output and status live under `~/.scoring-stage/tasks/<slug>/jobs/<id>/`, in mode-700
@@ -1040,6 +1044,11 @@ and what has not been run live yet.
   Stage cannot tell whether the in-sandbox command stopped; a killed holder may leave the sbx client and command
   running. Host sleep can interrupt sbx too; no reconnection or restart is attempted. If sbx reports an exit,
   stage records that status; if the holder disappears, the result is lost.
+- **A job keeps the host from idle sleep only, and only where the host has a tool for it.** Each holder runs
+  `caffeinate -i` on macOS, or `systemd-inhibit` on Linux when it is installed, for as long as its job runs, so the
+  host stays awake until the last job ends. Closing a laptop's lid, choosing Sleep, or a low battery still puts
+  the host to sleep, and other hosts get no assertion. That a held assertion keeps a real job alive through a long
+  idle period still needs a live check.
 - **Job stop ends the host sbx client.** Whether this also stops its command inside a real sandbox, and whether
   sbx passes through every command status, still needs a live check. A stopped job does not prove the sandbox's
   command is gone. Job output is merged, untrusted stdout and stderr, capped at 1 GiB.
