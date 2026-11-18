@@ -407,3 +407,47 @@ Checked:
 
 Not checked: a Python version other than the default, a repository that needs a C compiler to build a
 dependency, and `stage init --guide` followed by an agent.
+
+## 2026-11-18: fetching a shipped branch, a sandbox's disks and the root disk size
+
+- **sbx:** 0.51.0, macOS.
+- **stage:** built from 49924c2 for the first sandbox, and from that commit plus the disk report and `--disk`
+  changes for the second.
+- **Credentials:** none real in the sandbox for GitHub: `[github] mode = "none"`, on this public repository. The
+  agent mixins brought their usual secrets and bindings. A temporary `STAGE_HOME` was used; the repository's own
+  config (its Go example kit) was approved there with `--approve-repo-config` on the maintainer's instruction.
+- **Restoration:** two sandboxes were created one after the other and each removed with `stage down`. sbx's
+  `credentials.yaml` had the same sha256 before and after. No holder process remained. `stage ship` pushed one
+  probe branch, `agent/probe-fetch/1eeef6d3`, which was left for the maintainer to delete.
+
+Commands, in order: `stage up <repo> probe-fetch --approve-repo-config`; `stage exec probe-fetch -- sh -c '...'`
+running `git branch -avv`, `df -Pk`, `lsblk`, `git fetch origin`, `git ls-remote origin` and a commit;
+`stage ship probe-fetch --yes`; `stage exec` again running `git fetch origin` and `git ls-remote origin
+'refs/heads/agent/probe-fetch/*'`; `stage list`; `stage exec --detach` and `stage job wait`; `stage down
+probe-fetch`; `stage up <repo> probe-disk --disk 30g`; `stage exec probe-disk -- df -h`; `stage up <repo>
+probe-plan --plan --disk <value>` for six values; `stage down probe-disk`.
+
+Checked:
+
+- **A sandbox with no GitHub credential fetched the branch it had shipped.** `git fetch origin` and `git ls-remote`
+  inside the sandbox exited 0 before and after the ship, and the fetch after it brought
+  `origin/agent/probe-fetch/1eeef6d3`. The 403 seen on private repositories did not appear, so the proxy's rules
+  do not refuse the fetch. Not checked: the same fetch with a real credential on a private repository, where the
+  403 was reported.
+- The first sandbox's clone, made by a stage without the scratch clone's branch fix, came up with a detached
+  `HEAD` at GitHub's `main` and `origin/main` at the host checkout's older commit.
+- **A sandbox has three disks.** `/` is a 20 GB overlay, `/var/lib/docker` a 10 GB disk, and the cloned
+  workspace a 50 GB disk mounted at the repository's directory, the same path as the scratch clone on the host.
+  `df -Pk / <repository>` printed one row for each, with those two mount paths.
+- `stage job wait` on an exited job in a running sandbox printed
+  `stage: disk in stage-probe-fetch: / 3% used (18.0 GiB free), <repository> 1% used (46.4 GiB free)` on stderr
+  and exited with the job's status. `stage list` printed no disk figures for the sandbox once sbx listed it as
+  stopped; it was not checked while sbx listed it as running.
+- **`sandboxOptions.rootSize: "30g"` in the env file sized `/` at 30 GB.** sbx's plan showed
+  `sandboxOptions.rootSize: 30g`, and `df -h /` in the new sandbox showed 30G; the other two disks were unchanged.
+  The key is not in sbx's documentation and was found in the sbx binary, which also names `dockerSize` and
+  `clonedWorkspaceSize`; those two were not tried. sbx has a `sandbox.disk.dockerVolume` setting (10g).
+- `sbx env plan` does not check the value: it printed `30GiB`, `30G`, `30000m`, `abc`, `1g` and `30` back without
+  complaint. Only `30g` was tried in a creation, so stage accepts only whole gigabytes written that way.
+
+Not checked: a size below sbx's default, a disk that actually fills, and the 90% warning.

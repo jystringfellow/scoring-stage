@@ -93,9 +93,9 @@ func TestSandboxOptionsOnlyWhenAsked(t *testing.T) {
 	c := composition(root)
 	c.Secrets, c.Bindings = nil, nil
 	cpus := 4
-	env := Build(c, "stage-x", root, Options{CPUs: &cpus, Memory: "16g"})
+	env := Build(c, "stage-x", root, Options{CPUs: &cpus, Memory: "16g", RootSize: "40g"})
 	last := env[len(env)-1]
-	if last.Key != "sandboxOptions" || dump(t, yamlout.Map{last}) != "sandboxOptions:\n  cpus: 4\n  memory: \"16g\"\n" {
+	if last.Key != "sandboxOptions" || dump(t, yamlout.Map{last}) != "sandboxOptions:\n  cpus: 4\n  memory: \"16g\"\n  rootSize: \"40g\"\n" {
 		t.Fatalf("env ends with %v", last)
 	}
 	plain := Build(composition(root), "stage-x", root, Options{})

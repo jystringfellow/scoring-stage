@@ -502,7 +502,7 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 }
 
 func (a *App) cmdUp(args []string, home string) (int, error) {
-	fs := a.newFlags("up", "<repo> <slug> [--agent NAME]... [--book NAME|DIR]... [--aws-profile NAME] [--base B] [--cpus N] [--memory M] [--allow-global-policy] [--plan]")
+	fs := a.newFlags("up", "<repo> <slug> [--agent NAME]... [--book NAME|DIR]... [--aws-profile NAME] [--base B] [--cpus N] [--memory M] [--disk SIZE] [--allow-global-policy] [--plan]")
 	base := fs.String("base", "", "branch to start from (default: the repository's default branch)")
 	var agentFlags, books stringList
 	fs.Var(&agentFlags, "agent", "add an agent: "+strings.Join(config.AgentNames(home), ", ")+", or a kit reference (repeatable)")
@@ -510,12 +510,16 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	awsProfile := fs.String("aws-profile", "", "grant this AWS profile to the sandbox and make it the default")
 	cpus := fs.intFlag("cpus", "CPUs for the sandbox")
 	memory := fs.String("memory", "", "memory for the sandbox, such as 16g")
+	disk := fs.String("disk", "", "size of the sandbox's root disk, such as 40g")
 	allowGlobal := fs.Bool("allow-global-policy", false, "continue even if the global sbx policy has allow rules")
 	approveRepoConfig := fs.Bool("approve-repo-config", false, "approve, and remember, the kits and books the repository's config asks for")
 	plan := fs.Bool("plan", false, "write the env file and show sbx's plan without creating")
 	positional, err := fs.parse(args, "repo", "slug")
 	if err != nil {
 		return 0, err
+	}
+	if *disk != "" && !rootDiskSize.MatchString(*disk) {
+		return 0, &usageError{"argument --disk: give the root disk's size in whole gigabytes, such as 40g, not " + strconv.QuoteToASCII(*disk)}
 	}
 	if _, err := sbx.RequireVersion(); err != nil {
 		return 0, err
@@ -642,7 +646,7 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 		return 0, err
 	}
 
-	env := envfile.Build(composition, sandbox, directory, envfile.Options{CPUs: *cpus, Memory: *memory})
+	env := envfile.Build(composition, sandbox, directory, envfile.Options{CPUs: *cpus, Memory: *memory, RootSize: *disk})
 	envPath, err := envfile.Write(env, directory)
 	if err != nil {
 		return 0, err

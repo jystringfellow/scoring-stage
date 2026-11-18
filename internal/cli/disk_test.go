@@ -160,3 +160,26 @@ func TestAFinishedJobsWaitStillExitsWithItsStatusWhenDiskUseCannotBeRead(t *test
 		t.Errorf("stderr %q", h.stderr.String())
 	}
 }
+
+func TestUpDiskSetsTheSandboxsRootDiskSizeInTheEnvFile(t *testing.T) {
+	h := setup(t)
+	h.expect(0, "up", h.remote.Checkout, "fix", "--plan", "--disk", "40g")
+	if env := testutil.ReadFile(t, filepath.Join(h.task("fix"), "sbxenv.yaml")); !strings.Contains(env, "sandboxOptions:\n  rootSize: \"40g\"\n") {
+		t.Fatalf("no root disk size in the env file:\n%s", env)
+	}
+	h.expect(0, "up", h.remote.Checkout, "plain", "--plan")
+	if env := testutil.ReadFile(t, filepath.Join(h.task("plain"), "sbxenv.yaml")); strings.Contains(env, "rootSize") {
+		t.Fatalf("a root disk size nobody asked for:\n%s", env)
+	}
+}
+
+func TestUpRefusesADiskSizeThatIsNotWholeGigabytes(t *testing.T) {
+	for _, size := range []string{"40", "40G", "40GiB", "40000m", "0g", "040g", "-1g", "1.5g", "40g\nprivileged: true", "g", "99999g"} {
+		h := setup(t)
+		h.expect(2, "up", h.remote.Checkout, "fix", "--plan", "--disk", size)
+		h.expectStderr("--disk")
+		if _, err := os.Stat(h.task("fix")); err == nil {
+			t.Errorf("--disk %q left a task behind", size)
+		}
+	}
+}

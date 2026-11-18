@@ -17,6 +17,7 @@ const diskNearlyFullPercent = 90
 var (
 	diskTimeout     = 20 * time.Second
 	listDiskTimeout = 5 * time.Second
+	rootDiskSize    = regexp.MustCompile(`^[1-9][0-9]{0,3}g$`)
 	dfLine          = regexp.MustCompile(`^.*?\s([0-9]{1,18})\s+([0-9]{1,18})\s+([0-9]{1,18})\s+(100|[0-9]{1,2})%\s+(/.*)$`)
 )
 
