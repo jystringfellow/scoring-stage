@@ -336,8 +336,9 @@ directories and mode-600 files: `job.json` (command and start time), `output` (m
 - `stage job wait <slug> <id> [--timeout 10m] [--json]` waits indefinitely unless given a timeout and exits with
   the job's status, 124 on timeout while still running, or 125 for `lost` or `stopped`. A command may itself exit
   124 or 125; JSON's state distinguishes those cases. A timeout does not stop the job. While the job is running or
-  has exited, it also prints the sandbox's disk use on stderr, as `df` reports it for `/` and the repository, and
-  warns when either is at 90% or more.
+  has exited, and only if `sbx ls` shows the sandbox running, it also prints the sandbox's disk use on stderr, as
+  `df` reports it for `/` and the repository, and warns when either is at 90% or more. It does not start a stopped
+  sandbox to ask, so a wait on a job whose sandbox has since stopped prints no disk line.
 - `stage job output <slug> <id> [--follow]` prints saved output, or follows until the job leaves `running` and
   drains the remaining bytes. Control characters are escaped as `\xNN`, including terminal escapes, carriage
   returns and bidi marks; newlines remain newlines. Invalid UTF-8 bytes are escaped too. Stage never interprets
@@ -1038,9 +1039,12 @@ and what has not been run live yet.
   stops with it. Use `stage exec --detach` for long work: its host holder keeps a session open until the command
   ends.
 - **A sandbox's disk can fill, and stage only reports it.** `stage list` shows disk use for running sandboxes it has
-  a task for, and `stage job wait` shows it for the job's sandbox; both warn at 90%. Nothing watches between those
-  commands, the MCP tools do not report it, and stage has no option for the disk's size. The figures are what `df`
-  prints inside the sandbox and have not been checked against a real one.
+  a task for (also through the MCP `list` tool), and `stage job wait` shows it for the job's sandbox when that is
+  running; both warn at 90%. Nothing watches between those commands, the MCP `job` tool does not report it, and
+  stage has no option for the disk's size. `stage list` asks the running sandboxes at the same time and gives each
+  5 seconds, leaving out the ones that do not answer. The figures come from `df` inside the sandbox, which is
+  untrusted: stage prints a row only when its mount is `/`, the repository's directory or a directory above it,
+  and at most two rows. The figures have not been checked against a real sandbox.
 - **A disappeared job holder means a lost job.** A killed holder or a host restart releases its file lock; without
   a recorded result, stage reports `lost`, never success or still running. Output saved so far remains readable.
   Stage cannot tell whether the in-sandbox command stopped; a killed holder may leave the sbx client and command
