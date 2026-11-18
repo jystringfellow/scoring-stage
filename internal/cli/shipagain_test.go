@@ -40,6 +40,15 @@ func TestASecondShipIsNotRefusedWhenTheFirstShipsFetchFindsTheScratchCloneDueFor
 	if pushed := testutil.RunGit(t, h.remote.Bare, "rev-parse", "agent/fix/"+second[:8]); pushed != second {
 		t.Errorf("pushed %s, want %s", pushed, second)
 	}
+
+	written := filepath.Join(scratch, ".git", "info", "refs")
+	if _, err := os.Stat(written); err == nil {
+		t.Fatalf("%s exists after stage's own fetches", written)
+	}
+	testutil.RunGit(t, scratch, "fetch", "--quiet", "origin")
+	if _, err := os.Stat(written); err != nil {
+		t.Fatalf("a fetch without stage's settings did not run maintenance here, so the ships above proved nothing: %v", err)
+	}
 }
 
 func TestShipStillRefusesAScratchCloneWhoseInfoFilesChangedBetweenShips(t *testing.T) {

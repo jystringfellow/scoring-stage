@@ -24,7 +24,7 @@ func (a *App) warnOfUnkeptWork(task *Task) {
 	}
 	match := unkeptAnswer.FindStringSubmatch(answer)
 	if err != nil || match == nil {
-		a.warn("could not check %s for work that was not shipped; its repository is removed with it", task.Sandbox)
+		a.warn("could not check %s for work that was not shipped; stage down removes its repository with it", task.Sandbox)
 		return
 	}
 	var unkept []string
@@ -40,6 +40,6 @@ func (a *App) warnOfUnkeptWork(task *Task) {
 		unkept = append(unkept, "commit "+head[:8]+" that was never shipped")
 	}
 	if len(unkept) > 0 {
-		a.warn("%s is being removed with %s; only its takes and what stage ship pushed outlive it", task.Sandbox, strings.Join(unkept, " and "))
+		a.warn("%s has %s; stage down removes it, and only its takes and what stage ship pushed are kept", task.Sandbox, strings.Join(unkept, " and "))
 	}
 }

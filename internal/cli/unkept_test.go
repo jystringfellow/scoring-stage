@@ -23,7 +23,7 @@ func TestDownWarnsAboutFilesInTheRepositoryThatWereNeverCommitted(t *testing.T) 
 	testutil.WriteFile(t, filepath.Join(workspace, "README.md"), "changed\n")
 
 	h.expect(0, "down", "fix")
-	h.expectStderr("WARNING: stage-fix is being removed with 3 uncommitted or untracked files in the repository")
+	h.expectStderr("WARNING: stage-fix has 3 uncommitted or untracked files in the repository")
 	h.expectStderr("stage ship")
 	if !strings.Contains(h.stdout.String(), "stage-fix removed") {
 		t.Errorf("stdout %q", h.stdout.String())
@@ -43,7 +43,7 @@ func TestDownWarnsAboutACommitThatWasNeverShipped(t *testing.T) {
 	t.Cleanup(func() { startingCommit = original })
 
 	h.expect(0, "down", "fix")
-	h.expectStderr("WARNING: stage-fix is being removed with commit " + sha[:8] + " that was never shipped")
+	h.expectStderr("WARNING: stage-fix has commit " + sha[:8] + " that was never shipped")
 }
 
 func TestDownSaysNothingAboutACommitThatWasShipped(t *testing.T) {
@@ -89,4 +89,18 @@ func TestDownIgnoresAnAnswerFromTheSandboxThatIsNotACountAndACommit(t *testing.T
 		t.Errorf("printed what the sandbox sent: %q", h.stderr.String())
 	}
 	h.expectStderr("could not check stage-fix for work that was not shipped")
+}
+
+func TestDownDoesNotSayASandboxIsBeingRemovedWhenItThenLeavesItInPlace(t *testing.T) {
+	h := takingSandbox(t, "fix")
+	h.sbx.RunExecs()
+	testutil.WriteFile(t, filepath.Join(h.task("fix"), "src", "notes.txt"), "found it\n")
+	h.sbx.FailTakes("sandbox is not running")
+
+	h.expect(1, "down", "fix")
+	h.expectStderr("WARNING: stage-fix has 1 uncommitted or untracked file in the repository; stage down removes it")
+	h.expectStderr("stage-fix is left in place")
+	if strings.Contains(h.stderr.String(), "being removed") {
+		t.Errorf("said the sandbox was being removed: %q", h.stderr.String())
+	}
 }
