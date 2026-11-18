@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,6 +33,7 @@ type harness struct {
 	terminal       bool
 	stdinTerminal  bool
 	stdin          string
+	stdinReader    io.Reader
 	typed          string
 }
 
@@ -73,8 +75,12 @@ func writeToken(t *testing.T, path, token string) {
 func (h *harness) stage(args ...string) int {
 	h.stdout.Reset()
 	h.stderr.Reset()
+	var stdin io.Reader = strings.NewReader(h.stdin)
+	if h.stdinReader != nil {
+		stdin = h.stdinReader
+	}
 	app := &App{
-		Stdin:           strings.NewReader(h.stdin),
+		Stdin:           stdin,
 		Stdout:          &h.stdout,
 		Stderr:          &h.stderr,
 		FindGh:          func() string { return h.gh },
