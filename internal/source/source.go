@@ -39,6 +39,8 @@ var hardened = []string{
 	"-c", "core.fsmonitor=false",
 	"-c", "core.pager=cat",
 	"-c", "protocol.ext.allow=never",
+	"-c", "gc.auto=0",
+	"-c", "maintenance.auto=false",
 }
 
 func git(capture bool, stdin io.Reader, repo string, args []string) (string, error) {

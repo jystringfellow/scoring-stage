@@ -502,6 +502,7 @@ func holdJob(home, slug, id string) error {
 	}
 	defer output.Close()
 	writer := &jobWriter{file: output, remaining: jobOutputLimit}
+	defer holdHostAwake()()
 	command := exec.Command("sbx", append([]string{"exec", "-u", "agent", "-w", task.RepoDir, task.Sandbox}, record.Command...)...)
 	command.Stdout, command.Stderr = writer, writer
 	command.WaitDelay = time.Second
