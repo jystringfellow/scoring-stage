@@ -92,3 +92,29 @@ func TestAReusedScratchCloneMovesItsBranchesToWhatGitHubHasNow(t *testing.T) {
 		t.Errorf("the sandbox clone's origin refs = %q, want only origin/HEAD and origin/main", got)
 	}
 }
+
+func TestPrepareStartsOnABaseNestedUnderTheCheckoutsBranchName(t *testing.T) {
+	remote := testutil.GitHubRemote(t)
+	want := advanceRemoteBranch(t, remote, "release/1.0")
+	testutil.RunGit(t, remote.Checkout, "checkout", "--quiet", "-b", "release")
+	scratch := filepath.Join(t.TempDir(), "task", "src")
+	for attempt := 1; attempt <= 2; attempt++ {
+		if _, _, err := Prepare(remote.Checkout, scratch, "acme/api", "release/1.0"); err != nil {
+			t.Fatalf("attempt %d: %v", attempt, err)
+		}
+	}
+	expectSandboxStartsFrom(t, cloneAsSbxDoes(t, scratch), "release/1.0", want)
+}
+
+func TestPrepareStartsOnABaseThatIsAPrefixOfTheCheckoutsBranchName(t *testing.T) {
+	remote := testutil.GitHubRemote(t)
+	want := advanceRemoteBranch(t, remote, "release")
+	testutil.RunGit(t, remote.Checkout, "checkout", "--quiet", "-b", "release/1.0")
+	scratch := filepath.Join(t.TempDir(), "task", "src")
+	for attempt := 1; attempt <= 2; attempt++ {
+		if _, _, err := Prepare(remote.Checkout, scratch, "acme/api", "release"); err != nil {
+			t.Fatalf("attempt %d: %v", attempt, err)
+		}
+	}
+	expectSandboxStartsFrom(t, cloneAsSbxDoes(t, scratch), "release", want)
+}

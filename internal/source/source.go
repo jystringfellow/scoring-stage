@@ -187,7 +187,7 @@ func Prepare(repo, scratch, github, base string) (string, string, error) {
 }
 
 func keepOnlyBranchesAtOrigin(scratch string, branches []string) error {
-	var commands strings.Builder
+	var updates, deletes strings.Builder
 	kept := map[string]bool{}
 	for _, branch := range branches {
 		commit, err := Git(scratch, "rev-parse", "--verify", "refs/remotes/origin/"+branch+"^{commit}")
@@ -195,7 +195,7 @@ func keepOnlyBranchesAtOrigin(scratch string, branches []string) error {
 			return err
 		}
 		kept["refs/heads/"+branch] = true
-		commands.WriteString("update refs/heads/" + branch + " " + commit + "\n")
+		updates.WriteString("update refs/heads/" + branch + " " + commit + "\n")
 	}
 	refs, err := Git(scratch, "for-each-ref", "--format=%(refname)", "refs/heads/")
 	if err != nil {
@@ -203,11 +203,15 @@ func keepOnlyBranchesAtOrigin(scratch string, branches []string) error {
 	}
 	for _, ref := range strings.Split(refs, "\n") {
 		if ref != "" && !kept[ref] {
-			commands.WriteString("delete " + ref + "\n")
+			deletes.WriteString("delete " + ref + "\n")
 		}
 	}
-	_, err = git(true, strings.NewReader(commands.String()), scratch, []string{"update-ref", "--stdin"})
-	return err
+	for _, commands := range []string{deletes.String(), updates.String()} {
+		if _, err := git(true, strings.NewReader(commands), scratch, []string{"update-ref", "--stdin"}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ConfigFingerprint hashes the parts of a clone's .git that tell git what to
