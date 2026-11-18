@@ -1279,6 +1279,9 @@ func (a *App) cmdDown(args []string, home string) (int, error) {
 		}
 	}
 	if taskErr == nil && existing[sandbox] {
+		if !*discardTakes {
+			a.warnOfUnkeptWork(task)
+		}
 		if len(task.Takes) > 0 && !*discardTakes {
 			if err := a.keepTakes(home, task); err != nil {
 				return 0, errorf("%s; %s is left in place: fix that and run stage down again, or pass --discard-takes to remove it without its takes", err, sandbox)
