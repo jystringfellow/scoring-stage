@@ -82,6 +82,18 @@ fi
 if [ "$1" = exec ]; then
   case " $* " in
     *"tar -cf -"*) if [ -f "$FAKE_SBX_STATE/takes.hang" ]; then sleep 30; fi; if [ -f "$FAKE_SBX_STATE/takes.fail" ]; then cat "$FAKE_SBX_STATE/takes.fail" >&2; exit 1; fi; [ -f "$FAKE_SBX_STATE/takes.tar" ] && cat "$FAKE_SBX_STATE/takes.tar" ;;
+    *" -i "*" sh -s "*) if [ ! -f "$FAKE_SBX_STATE/exec.run" ]; then cat > /dev/null; exit 0; fi
+      shift; dir=
+      while :; do
+        case "$1" in -i|-t|-it) shift ;; -u) shift 2 ;; -w) dir=$2; shift 2 ;; *) break ;; esac
+      done
+      sandbox=$1; shift
+      printf '%s\n' "$sandbox" >> "$FAKE_SBX_STATE/reads.log"
+      if [ -f "$FAKE_SBX_STATE/hang.$sandbox" ]; then cat > /dev/null; sleep 30; fi
+      if [ -f "$FAKE_SBX_STATE/flood.$sandbox" ]; then cat > /dev/null; head -c 2000000 /dev/zero | tr '\0' x; exit 0; fi
+      if [ -d "$dir" ]; then cd "$dir" || exit 125; fi
+      if [ -f "$FAKE_SBX_STATE/read.path" ]; then PATH=$(cat "$FAKE_SBX_STATE/read.path"); export PATH; fi
+      exec "$@" ;;
     *" -i "*) for last; do :; done; if [ -f "$FAKE_SBX_STATE/feed.hang" ]; then sleep 30; fi; if [ -f "$FAKE_SBX_STATE/feed.ignore" ]; then exit 0; fi; if [ -f "$FAKE_SBX_STATE/feed.fail" ]; then cat > /dev/null; cat "$FAKE_SBX_STATE/feed.fail" >&2; exit 1; fi; mkdir -p "$FAKE_SBX_STATE/box"; cat > "$FAKE_SBX_STATE/box/$(basename "$last")"; case " $* " in *"tar -xf -"*) echo stage-gear-unpacked ;; esac ;;
     *" cat "*) for last; do :; done; file="$FAKE_SBX_STATE/box/$(basename "$last")"; [ -s "$file" ] || { echo "cat: No such file or directory" >&2; exit 1; }; cat "$file" ;;
     *) if [ -f "$FAKE_SBX_STATE/exec.run" ]; then
@@ -125,9 +137,35 @@ esac
 exit 0
 `
 
+const fakeCurl = `#!/bin/sh
+for url; do :; done
+rest=${url#http://127.0.0.1:}
+port=${rest%%/*}
+dir="$FAKE_SBX_STATE/cao/$port"
+[ -d "$dir" ] || { echo "curl: (7) Failed to connect" >&2; exit 7; }
+[ -f "$dir/hang" ] && { sleep 30; exit 28; }
+file="$dir/$(printf '%s' "/${rest#*/}" | tr '/' '_')"
+[ -f "$file" ] || exit 22
+cat "$file"
+`
+
+const fakeTmux = `#!/bin/sh
+for target; do :; done
+file="$FAKE_SBX_STATE/panes/$target"
+[ -f "$file" ] || exit 1
+cat "$file"
+`
+
+const fakeTimeout = `#!/bin/sh
+[ "$1" = -k ] && shift 2
+shift
+exec "$@"
+`
+
 type FakeSbx struct {
 	t     *testing.T
 	State string
+	Bin   string
 }
 
 // NewFakeSbx puts an sbx on PATH that logs its arguments and answers
@@ -136,9 +174,11 @@ func NewFakeSbx(t *testing.T) *FakeSbx {
 	t.Helper()
 	root := t.TempDir()
 	bin := filepath.Join(root, "bin")
-	script := WriteFile(t, filepath.Join(bin, "sbx"), fakeSbx)
-	if err := os.Chmod(script, 0o755); err != nil {
-		t.Fatal(err)
+	for name, content := range map[string]string{"sbx": fakeSbx, "curl": fakeCurl, "tmux": fakeTmux, "timeout": fakeTimeout} {
+		script := WriteFile(t, filepath.Join(bin, name), content)
+		if err := os.Chmod(script, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	state := filepath.Join(root, "sbx-state")
 	WriteFile(t, filepath.Join(state, "calls.log"), "")
@@ -152,7 +192,31 @@ func NewFakeSbx(t *testing.T) *FakeSbx {
 	t.Setenv("FAKE_SBX_SANDBOXES", filepath.Join(state, "sandboxes"))
 	t.Setenv("FAKE_SBX_SECRETS", filepath.Join(state, "secrets.json"))
 	t.Setenv("FAKE_SBX_STATE", state)
-	return &FakeSbx{t: t, State: state}
+	return &FakeSbx{t: t, State: state, Bin: bin}
+}
+
+func (f *FakeSbx) SetCAO(port, path, body string) {
+	WriteFile(f.t, filepath.Join(f.State, "cao", port, strings.ReplaceAll(path, "/", "_")), body)
+}
+
+func (f *FakeSbx) HangCAO(port string) {
+	WriteFile(f.t, filepath.Join(f.State, "cao", port, "hang"), "")
+}
+
+func (f *FakeSbx) SetPane(target, text string) {
+	WriteFile(f.t, filepath.Join(f.State, "panes", target), text)
+}
+
+func (f *FakeSbx) HangReads(sandbox string) {
+	WriteFile(f.t, filepath.Join(f.State, "hang."+sandbox), "")
+}
+
+func (f *FakeSbx) FloodReads(sandbox string) {
+	WriteFile(f.t, filepath.Join(f.State, "flood."+sandbox), "")
+}
+
+func (f *FakeSbx) SetReadPath(path string) {
+	WriteFile(f.t, filepath.Join(f.State, "read.path"), path)
 }
 
 func (f *FakeSbx) Noisy() { f.t.Setenv("FAKE_SBX_NOISE", "1") }

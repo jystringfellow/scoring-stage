@@ -142,12 +142,23 @@ carried over. sbx clones the scratch clone into the sandbox, so the sandbox star
 
 `stage list` prints one line per stage: every task stage has and every `stage-*` sandbox sbx lists, with its state
 (`running` or `stopped` as sbx reports it, `gone` for a task whose sandbox no longer exists, `no task` for a sandbox
-stage has no record of), its repository and base, its age, the fuller of its two disks and how many times it was
-shipped. `--json` prints the same stages with their agents, sbx's created and last-used times, both disks, their
-takes, ships and pull requests, and how many stage jobs are running. To read disk use, stage runs `df` inside each
-stage that is running and that it has a task for, so each `stage list` is an sbx session for those stages and
-delays sbx's auto-stop by 30 seconds; it never reads a stopped stage or one it has no task for. `--shallow` reads
-only what the host holds and runs nothing inside any sandbox.
+stage has no record of), its repository and base, its age, the fuller of its two disks, its agent sessions and how many
+times it was shipped. `--json` prints the same stages with their agents, sbx's created and last-used times, both
+disks, every session with the last 40 lines of its terminal, their takes, ships and pull requests, and how many
+stage jobs are running.
+
+A session is a terminal of the [CAO](https://github.com/awslabs/cli-agent-orchestrator) server inside the stage,
+on `127.0.0.1:9889`, or one of the stage's own [jobs](#jobs). Its state is `working`, `waiting` (for an answer),
+`idle`, `exited` or `unknown`, with CAO's or the job's own word beside it. A stage with no CAO server shows `no CAO`
+and still lists its jobs.
+
+To read a stage, stage runs one fixed script inside it, as `agent`, given on standard input: `df` for the disks,
+GET requests to CAO on the stage's loopback, and `tmux capture-pane` for each terminal's last lines. It never
+sends anything to an agent. It reads only stages that are running and that it has a task for, all at once, and
+gives each 10 seconds and 1 MiB; a stage that does not answer in time shows `timed out` and does not hold up the
+others. Each read is an sbx session, so it delays that stage's auto-stop by 30 seconds. A stage without a `timeout`
+command gets no terminal tails, since stage could not bound them. `--shallow` reads only what the host holds,
+including jobs, and runs nothing inside any sandbox.
 
 ## First task
 
@@ -1081,9 +1092,17 @@ and what has not been run live yet.
   installed tools, caches and the agent's home go) as `sandboxOptions.rootSize` in the env file; it takes whole
   gigabytes only, applies when the sandbox is created, and the MCP `up` tool does not offer it. The repository
   is on its own 50 GB disk and `/var/lib/docker` on a 10 GB one, and stage has no option for either. `stage list` asks the running sandboxes at the same time and gives each
-  5 seconds, leaving out the ones that do not answer. The figures come from `df` inside the sandbox, which is
+  10 seconds, leaving out the ones that do not answer. The figures come from `df` inside the sandbox, which is
   untrusted: stage prints a row only when its mount is `/`, the repository's directory or a directory above it,
   and at most two rows.
+- **What `stage list` shows from inside a stage is what the stage says.** The agent there can write anything: fake a
+  CAO server, change what `df` or `tmux` print, or leave a session looking idle. stage bounds, escapes and checks the
+  shape of what it reads, but cannot check that it is true. It sees only CAO's terminals on `127.0.0.1:9889` and its
+  own jobs: an agent run by hand in `stage shell` without CAO, or a CAO server on another port, is not listed.
+- **A read can start a stage that has just stopped.** stage reads only stages `sbx ls` shows running, but `sbx exec`
+  starts a stopped sandbox, so a stage that stops in the moment between the two is started again and stops 30
+  seconds after the read. sbx has no exec that leaves a stopped sandbox alone. If the host's 10 seconds run out,
+  the script inside can go on for a few more seconds before its own deadline ends it.
 - **A disappeared job holder means a lost job.** A killed holder or a host restart releases its file lock; without
   a recorded result, stage reports `lost`, never success or still running. Output saved so far remains readable.
   Stage cannot tell whether the in-sandbox command stopped; a killed holder may leave the sbx client and command

@@ -188,11 +188,11 @@ func TestListPrintsOneLinePerStage(t *testing.T) {
 	h.expect(0, "list")
 	lines := strings.Split(strings.TrimSuffix(h.stdout.String(), "\n"), "\n")
 	want := [][]string{
-		{"SLUG", "STATE", "REPOSITORY", "AGE", "DISK", "SHIPS"},
-		{"docs", "stopped", "acme/api@main", "3d", "-", "0"},
-		{"fix", "running", "acme/api@main", "2h", "95%", "1"},
-		{"old", "gone", "acme/api@main", "-", "-", "0"},
-		{"orphan", "no", "task", "-", "1m", "-", "0"},
+		{"SLUG", "STATE", "REPOSITORY", "AGE", "DISK", "SESSIONS", "SHIPS"},
+		{"docs", "stopped", "acme/api@main", "3d", "-", "-", "0"},
+		{"fix", "running", "acme/api@main", "2h", "95%", "no", "CAO", "1"},
+		{"old", "gone", "acme/api@main", "-", "-", "-", "0"},
+		{"orphan", "no", "task", "-", "1m", "-", "-", "0"},
 	}
 	if len(lines) != len(want) {
 		t.Fatalf("stdout %q", h.stdout.String())

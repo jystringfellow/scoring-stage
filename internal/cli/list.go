@@ -24,19 +24,21 @@ type stageListing struct {
 }
 
 type stageRecord struct {
-	Slug        string      `json:"slug"`
-	Sandbox     string      `json:"sandbox"`
-	State       string      `json:"state"`
-	Repository  string      `json:"repository,omitempty"`
-	BaseBranch  string      `json:"base_branch,omitempty"`
-	Agents      []string    `json:"agents,omitempty"`
-	CreatedAt   string      `json:"created_at,omitempty"`
-	LastUsedAt  string      `json:"last_used_at,omitempty"`
-	Disk        []diskUse   `json:"disk,omitempty"`
-	Takes       takesRecord `json:"takes"`
-	Ships       []Ship      `json:"ships"`
-	RunningJobs int         `json:"running_jobs"`
-	TaskError   string      `json:"task_error,omitempty"`
+	Slug        string         `json:"slug"`
+	Sandbox     string         `json:"sandbox"`
+	State       string         `json:"state"`
+	Repository  string         `json:"repository,omitempty"`
+	BaseBranch  string         `json:"base_branch,omitempty"`
+	Agents      []string       `json:"agents,omitempty"`
+	CreatedAt   string         `json:"created_at,omitempty"`
+	LastUsedAt  string         `json:"last_used_at,omitempty"`
+	Disk        []diskUse      `json:"disk,omitempty"`
+	Read        *readRecord    `json:"read,omitempty"`
+	Sessions    sessionsRecord `json:"sessions"`
+	Takes       takesRecord    `json:"takes"`
+	Ships       []Ship         `json:"ships"`
+	RunningJobs int            `json:"running_jobs"`
+	TaskError   string         `json:"task_error,omitempty"`
 }
 
 type takesRecord struct {
@@ -47,6 +49,7 @@ type takesRecord struct {
 type stageEntry struct {
 	record stageRecord
 	task   *Task
+	jobs   []sessionRecord
 }
 
 func (a *App) cmdList(args []string, home string) (int, error) {
@@ -65,7 +68,7 @@ func (a *App) cmdList(args []string, home string) (int, error) {
 		return 0, err
 	}
 	if !*shallow {
-		a.readDisks(entries)
+		a.readStages(entries)
 	}
 	if *asJSON {
 		listing := stageListing{Format: listFormat, ReadAt: time.Now().UTC().Format(time.RFC3339), Stages: []stageRecord{}}
@@ -122,7 +125,8 @@ func recordedSlugs(home string) ([]string, error) {
 }
 
 func describeStage(home, slug string, sandboxes map[string]sbx.Listed) *stageEntry {
-	entry := &stageEntry{record: stageRecord{Slug: config.Printable(slug), Sandbox: config.Printable(sandboxOf(slug)), Ships: []Ship{}}}
+	entry := &stageEntry{record: stageRecord{Slug: config.Printable(slug), Sandbox: config.Printable(sandboxOf(slug)), Ships: []Ship{},
+		Sessions: sessionsRecord{Status: "not_read", Items: []sessionRecord{}}}}
 	record := &entry.record
 	_, recordErr := os.Lstat(filepath.Join(taskDir(home, slug), "task.json"))
 	hasRecord := recordErr == nil && slugPattern.MatchString(slug)
@@ -139,6 +143,8 @@ func describeStage(home, slug string, sandboxes map[string]sbx.Listed) *stageEnt
 				record.Ships = task.Ships
 			}
 			record.RunningJobs = runningJobs(home, slug)
+			entry.jobs = jobSessions(home, slug)
+			record.Sessions.Items = append(record.Sessions.Items, entry.jobs...)
 			if task.Sandbox == sandboxOf(slug) {
 				entry.task = task
 			}
@@ -192,7 +198,7 @@ func countTakes(home, slug string) takesRecord {
 	return kept
 }
 
-func (a *App) readDisks(entries []*stageEntry) {
+func (a *App) readStages(entries []*stageEntry) {
 	var asking sync.WaitGroup
 	for _, entry := range entries {
 		if entry.task == nil || entry.record.State != "running" {
@@ -201,7 +207,9 @@ func (a *App) readDisks(entries []*stageEntry) {
 		asking.Add(1)
 		go func() {
 			defer asking.Done()
-			entry.record.Disk = sandboxDisk(entry.task, listDiskTimeout)
+			record, read := readStage(entry.task, []int{defaultCAOPort})
+			entry.record.Read, entry.record.Disk, entry.record.Sessions = record, read.disk, read.sessions
+			entry.record.Sessions.Items = append(entry.record.Sessions.Items, entry.jobs...)
 		}()
 	}
 	asking.Wait()
@@ -214,13 +222,40 @@ func (a *App) readDisks(entries []*stageEntry) {
 
 func (a *App) printStages(entries []*stageEntry, now time.Time) error {
 	table := tabwriter.NewWriter(a.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(table, "SLUG\tSTATE\tREPOSITORY\tAGE\tDISK\tSHIPS")
+	fmt.Fprintln(table, "SLUG\tSTATE\tREPOSITORY\tAGE\tDISK\tSESSIONS\tSHIPS")
 	for _, entry := range entries {
 		record := entry.record
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%d\n", record.Slug, strings.ReplaceAll(record.State, "_", " "),
-			repositoryAt(record), age(record.CreatedAt, now), fullestDisk(record.Disk), len(record.Ships))
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%d\n", record.Slug, strings.ReplaceAll(record.State, "_", " "),
+			repositoryAt(record), age(record.CreatedAt, now), fullestDisk(record.Disk), sessionsSummary(record.Sessions), len(record.Ships))
 	}
 	return table.Flush()
+}
+
+func sessionsSummary(sessions sessionsRecord) string {
+	if len(sessions.Items) == 0 {
+		switch sessions.Status {
+		case "ok":
+			return "0"
+		case "no_cao":
+			return "no CAO"
+		case "timed_out":
+			return "timed out"
+		case "unreadable":
+			return "unreadable"
+		}
+		return "-"
+	}
+	counts := map[string]int{}
+	for _, session := range sessions.Items {
+		counts[session.State]++
+	}
+	var parts []string
+	for _, state := range []string{"working", "waiting", "idle", "exited", "unknown"} {
+		if counts[state] > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", counts[state], state))
+		}
+	}
+	return fmt.Sprintf("%d (%s)", len(sessions.Items), strings.Join(parts, ", "))
 }
 
 func repositoryAt(record stageRecord) string {
