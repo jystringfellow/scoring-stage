@@ -37,7 +37,7 @@ func domains(kind string, hosts ...string) map[string]any {
 }
 
 var (
-	userKeys      = []string{"books", "base", "agents", "agent", "copy_logins", "github", "kits", "aws", "secrets", "bindings", "ship", "takes", "gear"}
+	userKeys      = []string{"books", "base", "agents", "agent", "copy_logins", "github", "kits", "aws", "secrets", "bindings", "ship", "takes", "gear", "hall"}
 	bookKeys      = []string{"name", "description", "base", "agents", "kits", "aws", "secrets", "bindings", "repos", "takes"}
 	repoMatchKeys = []string{"match", "agents", "kits", "aws"}
 	awsKeys       = []string{"profiles", "region", "default_profile"}
@@ -133,6 +133,7 @@ type Settings struct {
 	copyLogins []string
 	takes      []string
 	Gear       []Gear
+	Hall       Hall
 	githubMode string
 	githubApp  string
 }
@@ -343,6 +344,9 @@ func LoadSettings(home string) (*Settings, error) {
 	if settings.Gear, err = decodeGear(data, path, settings.Agents); err != nil {
 		return nil, err
 	}
+	if settings.Hall, err = decodeHall(data["hall"], path); err != nil {
+		return nil, err
+	}
 	bookPaths, err := optionalStrings(data, "books", path)
 	if err != nil {
 		return nil, err
@@ -386,6 +390,9 @@ func LoadBook(agents Agents, path string) (*Book, error) {
 		return nil, errorf("%s: books cannot define agents; a book names agents in agents, and an agent is defined in config.toml", manifest)
 	}
 	if err := refuseGear(data, manifest+": a book"); err != nil {
+		return nil, err
+	}
+	if err := refuseHall(data, manifest+": a book"); err != nil {
 		return nil, err
 	}
 	if err := checkKeys(data, bookKeys, manifest); err != nil {
@@ -458,6 +465,9 @@ func LoadBook(agents Agents, path string) (*Book, error) {
 			return nil, errorf("%s: must be a table", where)
 		}
 		if err := refuseGear(table, where+": a [[repos]] rule"); err != nil {
+			return nil, err
+		}
+		if err := refuseHall(table, where+": a [[repos]] rule"); err != nil {
 			return nil, err
 		}
 		if err := checkKeys(table, repoMatchKeys, where); err != nil {

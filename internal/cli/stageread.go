@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,7 +29,6 @@ const (
 	tailLines       = 40
 	tailLineRunes   = 300
 	jobTailBytes    = 16 << 10
-	defaultCAOPort  = 9889
 	caoServerFormat = "127.0.0.1:%d"
 )
 
@@ -65,15 +65,50 @@ type readFrame struct {
 }
 
 type stageRead struct {
-	disk     []diskUse
-	sessions sessionsRecord
+	disk           []diskUse
+	sessions       sessionsRecord
+	activities     []activityRecord
+	providerErrors []providerError
 }
 
-func readStage(task *Task, ports []int) (*readRecord, stageRead) {
+type stageProvider struct {
+	name    string
+	command []string
+}
+
+type readPlan struct {
+	ports     []int
+	providers []stageProvider
+	disk      bool
+}
+
+const maxReportedPorts = 8
+
+func readStage(task *Task, plan readPlan) (*readRecord, stageRead) {
+	record, read := readOnce(task, plan)
+	var extra []int
+	for _, activity := range read.activities {
+		if port := activity.CAOPort; port != 0 && !slices.Contains(plan.ports, port) && !slices.Contains(extra, port) && len(extra) < maxReportedPorts {
+			extra = append(extra, port)
+		}
+	}
+	if len(extra) == 0 || record.Error != "" {
+		return record, read
+	}
+	more, second := readOnce(task, readPlan{ports: extra})
+	record.TookMS += more.TookMS
+	if more.Error != "" {
+		record.Error = more.Error
+	}
+	read.sessions = mergeSessions(read.sessions, second.sessions)
+	return record, read
+}
+
+func readOnce(task *Task, plan readPlan) (*readRecord, stageRead) {
 	started := time.Now()
 	record := &readRecord{At: started.UTC().Format(time.RFC3339)}
 	boundary := newBoundary()
-	output, err := sbx.ReadWithin(stageReadTimeout, strings.NewReader(readScriptFor(boundary, ports)), stageReadLimit,
+	output, err := sbx.ReadWithin(stageReadTimeout, strings.NewReader(readScriptFor(boundary, plan)), stageReadLimit,
 		"exec", "-i", "-u", "agent", "-w", task.RepoDir, task.Sandbox, "sh", "-s")
 	record.TookMS = time.Since(started).Milliseconds()
 	if err != nil {
@@ -89,7 +124,24 @@ func readStage(task *Task, ports []int) (*readRecord, stageRead) {
 		record.Error = config.Printable(err.Error())
 		return record, stageRead{sessions: sessionsRecord{Status: "unreadable", Items: []sessionRecord{}}}
 	}
-	return record, readFrames(frames, task.RepoDir, ports)
+	return record, readFrames(frames, task.RepoDir, plan)
+}
+
+func mergeSessions(first, second sessionsRecord) sessionsRecord {
+	rank := map[string]int{"ok": 4, "timed_out": 3, "unreadable": 2, "no_cao": 1}
+	merged := first
+	if rank[second.Status] > rank[first.Status] {
+		merged.Status = second.Status
+	}
+	merged.Items = append(append([]sessionRecord{}, first.Items...), second.Items...)
+	var notes []string
+	for _, detail := range []string{first.Detail, second.Detail} {
+		if detail != "" && !slices.Contains(notes, detail) {
+			notes = append(notes, detail)
+		}
+	}
+	merged.Detail = strings.Join(notes, "; ")
+	return merged
 }
 
 func newBoundary() string {
@@ -100,12 +152,53 @@ func newBoundary() string {
 	return "stage-read-" + hex.EncodeToString(nonce)
 }
 
-func readScriptFor(boundary string, ports []int) string {
-	var listed []string
-	for _, port := range ports {
-		listed = append(listed, strconv.Itoa(port))
+func readScriptFor(boundary string, plan readPlan) string {
+	var ports, providers []string
+	for _, port := range plan.ports {
+		ports = append(ports, strconv.Itoa(port))
 	}
-	return strings.NewReplacer("@BOUNDARY@", boundary, "@PORTS@", strings.Join(listed, " ")).Replace(readScript)
+	for index, provider := range plan.providers {
+		line := []string{"provider", strconv.Itoa(index)}
+		for _, arg := range provider.command {
+			line = append(line, shellQuote(arg))
+		}
+		providers = append(providers, strings.Join(line, " "))
+	}
+	disk := ""
+	if plan.disk {
+		disk = "1"
+	}
+	return strings.NewReplacer("@BOUNDARY@", boundary, "@PORTS@", strings.Join(ports, " "), "@DISK@", disk,
+		"@PROVIDERS@", strings.Join(providers, "\n")).Replace(readScript)
+}
+
+func shellQuote(arg string) string {
+	return "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
+}
+
+func providerOutcome(provider string, frame readFrame) ([]activityRecord, *providerError) {
+	failed := func(reason string) ([]activityRecord, *providerError) {
+		return nil, &providerError{Provider: provider, Error: reason}
+	}
+	switch frame.status {
+	case "0":
+		activities, err := parseActivities(provider, []byte(frame.body))
+		if err != nil {
+			return failed("output refused: " + err.Error())
+		}
+		return activities, nil
+	case "absent":
+		return nil, nil
+	case "no-timeout":
+		return failed("not run: the stage has no timeout command")
+	case "late":
+		return failed("not run: the read ran out of time")
+	case "too-large":
+		return failed(fmt.Sprintf("output refused: it is over %d KiB", maxProviderDocument>>10))
+	case "124", "137":
+		return failed("it did not finish within 5 seconds")
+	}
+	return failed("it exited with status " + shortPrintable(frame.status, 16))
 }
 
 func parseFrames(output, boundary string) ([]readFrame, error) {
@@ -130,13 +223,15 @@ func parseFrames(output, boundary string) ([]readFrame, error) {
 	return frames, nil
 }
 
-func readFrames(frames []readFrame, repoDir string, ports []int) stageRead {
-	var read stageRead
+func readFrames(frames []readFrame, repoDir string, plan readPlan) stageRead {
+	ports := plan.ports
+	read := stageRead{activities: []activityRecord{}, providerErrors: []providerError{}}
 	servers := map[string]string{}
 	terminals := map[string]*sessionRecord{}
 	var order []string
 	leftOut := 0
 	noTimeout := false
+	providerSeen := map[int]bool{}
 	for _, frame := range frames {
 		fields := strings.Fields(frame.name)
 		switch {
@@ -149,6 +244,17 @@ func readFrames(frames []readFrame, repoDir string, ports []int) stageRead {
 			}
 		case frame.name == "note" && frame.status == "no-timeout":
 			noTimeout = true
+		case len(fields) == 2 && fields[0] == "provider":
+			index, err := strconv.Atoi(fields[1])
+			if err != nil || index < 0 || index >= len(plan.providers) || providerSeen[index] {
+				continue
+			}
+			providerSeen[index] = true
+			activities, failure := providerOutcome(plan.providers[index].name, frame)
+			read.activities = append(read.activities, activities...)
+			if failure != nil {
+				read.providerErrors = append(read.providerErrors, *failure)
+			}
 		case len(fields) == 3 && fields[0] == "cao" && fields[2] == "sessions" && askedFor(fields[1], ports):
 			servers[fields[1]] = serverState(frame.status)
 		case len(fields) == 4 && fields[0] == "cao" && fields[2] == "terminal" && askedFor(fields[1], ports):

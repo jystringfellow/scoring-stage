@@ -18,7 +18,7 @@ frame() {
 capture() {
 	limit=$1
 	shift
-	captured=$({ "$@" 2>/dev/null; printf '\n%s status %s' "$b" "$?"; } | head -c "$limit")
+	captured=$({ "$@" </dev/null 2>/dev/null; printf '\n%s status %s' "$b" "$?"; } | head -c "$limit")
 	case $captured in
 	*"$b status "*)
 		status=${captured##*"$b status "}
@@ -36,12 +36,31 @@ field() {
 	printf '%s' "$captured" | grep -o "\"$1\" *: *\"[A-Za-z0-9._-]*\"" | head -n 1 | sed 's/.*"\([A-Za-z0-9._-]*\)"$/\1/'
 }
 
-if [ -n "$bounded" ]; then
-	capture 65536 timeout -k 1 3 df -Pk / .
-else
-	capture 65536 df -Pk / .
+provider() {
+	index=$1
+	shift
+	if [ -z "$bounded" ]; then
+		frame "provider $index" "" no-timeout
+	elif late; then
+		frame "provider $index" "" late
+	elif ! command -v "$1" >/dev/null 2>&1; then
+		frame "provider $index" "" absent
+	else
+		capture 262145 timeout -k 1 5 "$@"
+		frame "provider $index" "$captured" "$status"
+	fi
+}
+
+if [ -n "@DISK@" ]; then
+	if [ -n "$bounded" ]; then
+		capture 65536 timeout -k 1 3 df -Pk / .
+	else
+		capture 65536 df -Pk / .
+	fi
+	frame disk "$captured" "$status"
 fi
-frame disk "$captured" "$status"
+
+@PROVIDERS@
 
 if ! command -v curl >/dev/null 2>&1; then
 	frame cao "" no-curl
