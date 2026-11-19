@@ -106,8 +106,21 @@ case "$1 $2" in
   "version "*) echo "sbx version ${FAKE_SBX_VERSION:-v0.51.0} deadbeef" ;;
   "policy ls") cat "$FAKE_SBX_POLICY" ;;
   "secret ls") cat "$FAKE_SBX_SECRETS" ;;
-  "ls -q") cat "$FAKE_SBX_SANDBOXES" ;;
-  "ls ") printf 'SANDBOX   STATUS\n'; sed 's/$/   running/' "$FAKE_SBX_SANDBOXES" ;;
+  "ls -q") cat "$FAKE_SBX_SANDBOXES" "$FAKE_SBX_STATE/stopped" ;;
+  "ls ") printf 'SANDBOX   STATUS\n'; sed 's/$/   running/' "$FAKE_SBX_SANDBOXES"; sed 's/$/   stopped/' "$FAKE_SBX_STATE/stopped" ;;
+  "ls --json")
+    if [ -f "$FAKE_SBX_STATE/listing.json" ]; then cat "$FAKE_SBX_STATE/listing.json"; exit 0; fi
+    sep=
+    printf '['
+    for status in running stopped; do
+      file="$FAKE_SBX_SANDBOXES"; [ "$status" = stopped ] && file="$FAKE_SBX_STATE/stopped"
+      while read -r name; do
+        [ -n "$name" ] || continue
+        printf '%s{"name":"%s","status":"%s","created_at":"2026-11-19T10:00:00Z","last_used_at":"2026-11-19T11:30:00.25Z"}' "$sep" "$name" "$status"
+        sep=,
+      done < "$file"
+    done
+    printf ']\n' ;;
 esac
 exit 0
 `
@@ -131,6 +144,7 @@ func NewFakeSbx(t *testing.T) *FakeSbx {
 	WriteFile(t, filepath.Join(state, "calls.log"), "")
 	WriteFile(t, filepath.Join(state, "policy.json"), `{"rules": []}`)
 	WriteFile(t, filepath.Join(state, "sandboxes"), "")
+	WriteFile(t, filepath.Join(state, "stopped"), "")
 	WriteFile(t, filepath.Join(state, "secrets.json"), `{"secrets": []}`)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("FAKE_SBX_LOG", filepath.Join(state, "calls.log"))
@@ -169,6 +183,14 @@ func (f *FakeSbx) SetSecrets(json string) {
 
 func (f *FakeSbx) SetSandboxes(lines string) {
 	WriteFile(f.t, filepath.Join(f.State, "sandboxes"), lines)
+}
+
+func (f *FakeSbx) SetStopped(lines string) {
+	WriteFile(f.t, filepath.Join(f.State, "stopped"), lines)
+}
+
+func (f *FakeSbx) SetListing(json string) {
+	WriteFile(f.t, filepath.Join(f.State, "listing.json"), json)
 }
 
 // SetTakes is the tar stream the fake sandbox answers a take with.

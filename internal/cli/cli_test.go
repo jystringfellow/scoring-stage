@@ -553,8 +553,9 @@ func TestListShowsOnlyScoringStageSandboxes(t *testing.T) {
 	h := setup(t)
 	h.sbx.SetSandboxes("stage-fix\nclaude-other\n")
 	h.expect(0, "list")
-	if got := h.stdout.String(); got != "SANDBOX   STATUS\nstage-fix   running\n" {
-		t.Errorf("stdout %q", got)
+	lines := strings.Split(strings.TrimSuffix(h.stdout.String(), "\n"), "\n")
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], "SLUG") || !strings.HasPrefix(lines[1], "fix ") {
+		t.Errorf("stdout %q", h.stdout.String())
 	}
 }
 
