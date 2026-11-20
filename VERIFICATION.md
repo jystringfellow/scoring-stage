@@ -520,3 +520,30 @@ sections, score steps or chair terminals. Its preflight had opened three CAO ses
 
 Not checked: a member's terminal through its session link, since km never seated a chair; that path is covered by
 km's captured schema 1 document in the tests. A run with chairs seated needs agents that are signed in.
+
+## 2026-11-20: holding a demo km run up, and global secrets in the hall runs
+
+- **sbx:** 0.51.0, macOS.
+- **stage:** built from the follow-up branch to #63, #62 and #64 (this entry's PR), on main at 79eeb5f.
+- **Credentials:** the temporary `STAGE_HOME` set no real secret, but sbx's global secrets apply to every sandbox,
+  and this machine has global `anthropic` and `openai` OAuth secrets (`sbx secret ls --global`). So the claude
+  chairs' preflight in this run, and in the 2026-11-20 entry above, reached the model through them and spent a
+  few real tokens. That entry's "none real" holds for stage's own secrets only. No agent ran beyond km's preflight.
+- **Restoration:** the one sandbox created, `stage-hall-demo`, was removed with `stage down`, with its scoped
+  secrets. sbx's `credentials.yaml` had the same sha256 before and after
+  (`4998c033b4b70e066939e87ed0f223fea6dee62917823758bc7a58e2ce021008`). No stage process remained.
+
+Checked:
+
+- **A detached km run does not hold a stage up.** With `km run … -detach` at the end of a script run through
+  `stage exec`, the exec returned, and with only `stage hall` reading the stage, sbx stopped it about 40 seconds
+  later and it stayed stopped for the 3 minutes watched. The hall did not start it again. Started again by hand,
+  km's records showed the run and nothing playing.
+- **A stage job does.** With `km run` in the foreground of the same script, run as
+  `stage exec --detach hall-demo -- sh /home/agent/hall-demo.sh`, the stage stayed running while the job ran.
+  The hall reported one running job and read the stage every 10 to 15 seconds, and the page's sessions and
+  activity changed with it. When km exited, the job ended and sbx stopped the stage about 20 seconds later.
+- **Why km exited here:** its preflight passed both claude chairs and blocked the agy chair after 90 seconds, since
+  agy had no login in the stage.
+- **The script's path:** `stage put` writes to the agent's home, while `stage exec` runs in the repository, so the
+  script is `/home/agent/hall-demo.sh`, not `hall-demo.sh`.

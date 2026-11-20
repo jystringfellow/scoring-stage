@@ -7,19 +7,24 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 )
 
-const kmSchema = 1
+const (
+	kmSchema              = 1
+	kapellmeisterProvider = "kapellmeister"
+	maxKmTokens           = 1e15
+)
 
 var builtinProviders = map[string]stageProvider{
-	"kapellmeister": {name: "kapellmeister", command: []string{"km", "status", "-json"}, translate: translateKmStatus},
+	kapellmeisterProvider: {name: kapellmeisterProvider, command: []string{"km", "status", "-json"}, translate: translateKmStatus},
 }
 
 var errKmUnreadable = errors.New("km status -json printed something stage cannot read")
 
 type kmStatus struct {
-	Runs []kmRun `json:"runs"`
+	Runs []json.RawMessage `json:"runs"`
 }
 
 type kmRun struct {
@@ -48,8 +53,9 @@ type kmPlaying struct {
 }
 
 type kmStep struct {
-	Name string `json:"name"`
-	Step string `json:"step"`
+	Name  string `json:"name"`
+	Step  string `json:"step"`
+	Round int    `json:"round"`
 }
 
 type kmUsage struct {
@@ -78,26 +84,68 @@ type kmChair struct {
 	} `json:"needs_input"`
 }
 
-func translateKmStatus(output []byte) ([]byte, error) {
+func translateKmStatus(output []byte) ([]activityRecord, []string, error) {
 	var status kmStatus
 	if err := json.Unmarshal(output, &status); err != nil {
-		return nil, errKmUnreadable
+		return nil, nil, errKmUnreadable
 	}
-	activities := []activityRecord{}
-	for _, run := range status.Runs[:min(len(status.Runs), maxActivities)] {
-		if run.Schema > kmSchema {
-			return nil, fmt.Errorf("km status speaks schema %d, and this stage reads schema %d and earlier", run.Schema, kmSchema)
+	var live, rest []activityRecord
+	var notes []string
+	seen := map[string]bool{}
+	for index, raw := range status.Runs {
+		activity, err := translateKmEntry(raw)
+		if err == nil && seen[activity.ID] {
+			err = fmt.Errorf("repeats the run %s", activity.ID)
 		}
-		activity, err := translateKmRun(run)
 		if err != nil {
-			return nil, err
+			notes = append(notes, fmt.Sprintf("km run %d left out: %s", index, err))
+			continue
 		}
-		activities = append(activities, activity)
+		seen[activity.ID] = true
+		if activity.Status == "running" || activity.Status == "waiting" {
+			live = append(live, activity)
+		} else {
+			rest = append(rest, activity)
+		}
 	}
-	return json.Marshal(struct {
+	activities := append(live, rest...)
+	if len(activities) > maxActivities {
+		notes = append(notes, fmt.Sprintf("%d more km runs were left out; stage shows %d, live ones first", len(activities)-maxActivities, maxActivities))
+		activities = activities[:maxActivities]
+	}
+	if activities == nil {
+		activities = []activityRecord{}
+	}
+	return activities, notes, nil
+}
+
+func translateKmEntry(raw json.RawMessage) (activityRecord, error) {
+	if string(raw) == "null" || len(raw) == 0 || raw[0] != '{' {
+		return activityRecord{}, errors.New("it is not a run")
+	}
+	var run kmRun
+	if err := json.Unmarshal(raw, &run); err != nil {
+		return activityRecord{}, errors.New("it does not have km's shape")
+	}
+	if run.Schema > kmSchema {
+		return activityRecord{}, fmt.Errorf("km status speaks schema %d, and this stage reads schema %d and earlier", run.Schema, kmSchema)
+	}
+	activity, err := translateKmRun(run)
+	if err != nil {
+		return activityRecord{}, err
+	}
+	document, err := json.Marshal(struct {
 		Format     string           `json:"format"`
 		Activities []activityRecord `json:"activities"`
-	}{activityFormat, activities})
+	}{activityFormat, []activityRecord{activity}})
+	if err != nil {
+		return activityRecord{}, errors.New("it does not have km's shape")
+	}
+	checked, err := parseActivities(kapellmeisterProvider, document)
+	if err != nil {
+		return activityRecord{}, errors.New(strings.TrimPrefix(err.Error(), "activity 0 "))
+	}
+	return checked[0], nil
 }
 
 func translateKmRun(run kmRun) (activityRecord, error) {
@@ -134,15 +182,27 @@ func translateKmRun(run kmRun) (activityRecord, error) {
 	case "abandoned":
 		activity.Status, activity.Reason = "stopped", "km is no longer running this run"
 	}
+	var asking []kmChair
 	for _, group := range ensemble.Sections {
 		for _, chair := range group.Chairs {
-			if chair.NeedsInput.Count > 0 && activity.Status == "running" {
-				activity.Status, activity.Reason = "waiting", clip(kmChairName(chair)+" needs input", 100)
-				if chair.NeedsInput.Reason != "" {
-					activity.Reason = clip(activity.Reason+": "+chair.NeedsInput.Reason, 500)
-				}
+			if chair.NeedsInput.Count > 0 {
+				asking = append(asking, chair)
 			}
 		}
+	}
+	if len(asking) > 0 && activity.Status == "running" {
+		first := asking[0]
+		reason := clip(kmChairName(first), 100) + " needs input"
+		if first.NeedsInput.Reason != "" {
+			reason += ": " + first.NeedsInput.Reason
+		}
+		switch more := len(asking) - 1; {
+		case more == 1:
+			reason += "; 1 more chair needs input"
+		case more > 1:
+			reason += fmt.Sprintf("; %d more chairs need input", more)
+		}
+		activity.Status, activity.Reason = "waiting", clip(reason, 500)
 	}
 	if run.Round > 0 || run.MaxRounds > 0 {
 		activity.Round = &activityRound{Current: max(run.Round, 0)}
@@ -151,7 +211,9 @@ func translateKmRun(run kmRun) (activityRecord, error) {
 		}
 	}
 	if usage := run.Usage; usage != nil && (usage.Measured == "all" || usage.Measured == "some") {
-		activity.Counters = &activityCounters{Tokens: &counter{Value: usage.InputTokens + usage.OutputTokens, AtLeast: usage.Measured == "some"}}
+		if total := usage.InputTokens + usage.OutputTokens; total >= 0 && total <= maxKmTokens {
+			activity.Counters = &activityCounters{Tokens: &counter{Value: total, AtLeast: usage.Measured == "some"}}
+		}
 	}
 	return activity, nil
 }
@@ -160,14 +222,18 @@ func kmSteps(run kmRun) []activityStep {
 	var steps []activityStep
 	if run.Score == nil {
 		for _, playing := range run.Playing {
-			if playing.Step != "" && !slices.ContainsFunc(steps, func(s activityStep) bool { return s.Name == playing.Step }) {
-				steps = append(steps, activityStep{Name: clip(playing.Step, 100), State: "active"})
+			name := clip(playing.Step, 100)
+			if name != "" && len(steps) < maxSteps && !slices.ContainsFunc(steps, func(s activityStep) bool { return s.Name == name }) {
+				steps = append(steps, activityStep{Name: name, State: "active"})
 			}
 		}
-		return steps[:min(len(steps), maxSteps)]
+		return steps
 	}
 	stepped := func(list []kmStep, name string) bool {
 		return slices.ContainsFunc(list, func(s kmStep) bool { return s.Step == name })
+	}
+	doneThisRound := func(name string) bool {
+		return slices.ContainsFunc(run.Trail, func(s kmStep) bool { return s.Step == name && (s.Round == run.Round || s.Round == 0) })
 	}
 	for _, step := range run.Score.Steps[:min(len(run.Score.Steps), maxSteps)] {
 		if step.Name == "" {
@@ -177,7 +243,7 @@ func kmSteps(run kmRun) []activityStep {
 		switch {
 		case stepped(run.Current, step.Name):
 			state = "active"
-		case stepped(run.Trail, step.Name):
+		case doneThisRound(step.Name):
 			state = "done"
 		}
 		steps = append(steps, activityStep{Name: clip(step.Name, 100), State: state})
@@ -251,10 +317,11 @@ func loopbackPort(address string) int {
 }
 
 func rfc3339OrEmpty(text string) string {
-	if _, err := time.Parse(time.RFC3339, text); err != nil {
+	parsed, err := time.Parse(time.RFC3339, text)
+	if err != nil {
 		return ""
 	}
-	return text
+	return parsed.Format(time.RFC3339)
 }
 
 func clip(text string, limit int) string {

@@ -166,7 +166,12 @@ seconds. A stage without a `timeout` command gets no disk use and no terminal ta
 them. `--shallow` reads only what the host holds, including jobs, and runs nothing inside any sandbox.
 
 `stage hall` serves the same stages as a page, until Ctrl-C. It prints a URL on `127.0.0.1` with a random port and
-a random token in its path; `--port` picks the port. Nothing is kept on disk and no daemon is left behind.
+a random token in its path; `--port` picks the port. Nothing is kept on disk and no daemon is left behind. One hall
+runs per `STAGE_HOME`: a second is refused and names the running one's pid and port, since two would each read every
+stage and keep idle ones from stopping. The lock is the open file `hall.lock` in the home, which holds only the pid
+and port; the system releases it when the hall's process ends, a crash included, so a lock left behind never blocks
+the next hall.
+Ctrl-C stops it at once, even while sbx is slow to answer, and a second Ctrl-C ends it outright.
 - **What it serves:** a table of stages that expand into their activities, steps, groups and members, and the
   sessions no activity claims. A session, or a member whose session was read, opens to the last lines of its
   terminal, shown as text. Stages that need attention come first: a waiting member or session, a `failed` or
@@ -175,10 +180,11 @@ a random token in its path; `--port` picks the port. Nothing is kept on disk and
 - **What it costs:** the page polls `stage hall` every 2 seconds and is answered from memory, so the page itself
   never runs sbx. `stage hall` runs `sbx ls --json` every 5 seconds and reads each running stage it has a task for
   once a minute, or every 10 seconds while a stage job runs in it, with the same script, bounds and four reads at
-  a time as `stage list`. Each read is an sbx session, so it holds a stage up for 30 seconds after it.
-- **What it accepts:** only `GET` and `HEAD`, only under the token, and only with a `Host` of `127.0.0.1:<port>`
-  or `localhost:<port>`, so another site cannot reach it through DNS rebinding. Every answer carries a
-  Content-Security-Policy that allows only the page's own script, style and data. The page inserts text only, never
+  a time as `stage list`. Each read is an sbx session, so it holds a stage up for 30 seconds after it. A minute's
+  reads do not keep an idle stage running; something running in the stage, such as a stage job, has to.
+- **What it accepts:** only `GET` and `HEAD`, only under the token, and only with a `Host` of `127.0.0.1:<port>`,
+  so another site cannot reach it through DNS rebinding. Every answer carries a Content-Security-Policy that allows
+  only the page's own script, style and data, no `<base>` and no form. The page inserts text only, never
   HTML, and sends nothing to a stage.
 
 ### Activity providers
@@ -1184,7 +1190,9 @@ and what has not been run live yet.
   of its work; stage checks their shape, not that they match the sessions it read.
 - **A read can start a stage that has just stopped.** stage reads only stages `sbx ls` shows running, but `sbx exec`
   starts a stopped sandbox, so a stage that stops in the moment between the two is started again and stops 30
-  seconds after the read. sbx has no exec that leaves a stopped sandbox alone. If the host's 10 seconds run out,
+  seconds after the read. sbx has no exec that leaves a stopped sandbox alone. The window is wider when reads wait
+  their turn behind slow ones, four at a time, and the script cannot tell a sandbox it has just started from one
+  that was running. If the host's 10 seconds run out,
   the script inside can go on for a few more seconds before its own deadline ends it.
 - **A disappeared job holder means a lost job.** A killed holder or a host restart releases its file lock; without
   a recorded result, stage reports `lost`, never success or still running. Output saved so far remains readable.

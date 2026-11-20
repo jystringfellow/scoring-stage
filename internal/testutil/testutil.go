@@ -106,7 +106,19 @@ if [ "$1" = exec ]; then
       mkdir -p "$FAKE_SBX_STATE/agent-path" "$FAKE_SBX_STATE/agent-home"
       HOME="$FAKE_SBX_STATE/agent-home"
       kept=; IFS=:
-      for entry in $PATH; do [ -x "$entry/km" ] || kept="$kept${kept:+:}$entry"; done
+      for entry in $PATH; do
+        if [ -x "$entry/km" ]; then
+          masked="$FAKE_SBX_STATE/masked/$(printf '%s' "$entry" | tr '/' '_')"
+          if [ ! -d "$masked" ]; then
+            building="$masked.$$"
+            mkdir -p "$building"
+            for tool in "$entry"/*; do [ "${tool##*/}" = km ] || ln -s "$tool" "$building/" 2>/dev/null; done
+            mv "$building" "$masked" 2>/dev/null || rm -rf "$building"
+          fi
+          entry=$masked
+        fi
+        kept="$kept${kept:+:}$entry"
+      done
       unset IFS
       PATH="$FAKE_SBX_STATE/agent-path:$kept"
       export HOME PATH
@@ -139,6 +151,7 @@ case "$1 $2" in
   "ls -q") cat "$FAKE_SBX_SANDBOXES" "$FAKE_SBX_STATE/stopped" ;;
   "ls ") printf 'SANDBOX   STATUS\n'; sed 's/$/   running/' "$FAKE_SBX_SANDBOXES"; sed 's/$/   stopped/' "$FAKE_SBX_STATE/stopped" ;;
   "ls --json")
+    if [ -f "$FAKE_SBX_STATE/ls.hang" ]; then sleep 30; fi
     if [ -f "$FAKE_SBX_STATE/listing.json" ]; then cat "$FAKE_SBX_STATE/listing.json"; exit 0; fi
     sep=
     printf '['
@@ -241,6 +254,10 @@ func (f *FakeSbx) HangReads(sandbox string) {
 
 func (f *FakeSbx) FloodReads(sandbox string) {
 	WriteFile(f.t, filepath.Join(f.State, "flood."+sandbox), "")
+}
+
+func (f *FakeSbx) HangListing() {
+	WriteFile(f.t, filepath.Join(f.State, "ls.hang"), "")
 }
 
 func (f *FakeSbx) AgentHome() string {

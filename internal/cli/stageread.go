@@ -78,7 +78,7 @@ type stageRead struct {
 type stageProvider struct {
 	name      string
 	command   []string
-	translate func([]byte) ([]byte, error)
+	translate func([]byte) ([]activityRecord, []string, error)
 }
 
 type readPlan struct {
@@ -181,21 +181,24 @@ func shellQuote(arg string) string {
 	return "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
 }
 
-func providerOutcome(provider stageProvider, frame readFrame) ([]activityRecord, *providerError) {
-	failed := func(reason string) ([]activityRecord, *providerError) {
-		return nil, &providerError{Provider: provider.name, Error: reason}
+func providerOutcome(provider stageProvider, frame readFrame) ([]activityRecord, []providerError) {
+	failed := func(reason string) ([]activityRecord, []providerError) {
+		return nil, []providerError{{Provider: provider.name, Error: reason}}
 	}
 	switch frame.status {
 	case "0":
-		document := []byte(frame.body)
 		if provider.translate != nil {
-			translated, err := provider.translate(document)
+			activities, notes, err := provider.translate([]byte(frame.body))
 			if err != nil {
 				return failed("output refused: " + err.Error())
 			}
-			document = translated
+			var failures []providerError
+			for _, note := range notes {
+				failures = append(failures, providerError{Provider: provider.name, Error: shortPrintable(note, 300)})
+			}
+			return activities, failures
 		}
-		activities, err := parseActivities(provider.name, document)
+		activities, err := parseActivities(provider.name, []byte(frame.body))
 		if err != nil {
 			return failed("output refused: " + err.Error())
 		}
@@ -279,11 +282,9 @@ func readFrames(frames []readFrame, repoDir string, plan readPlan) stageRead {
 				continue
 			}
 			providerSeen[index] = true
-			activities, failure := providerOutcome(plan.providers[index], frame)
+			activities, failures := providerOutcome(plan.providers[index], frame)
 			read.activities = append(read.activities, activities...)
-			if failure != nil {
-				read.providerErrors = append(read.providerErrors, *failure)
-			}
+			read.providerErrors = append(read.providerErrors, failures...)
 		case len(fields) == 3 && fields[0] == "cao" && fields[2] == "sessions" && askedFor(fields[1], ports):
 			servers[fields[1]] = serverState(frame.status)
 		case len(fields) == 4 && fields[0] == "cao" && fields[2] == "terminal" && askedFor(fields[1], ports):

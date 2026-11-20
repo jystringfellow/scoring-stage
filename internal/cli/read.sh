@@ -51,15 +51,19 @@ provider() {
 	index=$1
 	shift
 	program=$(PATH="$PATH:$HOME/.local/bin"; command -v "$1" 2>/dev/null)
+	case $program in
+	/*) [ -x "$program" ] || program= ;;
+	esac
+	left=$(left_for_providers)
 	if [ -z "$program" ]; then
 		frame "provider $index" "" absent
 	elif [ -z "$bounded" ]; then
 		frame "provider $index" "" no-timeout
-	elif [ "$(left_for_providers)" -le 0 ]; then
+	elif [ "$left" -le 0 ]; then
 		frame "provider $index" "" late
 	else
 		shift
-		capture 262145 timeout -k 1 "$(left_for_providers)" "$program" "$@"
+		capture 262145 timeout -k 1 "$left" "$program" "$@"
 		frame "provider $index" "$captured" "$status"
 	fi
 }
