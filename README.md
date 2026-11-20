@@ -143,7 +143,8 @@ carried over. sbx clones the scratch clone into the sandbox, so the sandbox star
 `stage list` prints one line per stage: every task stage has and every `stage-*` sandbox sbx lists, with its state
 (`running` or `stopped` as sbx reports it, `gone` for a task whose sandbox no longer exists, `no task` for a sandbox
 stage has no record of), its repository and base, its age, the fuller of its two disks, its agent sessions and how many
-times it was shipped. `--json` prints the same stages with their agents, sbx's created and last-used times, both
+times it was shipped. `--json` prints the same stages with their agents, sbx's created and last-used times (sbx
+moves last-used when a read ends and again when the sandbox stops, so it is not the last agent activity), both
 disks, every session with the last 40 lines of its terminal, their takes, ships and pull requests, and how many
 stage jobs are running.
 

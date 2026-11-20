@@ -457,3 +457,37 @@ Not checked: a size below sbx's default, a disk that actually fills, and the 90%
 The entry above says the probe branch `agent/probe-fetch/1eeef6d3` was left for the maintainer to delete. It has
 since been deleted: `git ls-remote origin 'refs/heads/agent/probe-fetch/*'` from the host printed nothing. Nothing
 from that run remains on the remote.
+
+## 2026-11-19: the stage read against a real CAO server, providers under real `timeout`, and auto-stop
+
+- **sbx:** 0.51.0, macOS.
+- **stage:** built from ce71722 (the hall's slice 3 with its review fixes; 4200a40 has the same tree).
+- **Credentials:** none real. A temporary `STAGE_HOME` with `[github] mode = "none"` and
+  `[secrets.copilot] command = "echo stage-probe-dummy"`; no agent signed in. The sandbox was made from a clone of
+  kapellmeister at a466e0d, whose repository config was approved with `--approve-repo-config` in that home only.
+- **Restoration:** the one sandbox created, `stage-hall-probe`, was removed with `stage down`, which also removed
+  its scoped secrets. sbx's `credentials.yaml` had the same sha256 before and after
+  (`4998c033b4b70e066939e87ed0f223fea6dee62917823758bc7a58e2ce021008`). No stage process remained. No other
+  sandbox was read or touched: the other 17 that sbx listed had no task in this home and were listed only.
+
+Checked:
+
+- **The read against CAO 2.5.4.** Two sessions were started with `cao launch --headless`, one `claude_code` and one
+  `codex` terminal. `stage list` showed `2 (2 idle)`, and `--json` had both terminals with CAO's `idle`, their
+  profiles and providers, and 26 and 40 tail lines read through `tmux capture-pane`. CAO's `/sessions` also lists
+  its own `cao-server` tmux session, whose terminals list is empty.
+- **The cost of a read.** One read of the stage took 552 ms (`took_ms`), and `stage list` took 1.0 to 1.1 seconds in
+  all with 18 sandboxes listed.
+- **Providers under GNU coreutils `timeout` 9.7.** Two providers each running `sh -c 'sleep 31; echo late'`: the
+  first was stopped at the shared 4 seconds, the second was reported as not run, CAO's sessions and the disk were
+  still read, and the read took 4.6 seconds. Afterwards no provider `sleep` was left in the stage, so `timeout`
+  stopped the shell's child too. A provider that ignores SIGTERM (`trap '' TERM` and a loop) was killed by
+  `-k 1`: the read took 5.6 seconds, and nothing was left.
+- **Auto-stop and `last_used_at`.** With no session open, a read moved sbx's `last_used_at` to the end of the read,
+  and the sandbox stopped 30 seconds after it. On stopping, `last_used_at` moved again, to the time it stopped, so
+  it is not the time of the last agent activity. `stage list` while it was stopped showed `stopped`, read nothing
+  and left it stopped for the 12 seconds watched.
+- `stage exec` on the stopped sandbox started it, as recorded on 2026-11-10.
+
+Not checked: a stage that stops between `sbx ls` and the read, a CAO terminal that is working or waiting, a
+provider that floods, and several stages read at once.
