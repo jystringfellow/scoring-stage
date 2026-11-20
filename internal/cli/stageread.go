@@ -393,7 +393,7 @@ func caoSession(port, id string, frame readFrame) (*sessionRecord, bool) {
 		Name:     shortPrintable(name, 100),
 		Agent:    shortPrintable(terminal.Provider, 64),
 		State:    caoState(terminal.Status),
-		RawState: shortPrintable(terminal.Status, 64),
+		RawState: rawWord(terminal.Status, caoState(terminal.Status)),
 	}, true
 }
 
@@ -417,9 +417,29 @@ func shortPrintable(text string, limit int) string {
 	return string(escaped)
 }
 
+func rawWord(word, state string) string {
+	if word == state {
+		return ""
+	}
+	return shortPrintable(word, 64)
+}
+
 func lastLines(text string) []string {
 	escaped, _ := escapeOutput([]byte(strings.TrimRight(text, "\n")), true)
-	lines := strings.Split(escaped, "\n")
+	var lines []string
+	for _, line := range strings.Split(escaped, "\n") {
+		blank := strings.TrimSpace(line) == ""
+		if blank && (len(lines) == 0 || lines[len(lines)-1] == "") {
+			continue
+		}
+		if blank {
+			line = ""
+		}
+		lines = append(lines, line)
+	}
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
 	if len(lines) > tailLines {
 		lines = lines[len(lines)-tailLines:]
 	}
@@ -428,7 +448,7 @@ func lastLines(text string) []string {
 			lines[i] = string(runes[:tailLineRunes-1]) + "…"
 		}
 	}
-	if len(lines) == 1 && lines[0] == "" {
+	if len(lines) == 0 {
 		return nil
 	}
 	return lines
@@ -450,7 +470,7 @@ func jobSessions(home, slug string) []sessionRecord {
 			ID:       job.ID,
 			Name:     shortPrintable(strings.Join(job.Command, " "), 100),
 			State:    state,
-			RawState: job.State,
+			RawState: rawWord(job.State, state),
 			Tail:     jobTail(home, slug, job.ID),
 		})
 	}

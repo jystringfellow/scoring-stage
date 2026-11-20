@@ -185,7 +185,7 @@ func TestJobsAreSessionsWithTheirOutputTail(t *testing.T) {
 	testutil.WriteFile(t, gate, "")
 	eventually(t, func() bool { return statusOf(t, h, "1").State == "exited" })
 	job := sessionsOf(t, h, "fix", "--shallow").Sessions.Items[0]
-	if job.ID != "1" || job.State != "exited" || job.RawState != "exited" || !slices.Contains(job.Tail, "out") || !strings.HasPrefix(job.Name, "sh -c") {
+	if job.ID != "1" || job.State != "exited" || job.RawState != "" || !slices.Contains(job.Tail, "out") || !strings.HasPrefix(job.Name, "sh -c") {
 		t.Errorf("job %+v", job)
 	}
 }
@@ -309,5 +309,29 @@ func TestTheReadScriptOnlyReads(t *testing.T) {
 		if strings.Contains(line, "curl -") && !strings.Contains(line, "http://127.0.0.1:") {
 			t.Errorf("the read script reaches beyond the stage's loopback: %q", line)
 		}
+	}
+}
+
+func TestATerminalsBlankLinesAreTrimmedAndCollapsed(t *testing.T) {
+	got := lastLines("\n\n   \n\tfirst\n\n  \n\nsecond\nthird\n \n\n")
+	if want := []string{`\x09first`, "", "second", "third"}; !slices.Equal(got, want) {
+		t.Errorf("lines %q, want %q", got, want)
+	}
+	if got := lastLines("\n \n\n"); got != nil {
+		t.Errorf("a blank screen gave %q", got)
+	}
+}
+
+func TestACAOStateThatIsAlsoCAOsWordIsNotRepeated(t *testing.T) {
+	h := readyToRead(t)
+	serveCAO(h, "9889")
+	h.sbx.SetCAO("9889", "/terminals/0badc0de", caoTerminal("0badc0de", "test-0bad", "claude_code", "test", "unknown"))
+	h.sbx.SetCAO("9889", "/terminals/9c0d1e2f", caoTerminal("9c0d1e2f", "docs-9c0d", "copilot", "docs", "idle"))
+	raw := map[string]string{}
+	for _, item := range sessionsOf(t, h, "fix").Sessions.Items {
+		raw[item.ID] = item.State + "/" + item.RawState
+	}
+	if raw["0badc0de"] != "unknown/" || raw["9c0d1e2f"] != "idle/" || raw["1a2b3c4d"] != "working/processing" {
+		t.Errorf("states %v", raw)
 	}
 }
