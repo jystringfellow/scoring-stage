@@ -563,4 +563,9 @@ Checked:
 - **The scoreboard** for the repository went from 9 runs (7 succeeded, 1 failed, 1 stopped, ≥1,127,805 tokens) to 10 runs (8 succeeded, ≥1,169,444 tokens).
 - **Seven minutes after the run:** the stage was `stopped` and still listed with the finished run, `remembered` at 2026-11-20T13:26:08Z. Its saved view `takes/hall-demo/.hall-view.json` was on the host, mode 0600, 1,514 bytes.
 - **After the hall was stopped and started again** on a build of main, the new process listed `hall-demo` without reading it, since it was still stopped. It showed the same finished run, `remembered` at the same 13:26:08Z, and the scoreboard still showed 10 runs (8 succeeded, 1 failed, 1 stopped, ≥1,169,444 tokens). The saved view and the finished runs survived the restart. The title still read `km · duo`, because the view was saved before #73.
-- **Not checked yet:** the stage shown as `gone` from its saved view after `stage down`.
+- **After `stage down hall-demo`** (without `--discard-takes`), on a build of main at f734b3a, at 14:17:02Z: the takes
+  were kept and the sandbox removed. Eight seconds later the running hall listed `hall-demo` as `gone` with its
+  finished run from the saved view, and the scoreboard was unchanged at 10 runs.
+- **A rehearsal after that,** on km from kapellmeister main at ca77363c with four tiers: the row went preflight, then
+  draft, then check, then `km run · duo · round 1 · succeeded · 1m18s · 29k tokens`, with the title from #73. The
+  working drafter's terminal (`3b48b9e6`) and both checkers' terminals were linked.
