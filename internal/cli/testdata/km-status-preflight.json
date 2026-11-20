@@ -1,0 +1,50 @@
+{
+  "runs": [
+    {
+      "schema": 1,
+      "run_id": "20261120-140210-5d1a7c",
+      "path": "/home/agent/.kapellmeister/state/runs/20261120-140210-5d1a7c",
+      "started": "2026-11-20T14:02:10Z",
+      "repository": "github.com/example/api",
+      "command": "run",
+      "liveness": "alive",
+      "cao": "http://127.0.0.1:9889",
+      "ensemble": {
+        "name": "duo",
+        "source": "repository",
+        "sections": [
+          {
+            "name": "desk",
+            "chairs": [
+              { "address": "desk.drafter@duo", "name": "drafter", "part": "drafter", "agent": "codex", "state": "waiting", "terminal": "", "needs_input": { "count": 0, "reason": "" } },
+              { "address": "desk.classifier@duo", "name": "classifier", "part": "classifier", "agent": "claude", "state": "waiting", "terminal": "", "needs_input": { "count": 0, "reason": "" } }
+            ]
+          },
+          {
+            "name": "checks",
+            "chairs": [
+              { "address": "checks.first@duo", "name": "first", "part": "checker", "agent": "claude", "state": "waiting", "terminal": "", "needs_input": { "count": 0, "reason": "" } },
+              { "address": "checks.second@duo", "name": "second", "part": "checker", "agent": "agy", "state": "waiting", "terminal": "", "needs_input": { "count": 0, "reason": "" } }
+            ]
+          }
+        ]
+      },
+      "score": {
+        "name": "draft-and-check",
+        "source": "repository",
+        "rounds": 2,
+        "steps": [
+          { "name": "draft", "kind": "produce", "part": "drafter", "next": { "done": "check" } },
+          { "name": "check", "kind": "review", "part": "checker" }
+        ]
+      },
+      "round": 0,
+      "max_rounds": 2,
+      "current": [{ "step": "preflight", "round": 0, "chairs": [], "started": "2026-11-20T14:02:11Z" }],
+      "trail": [],
+      "playing": [],
+      "updated": "2026-11-20T14:02:11Z",
+      "usage": { "input_tokens": 0, "output_tokens": 0, "measured": "none" }
+    }
+  ]
+}
