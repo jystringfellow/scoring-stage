@@ -547,3 +547,25 @@ Checked:
   agy had no login in the stage.
 - **The script's path:** `stage put` writes to the agent's home, while `stage exec` runs in the repository, so the
   script is `/home/agent/hall-demo.sh`, not `hall-demo.sh`.
+
+## 2026-11-20: the README's pictures of the hall
+
+- **sbx:** 0.51.0, macOS.
+- **stage:** built from main at f734b3a; km built from kapellmeister at e8a2dad2 inside the stage.
+- **Credentials:** real, on the maintainer's go-ahead for this recording only. The temporary `STAGE_HOME` at a
+  neutral path set no real secret, and the agents answered through sbx's global `anthropic` and `openai` secrets.
+- **Runs:** three of kapellmeister's `draft-and-check` score as stage jobs, every chair on claude or codex. Each was
+  approved after one round, in 41 to 52 seconds and 3,753 to 4,790 tokens.
+- **Restoration:** both sandboxes created, `stage-draft-demo` and `stage-docs-pass`, were removed with `stage down`,
+  with their scoped secrets. sbx's `credentials.yaml` had the same sha256 before and after. No stage process
+  remained.
+
+Checked while capturing:
+
+- The table, the graph and the scoreboard drew a live run, its finished runs and the stopped stage as the README
+  pictures show. The pictures are screenshots of the page alone, so the hall's token in the address bar is not in
+  them.
+- **The page lists every `stage-*` sandbox sbx knows,** including sandboxes from other stage homes, in its
+  "not running" line. That line is cropped from the pictures.
+- **`sbx ls --json` once printed a character after its JSON,** and the hall showed "cannot read sbx ls --json" for
+  one refresh while it kept its last view. The next listings were clean.
