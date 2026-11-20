@@ -398,3 +398,24 @@ func TestAStepKmIsOnThatIsNotInTheScoreShowsFirstAsActive(t *testing.T) {
 		t.Errorf("stdout %q", h.stdout.String())
 	}
 }
+
+func TestManyStepsKmIsOnOutsideTheScoreAreBounded(t *testing.T) {
+	h := readyToRead(t)
+	var current []string
+	for i := range 300 {
+		current = append(current, fmt.Sprintf(`{"step":"extra-%d","round":0}`, i))
+	}
+	kmPrints(t, h, kmRuns(t, `{"schema":1,"run_id":"r","command":"run","liveness":"alive","score":{"steps":[{"name":"draft"},{"name":"check"}]},"current":[`+strings.Join(current, ",")+`]}`))
+	fix := sessionsOf(t, h, "fix")
+	if len(fix.Activities) != 1 {
+		t.Fatalf("activities %+v errors %+v", fix.Activities, fix.ProviderErrors)
+	}
+	steps := fix.Activities[0].Steps
+	var names []string
+	for _, step := range steps {
+		names = append(names, step.Name)
+	}
+	if len(steps) > maxSteps || !slices.Contains(names, "draft") || !slices.Contains(names, "check") {
+		t.Errorf("%d steps %v, want a few current steps and the score kept", len(steps), names)
+	}
+}
