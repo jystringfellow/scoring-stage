@@ -155,11 +155,13 @@ and still lists its jobs.
 
 To read a stage, stage runs one fixed script inside it, as `agent`, given on standard input: `df` for the disks,
 GET requests to CAO on the stage's loopback, and `tmux capture-pane` for each terminal's last lines. It never
-sends anything to an agent. It reads only stages that are running and that it has a task for, all at once, and
-gives each 10 seconds and 1 MiB; a stage that does not answer in time shows `timed out` and does not hold up the
-others. Each read is an sbx session, so it delays that stage's auto-stop by 30 seconds. A stage without a `timeout`
-command gets no terminal tails, since stage could not bound them. `--shallow` reads only what the host holds,
-including jobs, and runs nothing inside any sandbox.
+sends anything to an agent. It reads only stages that are running and that it has a task for, four at a time, and
+gives each 10 seconds and 1 MiB, and each part of a read 256 KiB (16 KiB for a terminal's lines); a stage that does
+not answer in time shows `timed out` and does not hold up the others, and a failed read shows beside the stage's
+jobs, as in `timed out + 1 (1 exited)`. A read whose output breaks those bounds, or repeats the read's random
+boundary inside a part, is refused whole. Each read is an sbx session, so it delays that stage's auto-stop by 30
+seconds. A stage without a `timeout` command gets no disk use and no terminal tails, since stage could not bound
+them. `--shallow` reads only what the host holds, including jobs, and runs nothing inside any sandbox.
 
 ### Activity providers
 
@@ -461,7 +463,7 @@ then be permitted by name in the client's permission settings without giving the
 
 | Tool | Inputs | Result |
 | --- | --- | --- |
-| `list` | none | Escaped `stage list` output |
+| `list` | none | Escaped `stage list` output, which reads each running stage as `stage list` does |
 | `up` | `repo`, `slug`; optional `base`, `agents[]`, `books[]` | Command output, or missing approvals and the command for the person to run |
 | `put` | `slug`, `file`; optional `destination` | Command output, using `stage put`'s checks and the source fence below |
 | `exec` | `slug`, `command[]`; optional `timeout_seconds`, `detach` | Status, bounded stdout/stderr and byte counts; with `detach`, a job id and wait/output arguments |

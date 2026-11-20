@@ -216,6 +216,7 @@ func hallPlan(hall config.Hall) readPlan {
 
 func (a *App) readStages(entries []*stageEntry, plan readPlan) {
 	var asking sync.WaitGroup
+	slots := make(chan struct{}, stagesReadAtOnce)
 	for _, entry := range entries {
 		if entry.task == nil || entry.record.State != "running" {
 			continue
@@ -223,6 +224,8 @@ func (a *App) readStages(entries []*stageEntry, plan readPlan) {
 		asking.Add(1)
 		go func() {
 			defer asking.Done()
+			slots <- struct{}{}
+			defer func() { <-slots }()
 			record, read := readStage(entry.task, plan)
 			entry.record.Read, entry.record.Disk, entry.record.Sessions = record, read.disk, read.sessions
 			entry.record.Sessions.Items = append(entry.record.Sessions.Items, entry.jobs...)
@@ -311,18 +314,20 @@ func shortCount(value float64) string {
 }
 
 func sessionsSummary(sessions sessionsRecord) string {
+	failure := map[string]string{"timed_out": "timed out", "unreadable": "unreadable"}[sessions.Status]
 	if len(sessions.Items) == 0 {
-		switch sessions.Status {
-		case "ok":
+		switch {
+		case failure != "":
+			return failure
+		case sessions.Status == "ok":
 			return "0"
-		case "no_cao":
+		case sessions.Status == "no_cao":
 			return "no CAO"
-		case "timed_out":
-			return "timed out"
-		case "unreadable":
-			return "unreadable"
 		}
 		return "-"
+	}
+	if failure != "" {
+		failure += " + "
 	}
 	counts := map[string]int{}
 	for _, session := range sessions.Items {
@@ -334,7 +339,7 @@ func sessionsSummary(sessions sessionsRecord) string {
 			parts = append(parts, fmt.Sprintf("%d %s", counts[state], state))
 		}
 	}
-	return fmt.Sprintf("%d (%s)", len(sessions.Items), strings.Join(parts, ", "))
+	return fmt.Sprintf("%s%d (%s)", failure, len(sessions.Items), strings.Join(parts, ", "))
 }
 
 func repositoryAt(record stageRecord) string {

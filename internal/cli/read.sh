@@ -12,6 +12,12 @@ late() {
 }
 
 frame() {
+	case $2 in
+	*"$b"*)
+		printf '%s begin %s\n\n%s end boundary\n' "$b" "$1" "$b"
+		exit 0
+		;;
+	esac
 	printf '%s begin %s\n%s\n%s end %s\n' "$b" "$1" "$2" "$b" "$3"
 }
 
@@ -26,6 +32,7 @@ capture() {
 		;;
 	*) status=too-large ;;
 	esac
+	[ "$status" = 0 ] || captured=
 }
 
 get() {
@@ -51,12 +58,8 @@ provider() {
 	fi
 }
 
-if [ -n "@DISK@" ]; then
-	if [ -n "$bounded" ]; then
-		capture 65536 timeout -k 1 3 df -Pk / .
-	else
-		capture 65536 df -Pk / .
-	fi
+if [ -n "@DISK@" ] && [ -n "$bounded" ]; then
+	capture 65536 timeout -k 1 3 df -Pk / .
 	frame disk "$captured" "$status"
 fi
 

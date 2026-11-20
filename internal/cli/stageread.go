@@ -25,11 +25,15 @@ import (
 var readScript string
 
 const (
-	stageReadLimit  = 1 << 20
-	tailLines       = 40
-	tailLineRunes   = 300
-	jobTailBytes    = 16 << 10
-	caoServerFormat = "127.0.0.1:%d"
+	stageReadLimit   = 1 << 20
+	stagesReadAtOnce = 4
+	apiPartLimit     = 256 << 10
+	tailPartLimit    = 16 << 10
+	diskPartLimit    = 64 << 10
+	tailLines        = 40
+	tailLineRunes    = 300
+	jobTailBytes     = 16 << 10
+	caoServerFormat  = "127.0.0.1:%d"
 )
 
 var (
@@ -114,7 +118,7 @@ func readOnce(task *Task, plan readPlan) (*readRecord, stageRead) {
 	if err != nil {
 		record.Error = config.Printable(err.Error())
 		status := "unreadable"
-		if strings.Contains(err.Error(), "did not finish") {
+		if timedOut := (*sbx.TimeoutError)(nil); errors.As(err, &timedOut) {
 			status = "timed_out"
 		}
 		return record, stageRead{sessions: sessionsRecord{Status: status, Items: []sessionRecord{}}}
@@ -214,6 +218,12 @@ func parseFrames(output, boundary string) ([]readFrame, error) {
 			return nil, errors.New("the stage's output ended inside a part")
 		}
 		status, next, _ := strings.Cut(closing, "\n")
+		switch {
+		case status == "boundary" || strings.Contains(body, boundary):
+			return nil, errors.New("a part of the stage's output contained the read's boundary")
+		case len(body) > partLimit(name):
+			return nil, fmt.Errorf("the stage sent a part of more than %d bytes", partLimit(name))
+		}
 		frames = append(frames, readFrame{name: name, body: body, status: status})
 		rest = next
 	}
@@ -221,6 +231,16 @@ func parseFrames(output, boundary string) ([]readFrame, error) {
 		return nil, errors.New("the stage sent nothing")
 	}
 	return frames, nil
+}
+
+func partLimit(name string) int {
+	switch {
+	case strings.HasPrefix(name, "tail "):
+		return tailPartLimit
+	case name == "disk":
+		return diskPartLimit
+	}
+	return apiPartLimit
 }
 
 func readFrames(frames []readFrame, repoDir string, plan readPlan) stageRead {

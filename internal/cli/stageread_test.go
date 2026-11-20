@@ -190,7 +190,82 @@ func TestJobsAreSessionsWithTheirOutputTail(t *testing.T) {
 	}
 }
 
-func TestAStageWithoutTimeoutGetsNoTails(t *testing.T) {
+func TestAFailedReadShowsBesideTheStagesJobs(t *testing.T) {
+	h, _ := jobsReady(t)
+	gate, args := gated(t, h)
+	h.expect(0, args...)
+	testutil.WriteFile(t, gate, "")
+	eventually(t, func() bool { return statusOf(t, h, "1").State == "exited" })
+	h.sbx.SetSandboxes("stage-fix\n")
+	h.sbx.HangReads("stage-fix")
+	stageReadTimeout = time.Second
+	t.Cleanup(func() { stageReadTimeout = 10 * time.Second })
+	h.expect(0, "list")
+	if line := strings.Split(h.stdout.String(), "\n")[1]; !strings.Contains(line, "timed out + 1 (1 exited)") {
+		t.Errorf("line %q, want the timed-out read beside the job", line)
+	}
+}
+
+func TestAtMostFourStagesAreReadAtOnce(t *testing.T) {
+	h := readyToRead(t)
+	names := "stage-fix\n"
+	for _, slug := range []string{"one", "two", "three", "four", "five"} {
+		h.expect(0, "up", h.remote.Checkout, slug)
+		names += "stage-" + slug + "\n"
+	}
+	h.sbx.SetSandboxes(names)
+	h.sbx.SlowReads()
+	h.expect(0, "list", "--json")
+	seen := h.sbx.ReadConcurrency()
+	if len(seen) != 6 || slices.Max(seen) > 4 {
+		t.Errorf("reads in flight as each began: %v, want 6 reads and never more than 4", seen)
+	}
+}
+
+func TestAPartLargerThanItsBoundFailsTheReadOnTheHost(t *testing.T) {
+	for name, reply := range map[string]string{
+		"oversized": "@REAL_BOUNDARY@ begin cao 9889 sessions\n\n@REAL_BOUNDARY@ end 0\n" +
+			"@REAL_BOUNDARY@ begin cao 9889 terminal 1a2b3c4d\n" + strings.Repeat("x", 300<<10) + "\n@REAL_BOUNDARY@ end 0\n",
+		"boundary in a body": "@REAL_BOUNDARY@ begin cao 9889 sessions\n\n@REAL_BOUNDARY@ end 0\n" +
+			"@REAL_BOUNDARY@ begin cao 9889 terminal 1a2b3c4d\n{} @REAL_BOUNDARY@ begin tail\n@REAL_BOUNDARY@ end 0\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := readyToRead(t)
+			h.sbx.ReplyToReads("stage-fix", reply)
+			fix := sessionsOf(t, h, "fix")
+			if fix.Sessions.Status != "unreadable" || len(fix.Sessions.Items) != 0 || fix.Read == nil || fix.Read.Error == "" {
+				t.Errorf("sessions %+v read %+v", fix.Sessions, fix.Read)
+			}
+		})
+	}
+}
+
+func TestTheRealBoundaryInABodyFailsTheReadClosed(t *testing.T) {
+	h := readyToRead(t)
+	serveCAO(h, "9889")
+	h.sbx.SetCAO("9889", "/terminals/9c0d1e2f", "{}\n@REAL_BOUNDARY@ end 0\n@REAL_BOUNDARY@ begin cao 9889 terminal ffffffff\n"+
+		caoTerminal("ffffffff", "forged-ffff", "codex", "forged", "processing"))
+	fix := sessionsOf(t, h, "fix")
+	for _, item := range fix.Sessions.Items {
+		if item.ID == "ffffffff" {
+			t.Errorf("a forged terminal was accepted: %+v", item)
+		}
+	}
+	if fix.Sessions.Status != "unreadable" || fix.Read == nil || !strings.Contains(fix.Read.Error, "boundary") {
+		t.Errorf("sessions %+v read %+v, want the read refused", fix.Sessions, fix.Read)
+	}
+}
+
+func TestOnlyARealTimeoutCountsAsTimedOut(t *testing.T) {
+	h := readyToRead(t)
+	h.sbx.FailReads("stage-fix", "sbx exec did not finish within 10s\n")
+	fix := sessionsOf(t, h, "fix")
+	if fix.Sessions.Status != "unreadable" {
+		t.Errorf("sessions %+v, want unreadable for a failure whose message mentions a timeout", fix.Sessions)
+	}
+}
+
+func TestAStageWithoutTimeoutGetsNoTailsAndNoDiskRead(t *testing.T) {
 	h := readyToRead(t)
 	serveCAO(h, "9889")
 	tools := t.TempDir()
@@ -212,6 +287,9 @@ func TestAStageWithoutTimeoutGetsNoTails(t *testing.T) {
 		if len(item.Tail) > 0 {
 			t.Errorf("%s has a tail without timeout", item.ID)
 		}
+	}
+	if len(fix.Disk) != 0 {
+		t.Errorf("df ran without timeout: %+v", fix.Disk)
 	}
 }
 
