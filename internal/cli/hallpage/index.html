@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>stage hall</title>
+<link rel="stylesheet" href="hall.css">
+<script src="hall.js" defer></script>
+</head>
+<body>
+<header>
+  <h1>stage hall</h1>
+  <p id="status" role="status">Reading the stages…</p>
+</header>
+<main>
+  <table id="stages">
+    <thead>
+      <tr>
+        <th scope="col"><span class="hidden">Details</span></th>
+        <th scope="col">Stage</th>
+        <th scope="col">State</th>
+        <th scope="col">Repository</th>
+        <th scope="col">Age</th>
+        <th scope="col">Disk</th>
+        <th scope="col">Sessions</th>
+        <th scope="col">Activity</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+</main>
+<footer>
+  <p>Read only: this page shows what each stage reports and never sends anything to a stage.</p>
+</footer>
+</body>
+</html>

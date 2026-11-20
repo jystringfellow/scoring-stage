@@ -57,6 +57,7 @@ type App struct {
 	ReadSecret       func() ([]byte, error)
 	GitHubAPI        config.GitHubAPI
 	approvalReadOnly bool
+	hallStop         <-chan struct{}
 }
 
 func New() *App {
@@ -117,7 +118,8 @@ commands:
                                     push the sandbox's commit to <prefix><slug>/<sha> from the host
                                     (prefix: [ship] branch_prefix, agent/ unless set)
   take <slug>                       copy the sandbox's takes to ~/.scoring-stage/takes/<slug>/ now
-  list                              list scoring-stage sandboxes
+  list [--json] [--shallow]         list every stage with its sessions and activity
+  hall [--port N]                   serve the same view as a page on 127.0.0.1 until Ctrl-C
   down <slug> [--discard-takes]     keep the sandbox's takes, then remove it, its secrets and the scratch clone
   mcp                               serve sandbox tools over stdio
   version                           print the stage version
@@ -131,7 +133,7 @@ func (a *App) Main(args []string) int {
 	}
 	commands := map[string]func([]string, string) (int, error){
 		"init": a.cmdInit, "setup": a.cmdSetup, "broker": a.cmdBroker, "up": a.cmdUp, "shell": a.cmdShell,
-		"exec": a.cmdExec, "ship": a.cmdShip, "list": a.cmdList, "down": a.cmdDown, "login": a.cmdLogin, "take": a.cmdTake,
+		"exec": a.cmdExec, "ship": a.cmdShip, "list": a.cmdList, "hall": a.cmdHall, "down": a.cmdDown, "login": a.cmdLogin, "take": a.cmdTake,
 		"github": a.cmdGitHub,
 		"token":  a.cmdToken,
 		"put":    a.cmdPut, "job": a.cmdJob, "mcp": a.cmdMCP,

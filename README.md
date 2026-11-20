@@ -85,6 +85,7 @@ stage job wait fix-login "$id" --timeout 10m # exits with the command's status
 stage job stop fix-login "$id"       # alternatively, stop it while it is still running
 stage ship fix-login [--pr]          # review and push the sandbox's HEAD to agent/fix-login/<sha> (or your [ship] branch_prefix) from the host
 stage list [--json] [--shallow]      # one line per stage; --shallow runs nothing inside a sandbox
+stage hall [--port N]                # the same stages as a page on 127.0.0.1, until Ctrl-C
 stage login fix-login                # save the sandbox's agy login for future sandboxes (copy_logins)
 stage take fix-login                 # copy the sandbox's takes to ~/.scoring-stage/takes/fix-login/ now
 stage down fix-login                 # keep the sandbox's takes, then remove it, its scoped secrets and the scratch clone
@@ -163,6 +164,21 @@ jobs, as in `timed out + 1 (1 exited)`. A read whose output breaks those bounds,
 boundary inside a part, is refused whole. Each read is an sbx session, so it delays that stage's auto-stop by 30
 seconds. A stage without a `timeout` command gets no disk use and no terminal tails, since stage could not bound
 them. `--shallow` reads only what the host holds, including jobs, and runs nothing inside any sandbox.
+
+`stage hall` serves the same stages as a page, until Ctrl-C. It prints a URL on `127.0.0.1` with a random port and
+a random token in its path; `--port` picks the port. Nothing is kept on disk and no daemon is left behind.
+- **What it serves:** a table of stages that expand into their activities, steps, groups and members, and the
+  sessions no activity claims. Stages that need attention come first: a waiting member or session, a `failed` or
+  `blocked` activity, a read or provider error, or a disk at 90% or more. Stages that are not running fold into one
+  line.
+- **What it costs:** the page polls `stage hall` every 2 seconds and is answered from memory, so the page itself
+  never runs sbx. `stage hall` runs `sbx ls --json` every 5 seconds and reads each running stage it has a task for
+  once a minute, or every 10 seconds while a stage job runs in it, with the same script, bounds and four reads at
+  a time as `stage list`. Each read is an sbx session, so it holds a stage up for 30 seconds after it.
+- **What it accepts:** only `GET` and `HEAD`, only under the token, and only with a `Host` of `127.0.0.1:<port>`
+  or `localhost:<port>`, so another site cannot reach it through DNS rebinding. Every answer carries a
+  Content-Security-Policy that allows only the page's own script, style and data. The page inserts text only, never
+  HTML, and sends nothing to a stage.
 
 ### Activity providers
 
