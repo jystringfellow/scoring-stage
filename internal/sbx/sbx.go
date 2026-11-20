@@ -128,10 +128,14 @@ func ReadWithin(timeout time.Duration, input io.Reader, limit int64, args ...str
 	case tooMuch:
 		return "", &Error{fmt.Sprintf("sbx %s sent more than %d bytes", strings.Join(args[:min(2, len(args))], " "), limit)}
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
-		return "", &Error{fmt.Sprintf("sbx %s did not finish within %s", strings.Join(args[:min(2, len(args))], " "), timeout)}
+		return "", &TimeoutError{fmt.Sprintf("sbx %s did not finish within %s", strings.Join(args[:min(2, len(args))], " "), timeout)}
 	}
 	return string(data), failure(waitErr, args, string(stderr.kept))
 }
+
+type TimeoutError struct{ msg string }
+
+func (e *TimeoutError) Error() string { return e.msg }
 
 // Stream hands sbx's output to consume as it arrives, and consume must read it
 // to the end. sbx is stopped when consume fails or the timeout passes.

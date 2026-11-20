@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -91,9 +92,19 @@ if [ "$1" = exec ]; then
       printf '%s\n' "$sandbox" >> "$FAKE_SBX_STATE/reads.log"
       if [ -f "$FAKE_SBX_STATE/hang.$sandbox" ]; then cat > /dev/null; sleep 30; fi
       if [ -f "$FAKE_SBX_STATE/flood.$sandbox" ]; then cat > /dev/null; head -c 2000000 /dev/zero | tr '\0' x; exit 0; fi
+      if [ -f "$FAKE_SBX_STATE/fail.$sandbox" ]; then cat > /dev/null; cat "$FAKE_SBX_STATE/fail.$sandbox" >&2; exit 1; fi
+      script=$(cat)
+      FAKE_READ_BOUNDARY=$(printf '%s\n' "$script" | sed -n 's/^b=//p')
+      export FAKE_READ_BOUNDARY
+      if [ -f "$FAKE_SBX_STATE/reply.$sandbox" ]; then sed "s/@REAL_BOUNDARY@/$FAKE_READ_BOUNDARY/g" "$FAKE_SBX_STATE/reply.$sandbox"; exit 0; fi
+      if [ -f "$FAKE_SBX_STATE/reads.slow" ]; then
+        mkdir -p "$FAKE_SBX_STATE/active"; : > "$FAKE_SBX_STATE/active/$$"
+        ls "$FAKE_SBX_STATE/active" | wc -l >> "$FAKE_SBX_STATE/concurrency.log"
+        sleep 1; rm -f "$FAKE_SBX_STATE/active/$$"
+      fi
       if [ -d "$dir" ]; then cd "$dir" || exit 125; fi
       if [ -f "$FAKE_SBX_STATE/read.path" ]; then PATH=$(cat "$FAKE_SBX_STATE/read.path"); export PATH; fi
-      exec "$@" ;;
+      printf '%s\n' "$script" | "$@"; exit $? ;;
     *" -i "*) for last; do :; done; if [ -f "$FAKE_SBX_STATE/feed.hang" ]; then sleep 30; fi; if [ -f "$FAKE_SBX_STATE/feed.ignore" ]; then exit 0; fi; if [ -f "$FAKE_SBX_STATE/feed.fail" ]; then cat > /dev/null; cat "$FAKE_SBX_STATE/feed.fail" >&2; exit 1; fi; mkdir -p "$FAKE_SBX_STATE/box"; cat > "$FAKE_SBX_STATE/box/$(basename "$last")"; case " $* " in *"tar -xf -"*) echo stage-gear-unpacked ;; esac ;;
     *" cat "*) for last; do :; done; file="$FAKE_SBX_STATE/box/$(basename "$last")"; [ -s "$file" ] || { echo "cat: No such file or directory" >&2; exit 1; }; cat "$file" ;;
     *) if [ -f "$FAKE_SBX_STATE/exec.run" ]; then
@@ -146,7 +157,7 @@ dir="$FAKE_SBX_STATE/cao/$port"
 [ -f "$dir/hang" ] && { sleep 30; exit 28; }
 file="$dir/$(printf '%s' "/${rest#*/}" | tr '/' '_')"
 [ -f "$file" ] || exit 22
-cat "$file"
+if grep -q @REAL_BOUNDARY@ "$file"; then sed "s/@REAL_BOUNDARY@/$FAKE_READ_BOUNDARY/g" "$file"; else cat "$file"; fi
 `
 
 const fakeTmux = `#!/bin/sh
@@ -213,6 +224,30 @@ func (f *FakeSbx) HangReads(sandbox string) {
 
 func (f *FakeSbx) FloodReads(sandbox string) {
 	WriteFile(f.t, filepath.Join(f.State, "flood."+sandbox), "")
+}
+
+func (f *FakeSbx) FailReads(sandbox, stderr string) {
+	WriteFile(f.t, filepath.Join(f.State, "fail."+sandbox), stderr)
+}
+
+func (f *FakeSbx) ReplyToReads(sandbox, reply string) {
+	WriteFile(f.t, filepath.Join(f.State, "reply."+sandbox), reply)
+}
+
+func (f *FakeSbx) SlowReads() {
+	WriteFile(f.t, filepath.Join(f.State, "reads.slow"), "")
+}
+
+func (f *FakeSbx) ReadConcurrency() []int {
+	var seen []int
+	for _, line := range strings.Fields(ReadFile(f.t, filepath.Join(f.State, "concurrency.log"))) {
+		n, err := strconv.Atoi(line)
+		if err != nil {
+			f.t.Fatalf("concurrency.log has %q", line)
+		}
+		seen = append(seen, n)
+	}
+	return seen
 }
 
 func (f *FakeSbx) SetReadPath(path string) {
