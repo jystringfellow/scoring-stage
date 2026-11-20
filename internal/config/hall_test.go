@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jystringfellow/scoring-stage/internal/testutil"
 )
@@ -114,6 +115,24 @@ func TestABuiltinProviderNameCannotBeRedefined(t *testing.T) {
 		_, err := hallSettings(t, "[hall.provider."+name+"]\ncommand = [\"x\"]\n")
 		if err == nil || !strings.Contains(err.Error(), "built in") {
 			t.Errorf("%s: error %v", name, err)
+		}
+	}
+}
+
+func TestTheHallKeepsItsViewsThirtyDaysUnlessTheUserSaysOtherwise(t *testing.T) {
+	settings, err := hallSettings(t, "")
+	if err != nil || settings.Hall.Keep != 30*24*time.Hour {
+		t.Fatalf("default keep %v, %v", settings.Hall.Keep, err)
+	}
+	for text, want := range map[string]time.Duration{`"7d"`: 7 * 24 * time.Hour, `"12h"`: 12 * time.Hour, `"0"`: 0, `"3650d"`: 3650 * 24 * time.Hour} {
+		settings, err := hallSettings(t, "[hall]\nkeep = "+text+"\n")
+		if err != nil || settings.Hall.Keep != want {
+			t.Errorf("keep = %s: %v, %v", text, settings.Hall.Keep, err)
+		}
+	}
+	for _, text := range []string{`"soon"`, `"-1d"`, `"3651d"`, `7`, `"7"`, `"1.5d"`} {
+		if _, err := hallSettings(t, "[hall]\nkeep = "+text+"\n"); err == nil || !strings.Contains(err.Error(), "keep") {
+			t.Errorf("keep = %s: error %v", text, err)
 		}
 	}
 }

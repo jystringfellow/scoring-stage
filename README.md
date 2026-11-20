@@ -182,6 +182,12 @@ Ctrl-C stops it at once, even while sbx is slow to answer, and a second Ctrl-C e
   "Earlier", with when it was last seen, and the row names it when nothing newer runs. When a stage's job ends, the
   hall reads the stage once more, in the half minute before sbx stops it, so a run's end is caught. All of this is
   in memory and goes when the hall stops.
+- **What it keeps on disk:** after each read, the hall writes its view of the stage, without terminal lines, to
+  `takes/<slug>/.hall-view.json` in your stage home, on the host and never in the stage, so it outlives the hall and
+  `stage down`, which keeps takes. A stopped stage then shows its last view after the hall restarts, and a stage
+  whose sandbox and task are gone shows as `gone` with it. `[hall] keep` in your config says for how long: `"30d"`
+  by default, whole days or hours such as `"7d"` or `"12h"`, or `"0"` to keep nothing. Older views are deleted. A
+  view is at most 1 MiB, and when read back it is checked again as untrusted, as on its first read, and escaped.
 - **The graph:** the Graph button draws each expanded stage as a tree from the stage to its activities, their
   groups and their members, with a state dot on each, the active step on each activity and the agent on each member.
   Hovering a node shows it whole. On a narrow screen the page keeps to the table. A link can open the page with a
@@ -207,6 +213,7 @@ refused, since the hall runs these commands inside every stage.
 [hall]
 providers = ["kapellmeister", "loop"]  # order; default: every built-in provider, then yours by name
 cao_ports = [9889, 9890]        # CAO servers to read on each stage's loopback; default [9889]
+keep = "30d"                    # how long the hall keeps each stage's last view on disk; "0" keeps nothing
 [hall.provider.loop]
 command = ["loop", "status", "--format", "stage-activity"]
 ```
