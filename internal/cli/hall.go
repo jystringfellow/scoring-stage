@@ -47,6 +47,7 @@ type hallStage struct {
 	Attention []string        `json:"attention"`
 	Summary   hallSummary     `json:"summary"`
 	Unclaimed []sessionRecord `json:"unclaimed_sessions"`
+	Graph     hallGraph       `json:"graph"`
 }
 
 type hallSummary struct {
@@ -268,6 +269,7 @@ func describeForHall(record stageRecord, now time.Time) hallStage {
 			stage.Unclaimed = append(stage.Unclaimed, session)
 		}
 	}
+	stage.Graph = stageGraph(record, stage.Unclaimed)
 	return stage
 }
 

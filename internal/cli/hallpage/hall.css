@@ -178,3 +178,77 @@ button {
     display: none;
   }
 }
+
+nav {
+  display: flex;
+  gap: 6px;
+}
+
+nav button[aria-pressed="true"] {
+  border-color: var(--fg);
+  font-weight: 600;
+}
+
+button {
+  transition: border-color 120ms ease-in-out;
+}
+
+#graph h2 {
+  font-size: 14px;
+  margin: 16px 0 6px;
+}
+
+#graph svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.node rect {
+  fill: var(--row);
+  stroke: var(--line);
+}
+
+.node-stage rect {
+  stroke: var(--fg);
+}
+
+.node-more rect {
+  stroke-dasharray: 4 3;
+}
+
+.node text {
+  fill: var(--fg);
+  font-size: 12px;
+}
+
+.edge {
+  fill: none;
+  stroke: var(--muted);
+}
+
+.dot {
+  fill: var(--idle);
+}
+
+.dot.state-working,
+.dot.state-running {
+  fill: var(--working);
+}
+
+.dot.state-waiting,
+.dot.state-blocked {
+  fill: var(--waiting);
+}
+
+.dot.state-failed,
+.dot.state-gone {
+  fill: var(--bad);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

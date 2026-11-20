@@ -177,6 +177,10 @@ Ctrl-C stops it at once, even while sbx is slow to answer, and a second Ctrl-C e
   terminal, shown as text. Stages that need attention come first: a waiting member or session, a `failed` or
   `blocked` activity, a read or provider error, or a disk at 90% or more. Stages that are not running fold into one
   line.
+- **The graph:** the Graph button draws each expanded stage as a tree from the stage to its activities, their
+  groups and their members, with a state dot on each, the active step on each activity and the agent on each member.
+  Hovering a node shows it whole. On a narrow screen the page keeps to the table. A link can open the page with a
+  view and stages chosen, as in `<url>#view=graph&open=fix-login,docs-pass`.
 - **What it costs:** the page polls `stage hall` every 2 seconds and is answered from memory, so the page itself
   never runs sbx. `stage hall` runs `sbx ls --json` every 5 seconds and reads each running stage it has a task for
   once a minute, or every 10 seconds while a stage job runs in it, with the same script, bounds and four reads at

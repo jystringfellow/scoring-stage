@@ -11,8 +11,13 @@
 <header>
   <h1>stage hall</h1>
   <p id="status" role="status">Reading the stages…</p>
+  <nav aria-label="Views">
+    <button type="button" data-view="table" aria-pressed="true">Table</button>
+    <button type="button" data-view="graph" aria-pressed="false">Graph</button>
+  </nav>
 </header>
 <main>
+  <section id="graph" hidden aria-label="Graph of expanded stages"></section>
   <table id="stages">
     <thead>
       <tr>
