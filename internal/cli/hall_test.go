@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -140,7 +142,7 @@ func TestHallServesTheStagesOnLoopbackBehindAToken(t *testing.T) {
 			t.Errorf("%q: %s", path, response.Status)
 		}
 		for header, want := range map[string]string{
-			"Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; frame-ancestors 'none'",
+			"Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
 			"X-Content-Type-Options":  "nosniff",
 			"Referrer-Policy":         "no-referrer",
 			"Cache-Control":           "no-store",
@@ -175,7 +177,9 @@ func TestHallAnswersOnlyGETsForItsTokenAndItsOwnHost(t *testing.T) {
 		{"DELETE", hall.url, "", http.StatusMethodNotAllowed},
 		{"GET", hall.url + "api/hall", "attacker.example:" + hall.port, http.StatusForbidden},
 		{"GET", hall.url + "api/hall", "127.0.0.1", http.StatusForbidden},
-		{"GET", hall.url + "api/hall", "localhost:" + hall.port, http.StatusOK},
+		{"GET", hall.url + "api/hall", "localhost:" + hall.port, http.StatusForbidden},
+		{"GET", hall.url + "api/hall", "127.0.0.1:" + hall.port, http.StatusOK},
+		{"GET", root + "/favicon.ico", "", http.StatusNoContent},
 	} {
 		if got := hallGet(t, check.method, check.url, check.host).StatusCode; got != check.want {
 			t.Errorf("%s %s Host %q: %d, want %d", check.method, check.url, check.host, got, check.want)
@@ -186,10 +190,73 @@ func TestHallAnswersOnlyGETsForItsTokenAndItsOwnHost(t *testing.T) {
 func TestHallListensOnlyOnLoopback(t *testing.T) {
 	h := readyToRead(t)
 	hall := startHall(t, h, "--port", "0")
-	if !strings.HasPrefix(hall.url, "http://127.0.0.1:") {
-		t.Errorf("url %s", hall.url)
+	addresses, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tried := 0
+	for _, address := range addresses {
+		ip, ok := address.(*net.IPNet)
+		if !ok || ip.IP.IsLoopback() || ip.IP.To4() == nil {
+			continue
+		}
+		tried++
+		if conn, err := net.DialTimeout("tcp", net.JoinHostPort(ip.IP.String(), hall.port), time.Second); err == nil {
+			conn.Close()
+			t.Errorf("the hall answered on %s", ip.IP)
+		}
+	}
+	if tried == 0 {
+		t.Log("this machine has no other IPv4 address to try")
 	}
 	h.expect(2, "hall", "--port", "70000")
+}
+
+func TestOnlyOneHallRunsForAStageHomeAndASecondSaysWhereTheFirstIs(t *testing.T) {
+	h := readyToRead(t)
+	testutil.WriteFile(t, filepath.Join(h.home, "hall.lock"), "pid 999999 port 1\n")
+	hall := startHall(t, h)
+	token := strings.Trim(strings.TrimPrefix(hall.url, "http://127.0.0.1:"+hall.port), "/")
+	if lock := testutil.ReadFile(t, filepath.Join(h.home, "hall.lock")); strings.Contains(lock, token) {
+		t.Errorf("the lock file holds the token: %q", lock)
+	}
+	second := make(chan int, 1)
+	go func() { second <- h.stage("hall") }()
+	select {
+	case code := <-second:
+		stderr := h.stderr.String()
+		if code == 0 || !strings.Contains(stderr, "already running") ||
+			!strings.Contains(stderr, fmt.Sprintf("pid %d", os.Getpid())) || !strings.Contains(stderr, "http://127.0.0.1:"+hall.port+"/") {
+			t.Errorf("second hall exited %d: %s", code, stderr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("a second stage hall started for the same STAGE_HOME")
+	}
+}
+
+func TestHallStopsAtOnceWhileTheListingHangs(t *testing.T) {
+	h := readyToRead(t)
+	quickHall(t, 100*time.Millisecond, time.Hour, time.Hour)
+	hall := startHall(t, h)
+	h.sbx.HangListing()
+	time.Sleep(400 * time.Millisecond)
+	started := time.Now()
+	hall.stop()
+	if took := time.Since(started); took > 2*time.Second {
+		t.Errorf("stopping took %s", took)
+	}
+}
+
+func TestAReadIsTimedFromWhenItReturned(t *testing.T) {
+	h := readyToRead(t)
+	h.sbx.SlowReads()
+	quickHall(t, 100*time.Millisecond, 2*time.Second, time.Hour)
+	hall := startHall(t, h)
+	time.Sleep(1600 * time.Millisecond)
+	hall.stop()
+	if reads := strings.Fields(testutil.ReadFile(t, filepath.Join(h.sbx.State, "reads.log"))); len(reads) != 1 {
+		t.Errorf("reads %v within 1.6 s of a read that took 1 s, with a 2 s cadence", reads)
+	}
 }
 
 func TestThePageNeverCausesAnSbxCall(t *testing.T) {
@@ -278,5 +345,15 @@ func TestThePageInsertsOnlyTextAndNamesNoTool(t *testing.T) {
 		if word := toolWords.FindString(source); word != "" {
 			t.Errorf("%s names a tool's own word %q", name, word)
 		}
+	}
+}
+
+func TestAnOpenTerminalShowsItsNewestLines(t *testing.T) {
+	page, err := os.ReadFile("hallpage/hall.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(page), "lines.scrollTop = lines.scrollHeight") {
+		t.Errorf("an open terminal is not scrolled to its last line")
 	}
 }

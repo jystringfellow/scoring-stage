@@ -239,7 +239,7 @@ func readEntries(entries []*stageEntry, plan readPlan) map[*stageEntry]stageRead
 			defer func() { <-slots }()
 			record, read := readStage(entry.task, plan)
 			mu.Lock()
-			readings[entry] = stageReading{record: record, read: read}
+			readings[entry] = stageReading{at: time.Now(), record: record, read: read}
 			mu.Unlock()
 		}()
 	}

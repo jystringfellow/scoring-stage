@@ -8,10 +8,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -28,13 +30,14 @@ var hallPage embed.FS
 
 const (
 	hallFormat        = "stage-hall/1"
-	hallSecurityRules = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; frame-ancestors 'none'"
+	hallSecurityRules = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 )
 
 var (
 	hallListEvery    = 5 * time.Second
 	hallReadEvery    = 60 * time.Second
 	hallJobReadEvery = 10 * time.Second
+	hallListTimeout  = 10 * time.Second
 	hallAssets       = map[string]string{"": "index.html", "hall.js": "hall.js", "hall.css": "hall.css"}
 	hallContentTypes = map[string]string{"index.html": "text/html; charset=utf-8", "hall.js": "text/javascript; charset=utf-8", "hall.css": "text/css; charset=utf-8"}
 )
@@ -81,6 +84,11 @@ func (a *App) cmdHall(args []string, home string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	lock, err := lockHall(home)
+	if err != nil {
+		return 0, err
+	}
+	defer lock.Close()
 	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(*port)))
 	if err != nil {
 		return 0, errorf("cannot listen on 127.0.0.1: %v", err)
@@ -89,6 +97,7 @@ func (a *App) cmdHall(args []string, home string) (int, error) {
 	served.refresh(time.Now())
 	token := newHallToken()
 	bound := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
+	recordHall(lock, bound)
 	server := &http.Server{Handler: served.handler(token, bound), ReadHeaderTimeout: 5 * time.Second}
 	go server.Serve(listener)
 
@@ -105,6 +114,7 @@ func (a *App) cmdHall(args []string, home string) (int, error) {
 	}
 	fmt.Fprintf(a.Stdout, "stage hall: http://127.0.0.1:%s/%s/ (Ctrl-C stops it)\n", bound, token)
 	served.keepFresh(ctx)
+	cancel()
 	shutdown, done := context.WithTimeout(context.Background(), 5*time.Second)
 	defer done()
 	server.Shutdown(shutdown)
@@ -119,6 +129,34 @@ func newHallToken() string {
 	return hex.EncodeToString(token)
 }
 
+func lockHall(home string) (*os.File, error) {
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		return nil, err
+	}
+	lock, err := os.OpenFile(filepath.Join(home, "hall.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		defer lock.Close()
+		where := ""
+		var pid, port int
+		if text, err := io.ReadAll(io.LimitReader(lock, 128)); err == nil {
+			if _, err := fmt.Sscanf(string(text), "pid %d port %d", &pid, &port); err == nil {
+				where = fmt.Sprintf(" (pid %d, http://127.0.0.1:%d/ with its own token)", pid, port)
+			}
+		}
+		return nil, errorf("a stage hall is already running for this STAGE_HOME%s; one hall reads every stage, and a second would keep idle stages from stopping", where)
+	}
+	return lock, nil
+}
+
+func recordHall(lock *os.File, port string) {
+	if err := lock.Truncate(0); err == nil {
+		lock.WriteAt([]byte(fmt.Sprintf("pid %d port %s\n", os.Getpid(), port)), 0)
+	}
+}
+
 func (h *hall) keepFresh(ctx context.Context) {
 	ticker := time.NewTicker(hallListEvery)
 	defer ticker.Stop()
@@ -127,14 +165,23 @@ func (h *hall) keepFresh(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
-			h.refresh(now)
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				h.refresh(now)
+			}()
+			select {
+			case <-ctx.Done():
+				return
+			case <-done:
+			}
 		}
 	}
 }
 
 func (h *hall) refresh(now time.Time) {
 	view := hallView{Format: hallFormat, ReadAt: now.UTC().Format(time.RFC3339), Stages: []hallStage{}}
-	listed, err := sbx.List()
+	listed, err := sbx.ListWithin(hallListTimeout)
 	var entries []*stageEntry
 	if err == nil {
 		entries, err = collectStages(h.home, listed)
@@ -166,7 +213,6 @@ func (h *hall) refresh(now time.Time) {
 		}
 	}
 	for entry, reading := range readEntries(due, h.plan) {
-		reading.at = now
 		h.readings[entry.record.Slug] = reading
 	}
 	for slug := range h.readings {
@@ -259,7 +305,7 @@ func (h *hall) handler(token, port string) http.Handler {
 		headers.Set("Referrer-Policy", "no-referrer")
 		headers.Set("Cache-Control", "no-store")
 		headers.Set("X-Frame-Options", "DENY")
-		if r.Host != "127.0.0.1:"+port && r.Host != "localhost:"+port {
+		if r.Host != "127.0.0.1:"+port {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
@@ -269,6 +315,10 @@ func (h *hall) handler(token, port string) http.Handler {
 			return
 		}
 		path := r.URL.EscapedPath()
+		if path == "/favicon.ico" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if len(path) < len(prefix) || subtle.ConstantTimeCompare([]byte(path[:len(prefix)]), []byte(prefix)) != 1 {
 			http.NotFound(w, r)
 			return

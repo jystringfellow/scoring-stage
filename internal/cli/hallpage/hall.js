@@ -118,10 +118,19 @@ function addTail(item, stage, session) {
   const tail = el("details", null, "tail");
   tail.open = openTails.has(key);
   tail.appendChild(el("summary", "terminal, last " + session.tail.length + (session.tail.length === 1 ? " line" : " lines")));
-  tail.appendChild(el("pre", session.tail.join("\n")));
+  const lines = el("pre", session.tail.join("\n"));
+  tail.appendChild(lines);
+  const showLatest = () => {
+    lines.scrollTop = lines.scrollHeight;
+  };
   tail.addEventListener("toggle", () => {
+    if (tail.open === openTails.has(key)) {
+      showLatest();
+      return;
+    }
     if (tail.open) {
       openTails.add(key);
+      showLatest();
     } else {
       openTails.delete(key);
     }

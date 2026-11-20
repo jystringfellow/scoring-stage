@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -199,5 +200,113 @@ func TestAKmStatusCapturedFromARealRunTranslates(t *testing.T) {
 	}
 	if tokens := run.Counters.Tokens; tokens == nil || tokens.Value != 19445 || tokens.AtLeast {
 		t.Errorf("tokens %+v", run.Counters.Tokens)
+	}
+}
+
+func kmRuns(t *testing.T, runs ...string) string {
+	t.Helper()
+	return `{"runs":[` + strings.Join(runs, ",") + `]}`
+}
+
+func TestLiveKmRunsComeFirstAndRunsLeftOutAreSaid(t *testing.T) {
+	h := readyToRead(t)
+	var runs []string
+	for i := range 3 {
+		runs = append(runs, fmt.Sprintf(`{"run_id":"old-%d","command":"run","liveness":"abandoned"}`, i))
+	}
+	for i := range 15 {
+		runs = append(runs, fmt.Sprintf(`{"run_id":"live-%d","command":"run","liveness":"alive"}`, i))
+	}
+	kmPrints(t, h, kmRuns(t, runs...))
+	fix := sessionsOf(t, h, "fix")
+	alive := 0
+	for _, activity := range fix.Activities {
+		if strings.HasPrefix(activity.ID, "live-") {
+			alive++
+		}
+	}
+	if len(fix.Activities) != 16 || alive != 15 {
+		t.Errorf("%d activities, %d of them live, want 16 with every live run", len(fix.Activities), alive)
+	}
+	if len(fix.ProviderErrors) != 1 || !strings.Contains(fix.ProviderErrors[0].Error, "2 more km runs were left out") {
+		t.Errorf("errors %+v", fix.ProviderErrors)
+	}
+}
+
+func TestABadKmRunIsSkippedAndTheOthersKept(t *testing.T) {
+	h := readyToRead(t)
+	kmPrints(t, h, kmRuns(t,
+		`{"run_id":"r1","command":"run","liveness":"alive"}`,
+		`{"run_id":"a b","command":"run","liveness":"alive"}`,
+		`null`,
+		`{"run_id":"r1","command":"tune","liveness":"alive"}`,
+		`{"schema":2,"run_id":"r2"}`,
+		`{"run_id":"big","command":"run","liveness":"alive","usage":{"input_tokens":1e308,"output_tokens":1e308,"measured":"all"}}`,
+	))
+	fix := sessionsOf(t, h, "fix")
+	var ids []string
+	for _, activity := range fix.Activities {
+		ids = append(ids, activity.ID)
+		if activity.ID == "big" && activity.Counters != nil {
+			t.Errorf("tokens past what a number holds are shown: %+v", activity.Counters)
+		}
+	}
+	if !slices.Equal(ids, []string{"r1", "big"}) {
+		t.Errorf("activities %v, want r1 and big kept", ids)
+	}
+	var reasons []string
+	for _, failure := range fix.ProviderErrors {
+		if failure.Provider != "kapellmeister" || strings.Contains(failure.Error, "json:") {
+			t.Errorf("error %+v", failure)
+		}
+		reasons = append(reasons, failure.Error)
+	}
+	joined := strings.Join(reasons, "\n")
+	for _, want := range []string{"needs an id", "not a run", "repeats the run r1", "schema 2"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("errors %q lack %q", joined, want)
+		}
+	}
+}
+
+func TestAStepFromAnEarlierRoundIsPendingAgainAndTimesAreToTheSecond(t *testing.T) {
+	h := readyToRead(t)
+	kmPrints(t, h, kmRuns(t, `{"schema":1,"run_id":"r","command":"run","liveness":"alive","round":2,"max_rounds":3,
+		"started":"2026-11-20T06:39:58.993343465Z","updated":"2026-11-20T06:46:15.173096853Z",
+		"score":{"steps":[{"name":"plan"},{"name":"implement"},{"name":"review"}]},
+		"current":[{"step":"implement","round":2}],
+		"trail":[{"step":"plan","round":0},{"step":"implement","round":1},{"step":"review","round":1,"exit":"changes"}],
+		"ensemble":{"name":"e","sections":[{"name":"s","chairs":[
+			{"name":"lead","state":"playing","needs_input":{"count":1,"reason":"which redirect to keep"}},
+			{"name":"second","state":"playing","needs_input":{"count":2,"reason":"later"}}]}]}}`))
+	run := sessionsOf(t, h, "fix").Activities[0]
+	var steps []string
+	for _, step := range run.Steps {
+		steps = append(steps, step.Name+"="+step.State)
+	}
+	if want := []string{"plan=done", "implement=active", "review=pending"}; !slices.Equal(steps, want) {
+		t.Errorf("steps %v, want %v", steps, want)
+	}
+	if run.StartedAt != "2026-11-20T06:39:58Z" || run.UpdatedAt != "2026-11-20T06:46:15Z" {
+		t.Errorf("times %s %s", run.StartedAt, run.UpdatedAt)
+	}
+	if run.Status != "waiting" || run.Reason != "lead needs input: which redirect to keep; 1 more chair needs input" {
+		t.Errorf("status %s reason %q", run.Status, run.Reason)
+	}
+}
+
+func TestAKmThatCannotBeRunIsAbsentAndRepeatedStepsCollapse(t *testing.T) {
+	h := readyToRead(t)
+	kmPrints(t, h, `{"runs":[]}`)
+	if err := os.Chmod(filepath.Join(h.sbx.AgentHome(), ".local", "bin", "km"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if fix := sessionsOf(t, h, "fix"); len(fix.ProviderErrors) != 0 {
+		t.Errorf("a km that is not executable reported %+v", fix.ProviderErrors)
+	}
+	long := strings.Repeat("s", 120)
+	kmPrints(t, h, kmRuns(t, `{"run_id":"r","command":"run","ensemble":"e","liveness":"alive","playing":[{"step":"`+long+`","chair":"a"},{"step":"`+long+`","chair":"b"}]}`))
+	if steps := sessionsOf(t, h, "fix").Activities[0].Steps; len(steps) != 1 {
+		t.Errorf("steps %+v, want the repeated step once", steps)
 	}
 }

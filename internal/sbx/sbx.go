@@ -293,6 +293,20 @@ func List() ([]Listed, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseListing(text)
+}
+
+func ListWithin(timeout time.Duration) ([]Listed, error) {
+	text, err := ReadWithin(timeout, strings.NewReader(""), listingLimit, "ls", "--json")
+	if err != nil {
+		return nil, err
+	}
+	return parseListing(text)
+}
+
+const listingLimit = 16 << 20
+
+func parseListing(text string) ([]Listed, error) {
 	var entries []struct {
 		Name       *string `json:"name"`
 		Status     string  `json:"status"`
