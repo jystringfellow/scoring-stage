@@ -113,6 +113,21 @@ button {
   padding-left: 18px;
 }
 
+.tail summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.tail pre {
+  margin: 4px 0 8px;
+  padding: 8px;
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .muted {
   color: var(--muted);
 }
