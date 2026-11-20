@@ -22,9 +22,9 @@ var (
 )
 
 type diskUse struct {
-	Mount       string
-	UsedPercent int
-	AvailableKB int64
+	Mount       string `json:"mount"`
+	UsedPercent int    `json:"used_percent"`
+	AvailableKB int64  `json:"available_kb"`
 }
 
 func (d diskUse) free() string {

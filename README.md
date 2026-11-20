@@ -84,7 +84,7 @@ stage job output fix-login "$id" --follow
 stage job wait fix-login "$id" --timeout 10m # exits with the command's status
 stage job stop fix-login "$id"       # alternatively, stop it while it is still running
 stage ship fix-login [--pr]          # review and push the sandbox's HEAD to agent/fix-login/<sha> (or your [ship] branch_prefix) from the host
-stage list
+stage list [--json] [--shallow]      # one line per stage; --shallow runs nothing inside a sandbox
 stage login fix-login                # save the sandbox's agy login for future sandboxes (copy_logins)
 stage take fix-login                 # copy the sandbox's takes to ~/.scoring-stage/takes/fix-login/ now
 stage down fix-login                 # keep the sandbox's takes, then remove it, its scoped secrets and the scratch clone
@@ -139,6 +139,15 @@ The scratch clone's `origin/*` refs come from GitHub as of `stage up`. Its only 
 repository's default branch, both at GitHub's commit, with the base checked out; branches of your checkout are not
 carried over. sbx clones the scratch clone into the sandbox, so the sandbox starts on the base, tracking
 `origin/<base>`.
+
+`stage list` prints one line per stage: every task stage has and every `stage-*` sandbox sbx lists, with its state
+(`running` or `stopped` as sbx reports it, `gone` for a task whose sandbox no longer exists, `no task` for a sandbox
+stage has no record of), its repository and base, its age, the fuller of its two disks and how many times it was
+shipped. `--json` prints the same stages with their agents, sbx's created and last-used times, both disks, their
+takes, ships and pull requests, and how many stage jobs are running. To read disk use, stage runs `df` inside each
+stage that is running and that it has a task for, so each `stage list` is an sbx session for those stages and
+delays sbx's auto-stop by 30 seconds; it never reads a stopped stage or one it has no task for. `--shallow` reads
+only what the host holds and runs nothing inside any sandbox.
 
 ## First task
 
@@ -1066,7 +1075,7 @@ and what has not been run live yet.
   stops with it. Use `stage exec --detach` for long work: its host holder keeps a session open until the command
   ends.
 - **A sandbox's disk can fill, and stage only reports it.** `stage list` shows disk use for running sandboxes it has
-  a task for (also through the MCP `list` tool), and `stage job wait` shows it for the job's sandbox when that is
+  a task for (also through the MCP `list` tool), as the fuller disk's percentage, with both disks in `--json`, and `stage job wait` shows it for the job's sandbox when that is
   running; both warn at 90%. Nothing watches between those commands and the MCP `job` tool does not report it.
   `stage up --disk 40g` sets the size of the sandbox's root disk (`/`, 20 GB by default in sbx 0.51, and where
   installed tools, caches and the agent's home go) as `sandboxOptions.rootSize` in the env file; it takes whole

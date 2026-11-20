@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -68,12 +69,14 @@ func TestListShowsDiskUseForRunningSandboxesItHasATaskFor(t *testing.T) {
 	h.sbx.RunExecs()
 	fakeDf(t, nearlyFullDf(h))
 	h.sbx.SetSandboxes("stage-fix\nstage-unknown\nclaude-other\n")
-	h.expect(0, "list")
-	want := "SANDBOX   STATUS\n" +
-		"stage-fix   running   disk: / 95% used (1.0 GiB free), " + h.repoDir() + " 10% used (35.2 GiB free)\n" +
-		"stage-unknown   running\n"
-	if got := h.stdout.String(); got != want {
-		t.Errorf("stdout %q, want %q", got, want)
+	h.expect(0, "list", "--json")
+	listed := readListing(t, h)
+	want := []diskUse{{Mount: "/", UsedPercent: 95, AvailableKB: 1025565}, {Mount: h.repoDir(), UsedPercent: 10, AvailableKB: 36920362}}
+	if got := stageNamed(t, listed, "fix").Disk; !slices.Equal(got, want) {
+		t.Errorf("fix disk %+v, want %+v", got, want)
+	}
+	if got := stageNamed(t, listed, "unknown").Disk; got != nil {
+		t.Errorf("a sandbox without a task has disk %+v", got)
 	}
 	h.expectStderr("WARNING: stage-fix has 1.0 GiB left at /")
 }
@@ -82,13 +85,15 @@ func TestDiskUseShowsOnlyWhatReadsAsDfOutput(t *testing.T) {
 	h, _ := putReady(t)
 	h.sbx.RunExecs()
 	fakeDf(t, "Filesystem 1024-blocks Used Available Capacity Mounted on\n\033[2Jtmpfs 10 9 1 999% /\nrm -rf /\n/dev/vda1 100 50 50 50% /\n")
-	h.expect(0, "list")
-	got := h.stdout.String() + h.stderr.String()
-	if strings.Contains(got, "\033") || strings.Contains(got, "999") || strings.Contains(got, "rm -rf") {
-		t.Errorf("printed what the sandbox sent: %q", got)
+	for _, args := range [][]string{{"list"}, {"list", "--json"}} {
+		h.expect(0, args...)
+		got := h.stdout.String() + h.stderr.String()
+		if strings.Contains(got, "\033") || strings.Contains(got, "999") || strings.Contains(got, "rm -rf") {
+			t.Errorf("stage %v printed what the sandbox sent: %q", args, got)
+		}
 	}
-	if !strings.Contains(h.stdout.String(), "disk: / 50% used") {
-		t.Errorf("stdout %q", h.stdout.String())
+	if got := stageNamed(t, readListing(t, h), "fix").Disk; len(got) != 1 || got[0].Mount != "/" || got[0].UsedPercent != 50 {
+		t.Errorf("fix disk %+v", got)
 	}
 }
 
@@ -103,11 +108,10 @@ func TestDiskUseNeverPrintsAMountTheSandboxMadeUp(t *testing.T) {
 		"x 100 10 90 10% /\n"+
 		"x 100 20 80 20% "+filepath.Dir(h.repoDir())+"\n"+
 		"x 100 30 70 30% "+h.repoDir()+"\n")
-	h.expect(0, "list")
-	want := "SANDBOX   STATUS\n" +
-		"stage-fix   running   disk: / 10% used (0.0 GiB free), " + filepath.Dir(h.repoDir()) + " 20% used (0.0 GiB free)\n"
-	if got := h.stdout.String(); got != want {
-		t.Errorf("stdout %q, want %q", got, want)
+	h.expect(0, "list", "--json")
+	want := []diskUse{{Mount: "/", UsedPercent: 10, AvailableKB: 90}, {Mount: filepath.Dir(h.repoDir()), UsedPercent: 20, AvailableKB: 80}}
+	if got := stageNamed(t, readListing(t, h), "fix").Disk; !slices.Equal(got, want) {
+		t.Errorf("fix disk %+v, want %+v", got, want)
 	}
 	if strings.Contains(h.stderr.String(), "WARNING") {
 		t.Errorf("warned about a forged row: %q", h.stderr.String())
@@ -144,8 +148,10 @@ func TestListDoesNotWaitLongForSandboxesThatDoNotAnswer(t *testing.T) {
 	if took := time.Since(started); took > 3*time.Second {
 		t.Errorf("list took %s with two sandboxes that do not answer", took)
 	}
-	if want := "SANDBOX   STATUS\nstage-fix   running\nstage-other   running\n"; h.stdout.String() != want {
-		t.Errorf("stdout %q, want %q", h.stdout.String(), want)
+	for _, line := range strings.Split(strings.TrimSuffix(h.stdout.String(), "\n"), "\n")[1:] {
+		if fields := strings.Fields(line); len(fields) != 6 || fields[1] != "running" || fields[4] != "-" {
+			t.Errorf("line %q, want a running stage with no disk", line)
+		}
 	}
 }
 
