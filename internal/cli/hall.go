@@ -38,6 +38,7 @@ var (
 	hallReadEvery    = 60 * time.Second
 	hallJobReadEvery = 10 * time.Second
 	hallListTimeout  = 10 * time.Second
+	hallStopGrace    = time.Second
 	hallAssets       = map[string]string{"": "index.html", "hall.js": "hall.js", "hall.css": "hall.css"}
 	hallContentTypes = map[string]string{"index.html": "text/html; charset=utf-8", "hall.js": "text/javascript; charset=utf-8", "hall.css": "text/css; charset=utf-8"}
 )
@@ -185,6 +186,10 @@ func (h *hall) keepFresh(ctx context.Context) {
 			}()
 			select {
 			case <-ctx.Done():
+				select {
+				case <-done:
+				case <-time.After(hallStopGrace):
+				}
 				return
 			case <-done:
 			}
