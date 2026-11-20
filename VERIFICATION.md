@@ -547,3 +547,25 @@ Checked:
   agy had no login in the stage.
 - **The script's path:** `stage put` writes to the agent's home, while `stage exec` runs in the repository, so the
   script is `/home/agent/hall-demo.sh`, not `hall-demo.sh`.
+
+## 2026-11-20: the hall against a real km run, with real logins
+
+- **sbx:** 0.51.0, macOS.
+- **stage:** built from main at fdcd3d3 (#72).
+- **km:** built from kapellmeister main at 8024aad inside the stage, by its repository kit.
+- **Credentials:** real. The maintainer's own agent logins, in the stage-job demo from the 2026-11-20 entry above (`stage exec --detach hall-demo -- sh /home/agent/hall-demo.sh`), with km's `draft-and-check` score on five chairs across codex, claude, agy and copilot in three sections.
+- **Run by:** the maintainer. Results were read from the page's `api/hall`.
+
+Checked:
+
+- **20 seconds in:** the row read `km run · duo · round 0/2 · preflight`, with the steps preflight (active), draft and check, three sections and five chairs idle, and no verify steps. The stage asked for attention for one waiting session, and that cleared by itself.
+- **After km exited** (approved, 1 round, 1m33s): the activity was `succeeded`, reason `approved`, 41,639 tokens exact and 93 seconds elapsed, with no provider errors. The row read `km · duo · round 1 · succeeded · 1m33s · 42k tokens`; #73 makes a finished run's title `km run` as the live one is.
+- **The scoreboard** for the repository went from 9 runs (7 succeeded, 1 failed, 1 stopped, ≥1,127,805 tokens) to 10 runs (8 succeeded, ≥1,169,444 tokens).
+- **Seven minutes after the run:** the stage was `stopped` and still listed with the finished run, `remembered` at 2026-11-20T13:26:08Z. Its saved view `takes/hall-demo/.hall-view.json` was on the host, mode 0600, 1,514 bytes.
+- **After the hall was stopped and started again** on a build of main, the new process listed `hall-demo` without reading it, since it was still stopped. It showed the same finished run, `remembered` at the same 13:26:08Z, and the scoreboard still showed 10 runs (8 succeeded, 1 failed, 1 stopped, ≥1,169,444 tokens). The saved view and the finished runs survived the restart. The title still read `km · duo`, because the view was saved before #73.
+- **After `stage down hall-demo`** (without `--discard-takes`), on a build of main at f734b3a, at 14:17:02Z: the takes
+  were kept and the sandbox removed. Eight seconds later the running hall listed `hall-demo` as `gone` with its
+  finished run from the saved view, and the scoreboard was unchanged at 10 runs.
+- **A rehearsal after that,** on km from kapellmeister main at ca77363c with four tiers: the row went preflight, then
+  draft, then check, then `km run · duo · round 1 · succeeded · 1m18s · 29k tokens`, with the title from #73. The
+  working drafter's terminal (`3b48b9e6`) and both checkers' terminals were linked.
