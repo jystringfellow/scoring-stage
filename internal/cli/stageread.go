@@ -200,7 +200,7 @@ func providerOutcome(provider string, frame readFrame) ([]activityRecord, *provi
 	case "too-large":
 		return failed(fmt.Sprintf("output refused: it is over %d KiB", maxProviderDocument>>10))
 	case "124", "137":
-		return failed("it did not finish within 5 seconds")
+		return failed("it did not finish in the 4 seconds providers share")
 	}
 	return failed("it exited with status " + shortPrintable(frame.status, 16))
 }

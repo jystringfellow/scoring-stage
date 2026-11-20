@@ -8,7 +8,11 @@ command -v timeout >/dev/null 2>&1 && bounded=1
 terminals_read=0
 
 late() {
-	[ $(($(date +%s) - started)) -ge 8 ]
+	[ $(($(date +%s) - started)) -ge 6 ]
+}
+
+left_for_providers() {
+	echo $((4 - ($(date +%s) - started)))
 }
 
 frame() {
@@ -48,12 +52,12 @@ provider() {
 	shift
 	if [ -z "$bounded" ]; then
 		frame "provider $index" "" no-timeout
-	elif late; then
+	elif [ "$(left_for_providers)" -le 0 ]; then
 		frame "provider $index" "" late
 	elif ! command -v "$1" >/dev/null 2>&1; then
 		frame "provider $index" "" absent
 	else
-		capture 262145 timeout -k 1 5 "$@"
+		capture 262145 timeout -k 1 "$(left_for_providers)" "$@"
 		frame "provider $index" "$captured" "$status"
 	fi
 }
@@ -93,7 +97,7 @@ for port in $ports; do
 			window=$(field name)
 			tmux_session=$(field session_name)
 			[ -n "$window" ] && [ -n "$tmux_session" ] || continue
-			capture 16384 timeout -k 1 3 tmux capture-pane -p -J -S -40 -t "$tmux_session:$window"
+			capture 16384 timeout -k 1 1 tmux capture-pane -p -J -S -40 -t "$tmux_session:$window"
 			frame "tail $port $terminal" "$captured" "$status"
 		done
 	done

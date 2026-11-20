@@ -169,8 +169,16 @@ cat "$file"
 
 const fakeTimeout = `#!/bin/sh
 [ "$1" = -k ] && shift 2
+limit=$1
 shift
-exec "$@"
+"$@" &
+child=$!
+( sleep "$limit"; kill -TERM "$child" 2>/dev/null ) >/dev/null 2>&1 &
+watcher=$!
+wait "$child"
+code=$?
+if kill "$watcher" 2>/dev/null; then exit "$code"; fi
+exit 124
 `
 
 type FakeSbx struct {

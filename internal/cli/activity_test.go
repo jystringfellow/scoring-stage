@@ -1,12 +1,16 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+	"unicode/utf8"
 
 	"github.com/jystringfellow/scoring-stage/internal/testutil"
 )
@@ -139,6 +143,11 @@ func TestAProviderDocumentIsValidatedStrictly(t *testing.T) {
 		"not json":          "not a stage-activity/1 document",
 		`{"activities":[]}`: "not a stage-activity/1 document",
 		`{"format":"stage-activity/2","activities":[]}`:                                                                                    "speaks stage-activity/2",
+		`{"format":"stage-activity/2.0","activities":[]}`:                                                                                  "speaks stage-activity/2.0",
+		`{"format":"stage-activity/1.x","activities":[]}`:                                                                                  "speaks stage-activity/1.x",
+		`{"format":"stage-activity/1","activities":[{"id":"a","Title":"t","status":"running"}]}`:                                           "only in case",
+		`{"Format":"stage-activity/1","activities":[]}`:                                                                                    "only in case",
+		activity(`,"groups":[{"name":"g"}]`):                                                                                               "no members",
 		`{"format":"stage-activity/1"}`:                                                                                                    "no activities",
 		`{"format":"stage-activity/1","activities":[` + strings.TrimSuffix(many, ",") + `]}`:                                               "more than 16 activities",
 		`{"format":"stage-activity/1","activities":[{"title":"t","status":"running"}]}`:                                                    "needs an id",
@@ -173,7 +182,7 @@ func TestAProviderDocumentIsValidatedStrictly(t *testing.T) {
 
 func TestValuesALaterVersionAddsShowAsUnknownWithTheRawValue(t *testing.T) {
 	h := readyToRead(t)
-	printsDocument(t, "loop", `{"format":"stage-activity/1","future":true,"activities":[{"id":"a","title":"t","status":"paused","colour":"red",
+	printsDocument(t, "loop", `{"format":"stage-activity/1.1","future":true,"activities":[{"id":"a","title":"t","status":"paused","colour":"red",
 		"steps":[{"name":"s","state":"queued"}],"groups":[{"name":"g","members":[{"name":"m","state":"thinking\u001b[2J"}]}]}]}`)
 	userConfig(t, h, "[hall.provider.loop]\ncommand = [\"loop\"]\n")
 	activity := sessionsOf(t, h, "fix").Activities[0]
@@ -267,5 +276,94 @@ func TestShallowListRunsNoProvider(t *testing.T) {
 	userConfig(t, h, "[hall.provider.loop]\ncommand = [\"loop\"]\n")
 	if fix := sessionsOf(t, h, "fix", "--shallow"); len(fix.Activities) != 0 || len(fix.ProviderErrors) != 0 || fix.Activities == nil {
 		t.Errorf("fix %+v", fix)
+	}
+}
+
+func TestFourFloodingProvidersFailAloneAndTheReadStillCounts(t *testing.T) {
+	h := readyToRead(t)
+	serveCAO(h, "9889")
+	hall := "[hall]\nproviders = [\"f1\", \"f2\", \"f3\", \"f4\"]\n"
+	for _, name := range []string{"f1", "f2", "f3", "f4"} {
+		providerProgram(t, name, "head -c 300000 /dev/zero | tr '\\0' x\n")
+		hall += "[hall.provider." + name + "]\ncommand = [\"" + name + "\"]\n"
+	}
+	userConfig(t, h, hall)
+	fix := sessionsOf(t, h, "fix")
+	if fix.Read == nil || fix.Read.Error != "" || fix.Sessions.Status != "ok" || len(fix.Sessions.Items) != 4 {
+		t.Fatalf("read %+v sessions %+v", fix.Read, fix.Sessions)
+	}
+	if len(fix.ProviderErrors) != 4 {
+		t.Fatalf("errors %+v", fix.ProviderErrors)
+	}
+	for _, failure := range fix.ProviderErrors {
+		if !strings.Contains(failure.Error, "over 256 KiB") {
+			t.Errorf("%s: %s", failure.Provider, failure.Error)
+		}
+	}
+}
+
+func TestHangingProvidersShareOneBudgetAndLeaveTimeForCAO(t *testing.T) {
+	h := readyToRead(t)
+	serveCAO(h, "9889")
+	providerProgram(t, "hangs", "exec sleep 30\n")
+	providerProgram(t, "also-hangs", "exec sleep 30\n")
+	userConfig(t, h, "[hall]\nproviders = [\"hangs\", \"also-hangs\"]\n[hall.provider.hangs]\ncommand = [\"hangs\"]\n[hall.provider.also-hangs]\ncommand = [\"also-hangs\"]\n")
+	started := time.Now()
+	fix := sessionsOf(t, h, "fix")
+	if took := time.Since(started); took > 8*time.Second {
+		t.Errorf("the read took %s", took)
+	}
+	if fix.Read == nil || fix.Read.Error != "" || fix.Sessions.Status != "ok" || len(fix.Sessions.Items) != 4 {
+		t.Fatalf("read %+v sessions %+v", fix.Read, fix.Sessions)
+	}
+	if len(fix.ProviderErrors) != 2 || !strings.Contains(fix.ProviderErrors[0].Error, "did not finish") || !strings.Contains(fix.ProviderErrors[1].Error, "ran out of time") {
+		t.Errorf("errors %+v", fix.ProviderErrors)
+	}
+}
+
+func TestAtMostEightReportedPortsAreReadAndRepeatsCollapse(t *testing.T) {
+	h := readyToRead(t)
+	var activities []string
+	for i := range 16 {
+		port := 9900 + i%10
+		serveCAO(h, strconv.Itoa(port))
+		activities = append(activities, fmt.Sprintf(`{"id":"a%d","title":"t","status":"running","cao_port":%d}`, i, port))
+	}
+	printsDocument(t, "loop", `{"format":"stage-activity/1","activities":[`+strings.Join(activities, ",")+`]}`)
+	userConfig(t, h, "[hall.provider.loop]\ncommand = [\"loop\"]\n")
+	before := len(execCalls(h))
+	fix := sessionsOf(t, h, "fix")
+	servers := map[string]int{}
+	for _, item := range fix.Sessions.Items {
+		servers[item.Server]++
+	}
+	if len(servers) != 8 {
+		t.Errorf("servers %v, want 8", servers)
+	}
+	for server, terminals := range servers {
+		if terminals != 4 {
+			t.Errorf("%s has %d terminals, want each port read once", server, terminals)
+		}
+	}
+	if calls := execCalls(h)[before:]; len(calls) != 2 {
+		t.Errorf("exec calls %q, want one second read", calls)
+	}
+}
+
+func TestTheActivityCellStaysShort(t *testing.T) {
+	h := readyToRead(t)
+	printsDocument(t, "loop", `{"format":"stage-activity/1","activities":[{"id":"a","title":"Fix   the     login redirect","status":"running",
+		"round":{"current":123456789012,"max":999999999999},
+		"steps":[{"name":"`+strings.Repeat("step ", 20)+`","state":"active"}],
+		"groups":[{"name":"g","members":[`+strings.TrimSuffix(strings.Repeat(`{"name":"m","state":"waiting"},`, 64), ",")+`]}],
+		"counters":{"tokens":{"value":1e300}}}]}`)
+	userConfig(t, h, "[hall.provider.loop]\ncommand = [\"loop\"]\n")
+	h.expect(0, "list")
+	line := strings.Split(h.stdout.String(), "\n")[1]
+	if !strings.Contains(line, "Fix the login redirect · round ") {
+		t.Errorf("line %q, want the title's spaces collapsed", line)
+	}
+	if width := utf8.RuneCountInString(line); width > 160 {
+		t.Errorf("line is %d columns: %q", width, line)
 	}
 }

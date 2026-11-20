@@ -179,16 +179,18 @@ command = ["loop", "status", "--format", "stage-activity"]
 ```
 
 A provider runs when its program is on the `agent` user's `PATH` in the stage; otherwise it is passed over
-silently. Every provider that runs is listed, in order. Each runs as `agent` in the repository with no input, under
-`timeout` for 5 seconds, and may print at most 256 KiB; a stage without `timeout` runs no provider. Anything else, an
-exit status other than 0, or a document that does not fit the format is reported for that provider alone, and
-stage says which provider an activity came from, whatever the document says.
+silently. Every provider that runs is listed, in order. Each runs as `agent` in the repository with no input and
+may print at most 256 KiB. Together they get the read's first 4 seconds: each runs under `timeout` for what is left
+of them, and one that would start after that is reported as not run, so the CAO reads keep their time. A stage
+without `timeout` runs no provider. Anything else, an exit status other than 0, or a document that does not fit the
+format is reported for that provider alone, and stage says which provider an activity came from, whatever the
+document says.
 
 The format is `stage-activity/1`:
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `format` | yes | `"stage-activity/1"`. Another `stage-activity/` version is refused and named. |
+| `format` | yes | `"stage-activity/1"`. A later minor version, such as `"stage-activity/1.1"`, is read as `/1`; any other `stage-activity/` version is refused and named. |
 | `activities` | yes | At most 16, one per run |
 | `.id` | yes | 1 to 128 of `A-Z a-z 0-9 . _ : -`, unique in the document |
 | `.title` | yes | At most 200 characters |
@@ -198,13 +200,15 @@ The format is `stage-activity/1`:
 | `.started_at`, `.updated_at` | | RFC 3339 times |
 | `.cao_port` | | The port of the CAO server this run uses on the stage's loopback, which stage then reads too |
 | `.steps` | | At most 64, in order: `{"name", "state"}` with `pending`, `active`, `done`, `failed` or `skipped`; the active ones are current |
-| `.groups` | | At most 32: `{"name", "members"}`, at most 64 members of `{"name", "agent", "state", "session"}`; state is `working`, `waiting`, `idle`, `exited` or `unknown`; `session` is `{"source": "cao" or "job", "id"}` |
+| `.groups` | | At most 32: `{"name", "members"}`, both required, at most 64 members of `{"name", "agent", "state", "session"}`; state is `working`, `waiting`, `idle`, `exited` or `unknown`; `session` is `{"source": "cao" or "job", "id"}` |
 | `.counters` | | `tokens`, `cost` and `elapsed_seconds`, each `{"value", "at_least"}`; `cost` also needs a three-letter `currency` |
 
 A counter that is missing is unknown, and stage never shows it as zero; `at_least` marks a lower bound, shown as
 `≥`. stage never prices anything. Fields stage does not know are ignored, and a status or state it does not know
 is shown as `unknown` with the provider's word beside it, so a provider can add to the format before stage does.
-`stage list` shows the first activity's title, round, current step, waiting members and tokens.
+Field names match exactly: a key that differs from one of the format's only in case, such as `Title`, refuses the
+document. `stage list` shows the first activity's title, round, current step, waiting members and tokens, with
+runs of spaces collapsed, the title cut to 40 characters, the step to 24, and large numbers shortened.
 
 ## First task
 

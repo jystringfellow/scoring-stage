@@ -262,17 +262,17 @@ func activitySummary(activities []activityRecord, failures []providerError) stri
 		return "-"
 	}
 	first := activities[0]
-	parts := []string{shortPrintable(first.Title, 40)}
+	parts := []string{cellText(first.Title, 40)}
 	if first.Round != nil {
-		round := fmt.Sprintf("round %d", first.Round.Current)
+		round := "round " + shortCount(float64(first.Round.Current))
 		if first.Round.Max != nil {
-			round += fmt.Sprintf("/%d", *first.Round.Max)
+			round += "/" + shortCount(float64(*first.Round.Max))
 		}
 		parts = append(parts, round)
 	}
 	for _, step := range first.Steps {
 		if step.State == "active" {
-			parts = append(parts, step.Name)
+			parts = append(parts, cellText(step.Name, 24))
 			break
 		}
 	}
@@ -285,7 +285,7 @@ func activitySummary(activities []activityRecord, failures []providerError) stri
 		}
 	}
 	if waiting > 0 {
-		parts = append(parts, fmt.Sprintf("%d waiting", waiting))
+		parts = append(parts, shortCount(float64(waiting))+" waiting")
 	}
 	if first.Counters != nil && first.Counters.Tokens != nil {
 		parts = append(parts, boundPrefix(first.Counters.Tokens.AtLeast)+shortCount(first.Counters.Tokens.Value)+" tokens")
@@ -303,8 +303,16 @@ func boundPrefix(atLeast bool) string {
 	return ""
 }
 
+func cellText(text string, limit int) string {
+	return shortPrintable(strings.Join(strings.Fields(text), " "), limit)
+}
+
 func shortCount(value float64) string {
 	switch {
+	case value >= 1e12:
+		return ">999G"
+	case value >= 1e9:
+		return fmt.Sprintf("%.1fG", value/1e9)
 	case value >= 1e6:
 		return fmt.Sprintf("%.1fM", value/1e6)
 	case value >= 1e3:

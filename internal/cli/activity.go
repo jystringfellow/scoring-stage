@@ -30,6 +30,10 @@ var (
 	memberStates        = []string{"working", "waiting", "idle", "exited", "unknown"}
 	sessionSources      = []string{"cao", "job"}
 	errNotStageActivity = errors.New("it is not a " + activityFormat + " document")
+	laterMinorFormat    = regexp.MustCompile(`^stage-activity/1\.[0-9]{1,6}$`)
+	activityFields      = []string{"format", "activities", "id", "title", "status", "reason", "round", "current", "max",
+		"started_at", "updated_at", "cao_port", "steps", "name", "state", "groups", "members", "agent", "session",
+		"source", "counters", "tokens", "cost", "elapsed_seconds", "value", "at_least", "currency"}
 )
 
 type activityRecord struct {
@@ -148,7 +152,10 @@ func parseActivities(provider string, document []byte) ([]activityRecord, error)
 	if err := json.Unmarshal(document, &header); err != nil || header.Format == nil {
 		return nil, errNotStageActivity
 	}
-	if *header.Format != activityFormat {
+	if key := keyMatchedOnlyByCase(document); key != "" {
+		return nil, fmt.Errorf("it has the key %s, which matches a field of %s only in case", shortPrintable(key, 40), activityFormat)
+	}
+	if *header.Format != activityFormat && !laterMinorFormat.MatchString(*header.Format) {
 		if version, ok := strings.CutPrefix(*header.Format, activityFormatName); ok {
 			return nil, fmt.Errorf("it speaks %s%s, and this stage understands %s", activityFormatName, shortPrintable(version, 20), activityFormat)
 		}
@@ -181,6 +188,37 @@ func parseActivities(provider string, document []byte) ([]activityRecord, error)
 		activities = append(activities, record)
 	}
 	return activities, nil
+}
+
+func keyMatchedOnlyByCase(document []byte) string {
+	var value any
+	if json.Unmarshal(document, &value) != nil {
+		return ""
+	}
+	var walk func(any) string
+	walk = func(value any) string {
+		switch value := value.(type) {
+		case map[string]any:
+			for key, inner := range value {
+				for _, field := range activityFields {
+					if key != field && strings.EqualFold(key, field) {
+						return key
+					}
+				}
+				if found := walk(inner); found != "" {
+					return found
+				}
+			}
+		case []any:
+			for _, inner := range value {
+				if found := walk(inner); found != "" {
+					return found
+				}
+			}
+		}
+		return ""
+	}
+	return walk(value)
 }
 
 func checkActivity(input activityInput) (activityRecord, error) {
@@ -285,32 +323,33 @@ func checkGroups(input activityInput) ([]activityGroup, error) {
 			return nil, err
 		}
 		checked := activityGroup{Name: name, Members: []activityMember{}}
-		if group.Members != nil {
-			if len(*group.Members) > maxMembers {
-				return nil, fmt.Errorf("has a group with more than %d members", maxMembers)
+		if group.Members == nil {
+			return nil, errors.New("has a group with no members")
+		}
+		if len(*group.Members) > maxMembers {
+			return nil, fmt.Errorf("has a group with more than %d members", maxMembers)
+		}
+		for _, member := range *group.Members {
+			name, err := requiredText("member name", member.Name, 100)
+			if err != nil {
+				return nil, err
 			}
-			for _, member := range *group.Members {
-				name, err := requiredText("member name", member.Name, 100)
-				if err != nil {
-					return nil, err
-				}
-				agent, err := optionalText("member agent", member.Agent, 64)
-				if err != nil {
-					return nil, err
-				}
-				if member.State == nil {
-					return nil, errors.New("has a member with no state")
-				}
-				state, raw := known(*member.State, memberStates)
-				checkedMember := activityMember{Name: name, Agent: agent, State: state, RawState: raw}
-				if member.Session != nil {
-					if member.Session.Source == nil || !slices.Contains(sessionSources, *member.Session.Source) || member.Session.ID == nil || !sessionRefID.MatchString(*member.Session.ID) {
-						return nil, errors.New("has a member whose session needs a source of cao or job and an id")
-					}
-					checkedMember.Session = &sessionRef{Source: *member.Session.Source, ID: *member.Session.ID}
-				}
-				checked.Members = append(checked.Members, checkedMember)
+			agent, err := optionalText("member agent", member.Agent, 64)
+			if err != nil {
+				return nil, err
 			}
+			if member.State == nil {
+				return nil, errors.New("has a member with no state")
+			}
+			state, raw := known(*member.State, memberStates)
+			checkedMember := activityMember{Name: name, Agent: agent, State: state, RawState: raw}
+			if member.Session != nil {
+				if member.Session.Source == nil || !slices.Contains(sessionSources, *member.Session.Source) || member.Session.ID == nil || !sessionRefID.MatchString(*member.Session.ID) {
+					return nil, errors.New("has a member whose session needs a source of cao or job and an id")
+				}
+				checkedMember.Session = &sessionRef{Source: *member.Session.Source, ID: *member.Session.ID}
+			}
+			checked.Members = append(checked.Members, checkedMember)
 		}
 		groups = append(groups, checked)
 	}
