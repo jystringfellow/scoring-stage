@@ -166,12 +166,21 @@ seconds. A stage without a `timeout` command gets no disk use and no terminal ta
 them. `--shallow` reads only what the host holds, including jobs, and runs nothing inside any sandbox.
 
 `stage hall` serves the same stages as a page, until Ctrl-C. It prints a URL on `127.0.0.1` with a random port and
-a random token in its path; `--port` picks the port. Nothing is kept on disk and no daemon is left behind. One hall
+a random token in its path; `--port` picks the port. No daemon is left behind, and what it keeps on disk is below. One hall
 runs per `STAGE_HOME`: a second is refused and names the running one's pid and port, since two would each read every
 stage and keep idle ones from stopping. The lock is the open file `hall.lock` in the home, which holds only the pid
 and port; the system releases it when the hall's process ends, a crash included, so a lock left behind never blocks
 the next hall.
 Ctrl-C stops it at once, even while sbx is slow to answer, and a second Ctrl-C ends it outright.
+
+![The hall's table: a stage running a kapellmeister run, expanded to its steps, its sections and chairs, with one chair's terminal open](docs/images/hall-table.png)
+
+![The same stage as a graph: the stage, its run with the current step, its sections, and each chair with its agent and state](docs/images/hall-graph.png)
+
+![A finished run on the stage's row, and finished runs by repository above the stages](docs/images/hall-finished.png)
+
+These are from a stage made for the purpose, `draft-demo` on kapellmeister, with kapellmeister's `draft-and-check`
+score played by claude and codex.
 - **What it serves:** a table of stages that expand into their activities, steps, groups and members, and the
   sessions no activity claims. A session, or a member whose session was read, opens to the last lines of its
   terminal, shown as text. Stages that need attention come first: a waiting member or session, a `failed` or
