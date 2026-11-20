@@ -99,6 +99,44 @@ func failure(err error, args []string, stderr string) error {
 
 const stderrKept = 4096
 
+func ReadWithin(timeout time.Duration, input io.Reader, limit int64, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, "sbx", args...)
+	command.WaitDelay = time.Second
+	command.Stdin = input
+	stderr := &tail{limit: stderrKept}
+	command.Stderr = stderr
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		return "", &Error{fmt.Sprintf("cannot run sbx: %v", err)}
+	}
+	if err := failure(command.Start(), args, ""); err != nil {
+		return "", err
+	}
+	context.AfterFunc(ctx, func() { stdout.Close() })
+	data, _ := io.ReadAll(io.LimitReader(stdout, limit+1))
+	tooMuch := int64(len(data)) > limit
+	if tooMuch {
+		cancel()
+	}
+	waitErr := command.Wait()
+	if errors.Is(waitErr, exec.ErrWaitDelay) {
+		waitErr = nil
+	}
+	switch {
+	case tooMuch:
+		return "", &Error{fmt.Sprintf("sbx %s sent more than %d bytes", strings.Join(args[:min(2, len(args))], " "), limit)}
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return "", &TimeoutError{fmt.Sprintf("sbx %s did not finish within %s", strings.Join(args[:min(2, len(args))], " "), timeout)}
+	}
+	return string(data), failure(waitErr, args, string(stderr.kept))
+}
+
+type TimeoutError struct{ msg string }
+
+func (e *TimeoutError) Error() string { return e.msg }
+
 // Stream hands sbx's output to consume as it arrives, and consume must read it
 // to the end. sbx is stopped when consume fails or the timeout passes.
 func Stream(timeout time.Duration, consume func(io.Reader) error, args ...string) error {

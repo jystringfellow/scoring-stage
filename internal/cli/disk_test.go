@@ -141,16 +141,16 @@ func TestListDoesNotWaitLongForSandboxesThatDoNotAnswer(t *testing.T) {
 	h.sbx.RunExecs()
 	fakeSlowDf(t)
 	h.sbx.SetSandboxes("stage-fix\nstage-other\n")
-	listDiskTimeout = 500 * time.Millisecond
-	t.Cleanup(func() { listDiskTimeout = 5 * time.Second })
+	stageReadTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { stageReadTimeout = 10 * time.Second })
 	started := time.Now()
 	h.expect(0, "list")
 	if took := time.Since(started); took > 3*time.Second {
 		t.Errorf("list took %s with two sandboxes that do not answer", took)
 	}
 	for _, line := range strings.Split(strings.TrimSuffix(h.stdout.String(), "\n"), "\n")[1:] {
-		if fields := strings.Fields(line); len(fields) != 6 || fields[1] != "running" || fields[4] != "-" {
-			t.Errorf("line %q, want a running stage with no disk", line)
+		if fields := strings.Fields(line); fields[1] != "running" || fields[4] != "-" || !strings.Contains(line, "timed out") {
+			t.Errorf("line %q, want a running stage that timed out with no disk", line)
 		}
 	}
 }

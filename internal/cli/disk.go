@@ -15,10 +15,9 @@ import (
 const diskNearlyFullPercent = 90
 
 var (
-	diskTimeout     = 20 * time.Second
-	listDiskTimeout = 5 * time.Second
-	rootDiskSize    = regexp.MustCompile(`^[1-9][0-9]{0,3}g$`)
-	dfLine          = regexp.MustCompile(`^.*?\s([0-9]{1,18})\s+([0-9]{1,18})\s+([0-9]{1,18})\s+(100|[0-9]{1,2})%\s+(/.*)$`)
+	diskTimeout  = 20 * time.Second
+	rootDiskSize = regexp.MustCompile(`^[1-9][0-9]{0,3}g$`)
+	dfLine       = regexp.MustCompile(`^.*?\s([0-9]{1,18})\s+([0-9]{1,18})\s+([0-9]{1,18})\s+(100|[0-9]{1,2})%\s+(/.*)$`)
 )
 
 type diskUse struct {
@@ -40,11 +39,15 @@ func sandboxDisk(task *Task, within time.Duration) []diskUse {
 	if err != nil {
 		return nil
 	}
+	return parseDiskUse(output, task.RepoDir)
+}
+
+func parseDiskUse(output, repoDir string) []diskUse {
 	var use []diskUse
 	seen := map[string]bool{}
 	for _, line := range strings.Split(output, "\n") {
 		match := dfLine.FindStringSubmatch(line)
-		if match == nil || seen[match[5]] || !mountHolding(match[5], task.RepoDir) {
+		if match == nil || seen[match[5]] || !mountHolding(match[5], repoDir) {
 			continue
 		}
 		seen[match[5]] = true
