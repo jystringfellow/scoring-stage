@@ -131,3 +131,31 @@ func TestKeepZeroSavesNothing(t *testing.T) {
 		t.Errorf("a view was saved with keep = 0: %v", err)
 	}
 }
+
+func TestOnlyARegularViewFileUnderAValidSlugIsRead(t *testing.T) {
+	h := readyToRead(t)
+	now := time.Now().UTC().Format(time.RFC3339)
+	outside := filepath.Join(t.TempDir(), "elsewhere.json")
+	testutil.WriteFile(t, outside, `{"format":"`+hallViewFormat+`","slug":"linked","saved_at":"`+now+`"}`)
+	if err := os.MkdirAll(takesDir(h.home, "linked"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, viewPath(h, "linked")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(viewPath(h, "dir"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeView(t, h, "Bad Slug", map[string]any{"format": hallViewFormat, "slug": "Bad Slug", "saved_at": now})
+	writeView(t, h, "good", map[string]any{"format": hallViewFormat, "slug": "good", "saved_at": now})
+	var slugs []string
+	for _, stage := range readHall(t, startHall(t, h)).Stages {
+		slugs = append(slugs, stage.Slug)
+	}
+	if !slices.Contains(slugs, "good") || slices.Contains(slugs, "linked") || slices.Contains(slugs, "dir") || slices.Contains(slugs, "Bad Slug") {
+		t.Errorf("stages %v, want only good", slugs)
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Errorf("the file a symlink pointed at was touched: %v", err)
+	}
+}

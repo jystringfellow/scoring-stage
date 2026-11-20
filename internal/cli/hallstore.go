@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"syscall"
 	"time"
 )
 
@@ -83,9 +84,17 @@ func saveHallView(home string, record stageRecord, readAt time.Time, earlier, fi
 }
 
 func loadHallView(home, slug string, keep time.Duration, now time.Time) (savedView, bool) {
+	if _, err := checkSlug(slug); err != nil {
+		return savedView{}, false
+	}
 	path := filepath.Join(takesDir(home, slug), hallViewFile)
-	file, err := os.Open(path)
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
+		return savedView{}, false
+	}
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		file.Close()
 		return savedView{}, false
 	}
 	data, err := io.ReadAll(io.LimitReader(file, maxHallView+1))
@@ -166,10 +175,10 @@ func savedSlugs(home string) []string {
 	}
 	var slugs []string
 	for _, dir := range dirs {
-		if !dir.IsDir() {
+		if _, err := checkSlug(dir.Name()); err != nil || !dir.IsDir() {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(home, "takes", dir.Name(), hallViewFile)); err == nil {
+		if info, err := os.Lstat(filepath.Join(home, "takes", dir.Name(), hallViewFile)); err == nil && info.Mode().IsRegular() {
 			slugs = append(slugs, dir.Name())
 		}
 	}
