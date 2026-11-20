@@ -178,14 +178,16 @@ const fakeTimeout = `#!/bin/sh
 [ "$1" = -k ] && shift 2
 limit=$1
 shift
+expired="$FAKE_SBX_STATE/timeout-expired.$$"
 "$@" &
 child=$!
-( sleep "$limit"; kill -TERM "$child" 2>/dev/null ) >/dev/null 2>&1 &
+( sleep "$limit"; : > "$expired"; kill -TERM "$child" 2>/dev/null ) >/dev/null 2>&1 &
 watcher=$!
 wait "$child"
 code=$?
-if kill "$watcher" 2>/dev/null; then exit "$code"; fi
-exit 124
+kill "$watcher" 2>/dev/null
+if [ -f "$expired" ]; then rm -f "$expired"; exit 124; fi
+exit "$code"
 `
 
 type FakeSbx struct {
