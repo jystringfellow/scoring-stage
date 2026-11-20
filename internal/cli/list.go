@@ -41,6 +41,7 @@ type stageRecord struct {
 	Takes          takesRecord      `json:"takes"`
 	Ships          []Ship           `json:"ships"`
 	RunningJobs    int              `json:"running_jobs"`
+	GlobalSecrets  []string         `json:"global_secrets,omitempty"`
 	TaskError      string           `json:"task_error,omitempty"`
 }
 
@@ -69,6 +70,9 @@ func (a *App) cmdList(args []string, home string) (int, error) {
 	entries, err := collectStages(home, listed)
 	if err != nil {
 		return 0, err
+	}
+	if err := noteGlobalSecrets(entries); err != nil {
+		a.warn("cannot tell which global sbx secrets apply to stages: %s", printable(err.Error()))
 	}
 	if !*shallow {
 		settings, err := config.LoadSettings(home)
@@ -109,6 +113,25 @@ func collectStages(home string, listed []sbx.Listed) ([]*stageEntry, error) {
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].record.Slug < entries[j].record.Slug })
 	return entries, nil
+}
+
+const globalSecretsTimeout = 10 * time.Second
+
+func noteGlobalSecrets(entries []*stageEntry) error {
+	names, err := sbx.GlobalSecretNamesWithin(globalSecretsTimeout)
+	if err != nil {
+		return err
+	}
+	var printed []string
+	for _, name := range names {
+		printed = append(printed, config.Printable(name))
+	}
+	for _, entry := range entries {
+		if entry.record.State != "gone" {
+			entry.record.GlobalSecrets = printed
+		}
+	}
+	return nil
 }
 
 func recordedSlugs(home string) ([]string, error) {

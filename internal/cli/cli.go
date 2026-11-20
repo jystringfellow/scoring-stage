@@ -505,7 +505,7 @@ func (a *App) cmdSetup(args []string, home string) (int, error) {
 }
 
 func (a *App) cmdUp(args []string, home string) (int, error) {
-	fs := a.newFlags("up", "<repo> <slug> [--agent NAME]... [--book NAME|DIR]... [--aws-profile NAME] [--base B] [--cpus N] [--memory M] [--disk SIZE] [--allow-global-policy] [--plan]")
+	fs := a.newFlags("up", "<repo> <slug> [--agent NAME]... [--book NAME|DIR]... [--aws-profile NAME] [--base B] [--cpus N] [--memory M] [--disk SIZE] [--allow-global-policy] [--allow-global-secrets] [--plan]")
 	base := fs.String("base", "", "branch to start from (default: the repository's default branch)")
 	var agentFlags, books stringList
 	fs.Var(&agentFlags, "agent", "add an agent: "+strings.Join(config.AgentNames(home), ", ")+", or a kit reference (repeatable)")
@@ -515,6 +515,7 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	memory := fs.String("memory", "", "memory for the sandbox, such as 16g")
 	disk := fs.String("disk", "", "size of the sandbox's root disk, such as 40g")
 	allowGlobal := fs.Bool("allow-global-policy", false, "continue even if the global sbx policy has allow rules")
+	allowSecrets := fs.Bool("allow-global-secrets", false, "continue even though sbx applies its global secrets to this sandbox")
 	approveRepoConfig := fs.Bool("approve-repo-config", false, "approve, and remember, the kits and books the repository's config asks for")
 	plan := fs.Bool("plan", false, "write the env file and show sbx's plan without creating")
 	positional, err := fs.parse(args, "repo", "slug")
@@ -558,6 +559,9 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 		return 0, err
 	}
 	if err := checkNoGlobalGitHubSecret(); err != nil {
+		return 0, err
+	}
+	if err := a.checkGlobalSecrets(sandbox, *allowSecrets); err != nil {
 		return 0, err
 	}
 
@@ -836,6 +840,31 @@ func checkNoGlobalGitHubSecret() error {
 			"by an earlier sandbox, can fall back to it. Remove it with `sbx secret rm %s -f`; sandboxes get GitHub access "+
 			"only from [github] mode", config.GitHubService, config.GitHubService, config.GitHubService)
 	}
+	return nil
+}
+
+type globalSecretsNeeded struct {
+	sandbox string
+	names   []string
+}
+
+func (e *globalSecretsNeeded) Error() string {
+	return fmt.Sprintf("sbx applies its global secrets to every sandbox, %s included, whatever this stage's config says: %s. "+
+		"The sandbox can use each one wherever it can reach that service.\n"+
+		"  to go ahead with them: pass --allow-global-secrets\n"+
+		"  to scope one to stages instead: run `sbx secret rm <name>` and give it a [secrets.<name>] command in your config.toml",
+		e.sandbox, printable(strings.Join(e.names, ", ")))
+}
+
+func (a *App) checkGlobalSecrets(sandbox string, allow bool) error {
+	names, err := sbx.GlobalSecretNames()
+	if err != nil || len(names) == 0 {
+		return err
+	}
+	if !allow {
+		return &globalSecretsNeeded{sandbox: sandbox, names: names}
+	}
+	a.warn("continuing with sbx's global secrets, which reach %s whatever its config says (--allow-global-secrets): %s", sandbox, printable(strings.Join(names, ", ")))
 	return nil
 }
 
