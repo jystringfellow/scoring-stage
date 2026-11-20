@@ -91,22 +91,24 @@ func hallGet(t *testing.T, method, url, host string) *http.Response {
 }
 
 type hallSnapshot struct {
-	Format string `json:"format"`
-	Stages []struct {
-		stageRecord
-		Remembered string `json:"remembered"`
-		Earlier    []struct {
-			Activity   activityRecord `json:"activity"`
-			LastSeenAt string         `json:"last_seen_at"`
-		} `json:"earlier_activities"`
-		Attention []string `json:"attention"`
-		Summary   struct {
-			Sessions string `json:"sessions"`
-			Activity string `json:"activity"`
-			Disk     string `json:"disk"`
-			Age      string `json:"age"`
-		} `json:"summary"`
-	} `json:"stages"`
+	Format string          `json:"format"`
+	Stages []hallStageJSON `json:"stages"`
+}
+
+type hallStageJSON struct {
+	stageRecord
+	Remembered string `json:"remembered"`
+	Earlier    []struct {
+		Activity   activityRecord `json:"activity"`
+		LastSeenAt string         `json:"last_seen_at"`
+	} `json:"earlier_activities"`
+	Attention []string `json:"attention"`
+	Summary   struct {
+		Sessions string `json:"sessions"`
+		Activity string `json:"activity"`
+		Disk     string `json:"disk"`
+		Age      string `json:"age"`
+	} `json:"summary"`
 }
 
 func readHall(t *testing.T, hall runningHall) hallSnapshot {

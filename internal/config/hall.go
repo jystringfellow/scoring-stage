@@ -4,7 +4,9 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -17,7 +19,8 @@ const (
 
 var (
 	BuiltinProviders = []string{"kapellmeister"}
-	hallKeys         = []string{"providers", "provider", "cao_ports"}
+	hallKeys         = []string{"providers", "provider", "cao_ports", "keep"}
+	keepPattern      = regexp.MustCompile(`^([0-9]{1,5})([dh])$`)
 	providerName     = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 )
 
@@ -25,6 +28,35 @@ type Hall struct {
 	Providers []string
 	Commands  map[string][]string
 	CAOPorts  []int
+	Keep      time.Duration
+}
+
+const (
+	defaultKeep = 30 * 24 * time.Hour
+	maxKeep     = 3650 * 24 * time.Hour
+)
+
+func decodeKeep(value any, where string) (time.Duration, error) {
+	text, ok := value.(string)
+	if !ok {
+		return 0, errorf(`%s: keep must be a string such as "30d" or "12h"`, where)
+	}
+	if text == "0" {
+		return 0, nil
+	}
+	match := keepPattern.FindStringSubmatch(text)
+	if match == nil {
+		return 0, errorf(`%s: keep must be whole days or hours, such as "30d" or "12h", or "0" to keep nothing`, where)
+	}
+	count, _ := strconv.Atoi(match[1])
+	unit := time.Hour
+	if match[2] == "d" {
+		unit = 24 * time.Hour
+	}
+	if keep := time.Duration(count) * unit; keep <= maxKeep {
+		return keep, nil
+	}
+	return 0, errorf("%s: keep can be at most 3650 days", where)
 }
 
 func refuseHall(data map[string]any, who string) error {
@@ -35,7 +67,7 @@ func refuseHall(data map[string]any, who string) error {
 }
 
 func decodeHall(value any, where string) (Hall, error) {
-	hall := Hall{Commands: map[string][]string{}, CAOPorts: []int{defaultCAOPort}}
+	hall := Hall{Commands: map[string][]string{}, CAOPorts: []int{defaultCAOPort}, Keep: defaultKeep}
 	if value == nil {
 		hall.Providers = slices.Clone(BuiltinProviders)
 		return hall, nil
@@ -53,6 +85,13 @@ func decodeHall(value any, where string) (Hall, error) {
 	}
 	if err := decodeProviderOrder(table, where, &hall); err != nil {
 		return hall, err
+	}
+	if _, present := table["keep"]; present {
+		keep, err := decodeKeep(table["keep"], where)
+		if err != nil {
+			return hall, err
+		}
+		hall.Keep = keep
 	}
 	if _, present := table["cao_ports"]; present {
 		ports, err := decodeCAOPorts(table["cao_ports"], where)

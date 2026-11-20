@@ -74,6 +74,7 @@ type hall struct {
 	readings map[string]stageReading
 	jobs     map[string]int
 	earlier  map[string][]earlierActivity
+	keep     time.Duration
 }
 
 type earlierActivity struct {
@@ -105,7 +106,7 @@ func (a *App) cmdHall(args []string, home string) (int, error) {
 	if err != nil {
 		return 0, errorf("cannot listen on 127.0.0.1: %v", err)
 	}
-	served := &hall{home: home, plan: hallPlan(settings.Hall), readings: map[string]stageReading{}, jobs: map[string]int{}, earlier: map[string][]earlierActivity{}}
+	served := &hall{home: home, plan: hallPlan(settings.Hall), readings: map[string]stageReading{}, jobs: map[string]int{}, earlier: map[string][]earlierActivity{}, keep: settings.Hall.Keep}
 	served.refresh(time.Now())
 	token := newHallToken()
 	bound := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
@@ -225,29 +226,53 @@ func (h *hall) refresh(now time.Time) {
 			due = append(due, entry)
 		}
 	}
+	fresh := map[string]bool{}
 	for entry, reading := range readEntries(due, h.plan) {
 		h.rememberEnded(entry.record.Slug, reading)
 		h.readings[entry.record.Slug] = reading
+		fresh[entry.record.Slug] = true
 	}
 	listedSlugs := map[string]bool{}
 	for _, entry := range entries {
 		slug := entry.record.Slug
 		listedSlugs[slug] = true
 		h.jobs[slug] = entry.record.RunningJobs
-		reading, ok := h.readings[slug]
-		if ok {
+		earlier := h.earlier[slug]
+		remembered := ""
+		if reading, ok := h.readings[slug]; ok {
 			applyReading(entry, reading)
+			if fresh[slug] && h.keep > 0 {
+				saveHallView(h.home, entry.record, reading.at, earlier, now)
+			}
+			if !running[slug] {
+				remembered = reading.at.UTC().Format(time.RFC3339)
+			}
+		} else if !running[slug] {
+			if saved, found := loadHallView(h.home, slug, h.keep, now); found {
+				entry.record.Sessions, entry.record.Activities = saved.sessions(entry.jobs), saved.Activities
+				earlier, remembered = saved.Earlier, saved.SavedAt
+				if saved.ReadAt != "" {
+					remembered = saved.ReadAt
+				}
+			}
 		}
-		stage := describeForHall(entry.record, now)
-		stage.Earlier = append([]earlierActivity{}, h.earlier[slug]...)
-		if len(entry.record.Activities) == 0 && len(stage.Earlier) > 0 {
-			stage.Summary.Activity = "last seen: " + activitySummary([]activityRecord{stage.Earlier[len(stage.Earlier)-1].Activity}, nil)
+		view.Stages = append(view.Stages, h.describeRemembered(entry.record, earlier, remembered, now))
+	}
+	for _, slug := range savedSlugs(h.home) {
+		if listedSlugs[slug] {
+			continue
 		}
-		if ok && !running[slug] {
-			stage.Remembered = reading.at.UTC().Format(time.RFC3339)
-			stage.Attention = []string{}
+		saved, found := loadHallView(h.home, slug, h.keep, now)
+		if !found {
+			continue
 		}
-		view.Stages = append(view.Stages, stage)
+		record := stageRecord{Slug: slug, Sandbox: sandboxPrefix + slug, State: "gone", Repository: saved.Repository, BaseBranch: saved.BaseBranch,
+			Sessions: saved.sessions(nil), Activities: saved.Activities, ProviderErrors: []providerError{}, Ships: []Ship{}, Takes: countTakes(h.home, slug)}
+		remembered := saved.SavedAt
+		if saved.ReadAt != "" {
+			remembered = saved.ReadAt
+		}
+		view.Stages = append(view.Stages, h.describeRemembered(record, saved.Earlier, remembered, now))
 	}
 	for slug := range h.readings {
 		if !listedSlugs[slug] {
@@ -269,6 +294,19 @@ func (h *hall) refresh(now time.Time) {
 	h.mu.Lock()
 	h.snapshot = snapshot
 	h.mu.Unlock()
+}
+
+func (h *hall) describeRemembered(record stageRecord, earlier []earlierActivity, remembered string, now time.Time) hallStage {
+	stage := describeForHall(record, now)
+	stage.Earlier = append([]earlierActivity{}, earlier...)
+	if len(record.Activities) == 0 && len(stage.Earlier) > 0 {
+		stage.Summary.Activity = "last seen: " + activitySummary([]activityRecord{stage.Earlier[len(stage.Earlier)-1].Activity}, nil)
+	}
+	if remembered != "" {
+		stage.Remembered = remembered
+		stage.Attention = []string{}
+	}
+	return stage
 }
 
 func (h *hall) rememberEnded(slug string, next stageReading) {
