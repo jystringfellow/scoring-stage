@@ -85,11 +85,14 @@ func stageGraph(record stageRecord, unclaimed []sessionRecord) hallGraph {
 	}
 	if len(unclaimed) > 0 && layout.place(graphNode{ID: "u", Kind: "group", Label: "sessions", Column: 2}, "s", false) {
 		for i, session := range unclaimed {
-			label := session.Name
+			label, detail := session.Name, session.Agent
 			if label == "" {
 				label = session.ID
 			}
-			layout.place(graphNode{ID: fmt.Sprintf("u%d", i), Kind: "member", Label: label, Detail: session.Source, State: session.State,
+			if detail == "" {
+				detail = session.Source
+			}
+			layout.place(graphNode{ID: fmt.Sprintf("u%d", i), Kind: "member", Label: label, Detail: detail, State: session.State,
 				Session: session.Source + " " + session.ID, Column: 3}, "u", true)
 		}
 	} else if len(unclaimed) > 0 {
