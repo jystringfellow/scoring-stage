@@ -168,7 +168,8 @@ them. `--shallow` reads only what the host holds, including jobs, and runs nothi
 `stage hall` serves the same stages as a page, until Ctrl-C. It prints a URL on `127.0.0.1` with a random port and
 a random token in its path; `--port` picks the port. Nothing is kept on disk and no daemon is left behind.
 - **What it serves:** a table of stages that expand into their activities, steps, groups and members, and the
-  sessions no activity claims. Stages that need attention come first: a waiting member or session, a `failed` or
+  sessions no activity claims. A session, or a member whose session was read, opens to the last lines of its
+  terminal, shown as text. Stages that need attention come first: a waiting member or session, a `failed` or
   `blocked` activity, a read or provider error, or a disk at 90% or more. Stages that are not running fold into one
   line.
 - **What it costs:** the page polls `stage hall` every 2 seconds and is answered from memory, so the page itself

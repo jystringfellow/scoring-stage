@@ -3,8 +3,10 @@
 const pollEvery = 2000;
 const columns = 8;
 const expanded = new Set();
+const openTails = new Set();
 let showResting = false;
 let latest = null;
+let drawnStages = "";
 
 function el(tag, text, className) {
   const node = document.createElement(tag);
@@ -95,12 +97,12 @@ function addDetails(parent, stage) {
     parent.appendChild(el("p", failure.provider + ": " + failure.error, "error"));
   }
   for (const activity of stage.activities || []) {
-    addActivity(parent, activity);
+    addActivity(parent, stage, activity);
   }
   if (stage.unclaimed_sessions.length) {
     const list = addSection(parent, "Sessions");
     for (const session of stage.unclaimed_sessions) {
-      addSession(list, session);
+      addSession(list, stage, session);
     }
   }
   if (!stage.read && !stage.activities.length && !stage.unclaimed_sessions.length) {
@@ -108,7 +110,30 @@ function addDetails(parent, stage) {
   }
 }
 
-function addSession(list, session) {
+function addTail(item, stage, session) {
+  if (!session || !session.tail || !session.tail.length) {
+    return;
+  }
+  const key = stage.slug + " " + session.source + " " + session.id;
+  const tail = el("details", null, "tail");
+  tail.open = openTails.has(key);
+  tail.appendChild(el("summary", "terminal, last " + session.tail.length + (session.tail.length === 1 ? " line" : " lines")));
+  tail.appendChild(el("pre", session.tail.join("\n")));
+  tail.addEventListener("toggle", () => {
+    if (tail.open) {
+      openTails.add(key);
+    } else {
+      openTails.delete(key);
+    }
+  });
+  item.appendChild(tail);
+}
+
+function sessionOf(stage, ref) {
+  return (stage.sessions.items || []).find((session) => session.source === ref.source && session.id === ref.id);
+}
+
+function addSession(list, stage, session) {
   const item = el("li");
   item.appendChild(el("span", session.name || session.id));
   item.appendChild(el("span", " · " + session.source + " " + session.id, "muted"));
@@ -117,10 +142,11 @@ function addSession(list, session) {
   }
   item.appendChild(el("span", " · "));
   item.appendChild(el("span", stateText(session.state, session.raw_state), stateClass(session.state)));
+  addTail(item, stage, session);
   list.appendChild(item);
 }
 
-function addActivity(parent, activity) {
+function addActivity(parent, stage, activity) {
   const heading = activity.provider + " · " + activity.title;
   parent.appendChild(el("h2", heading));
   const facts = el("p");
@@ -161,10 +187,17 @@ function addActivity(parent, activity) {
       item.appendChild(el("span", stateText(member.state, member.raw_state), stateClass(member.state)));
       if (member.session) {
         item.appendChild(el("span", " · " + member.session.source + " " + member.session.id, "muted"));
+        addTail(item, stage, sessionOf(stage, member.session));
       }
       list.appendChild(item);
     }
   }
+}
+
+function showStatus(view) {
+  const status = document.getElementById("status");
+  status.textContent = "Read " + view.read_at + (view.error ? " · " + view.error : "");
+  status.className = view.error ? "error" : "";
 }
 
 function render(view) {
@@ -172,9 +205,7 @@ function render(view) {
     return;
   }
   latest = view;
-  const status = document.getElementById("status");
-  status.textContent = "Read " + view.read_at + (view.error ? " · " + view.error : "");
-  status.className = view.error ? "error" : "";
+  showStatus(view);
   const rows = document.getElementById("rows");
   rows.replaceChildren();
   const resting = [];
@@ -212,7 +243,15 @@ async function poll() {
     if (!response.ok) {
       throw new Error(response.status + " " + response.statusText);
     }
-    render(await response.json());
+    const view = await response.json();
+    const stages = JSON.stringify(view.stages);
+    if (stages === drawnStages) {
+      latest = view;
+      showStatus(view);
+    } else {
+      drawnStages = stages;
+      render(view);
+    }
   } catch (error) {
     const status = document.getElementById("status");
     status.textContent = "The hall stopped answering: " + error.message;
