@@ -491,3 +491,32 @@ Checked:
 
 Not checked: a stage that stops between `sbx ls` and the read, a CAO terminal that is working or waiting, a
 provider that floods, and several stages read at once.
+
+## 2026-11-20: `stage hall` in a browser against a stage running km and CAO
+
+- **sbx:** 0.51.0, macOS.
+- **stage:** built from `agent/839afa8c/hall-terminal-tail` at the head of #64 (the terminal tail on the hall page), on
+  top of main at 51ee235.
+- **Credentials:** none real. The same kind of temporary `STAGE_HOME` as the 2026-11-19 entry, with dummy secrets and
+  no agent signed in. The sandbox was made from kapellmeister at 64fcd4f, whose kit built `km` from that commit.
+- **Restoration:** the one sandbox created, `stage-hall-demo`, was removed with `stage down`, with its scoped
+  secrets. sbx's `credentials.yaml` had the same sha256 before and after
+  (`4998c033b4b70e066939e87ed0f223fea6dee62917823758bc7a58e2ce021008`). No stage process remained. The other 17
+  sandboxes were listed and not read.
+
+Inside the stage, a scratch repository was committed with kapellmeister #103's demo score, two parts and a
+four-chair ensemble, and `km run -worktree . -ensemble duo -task … -detach` was started. With no agent signed in, km
+stayed in its preflight, so `km status -json` reported the run as schema 1 and `alive` with `round 0/2`, but no
+sections, score steps or chair terminals. Its preflight had opened three CAO sessions.
+
+`stage hall` was opened in headless Chrome and driven over the DevTools protocol:
+
+- The stage row read `running`, `3 (3 idle)` and `km run · duo · round 0/2`. The read had taken 698 ms.
+- Expanding the row showed the activity and the three CAO sessions, each with its terminal. Opening one showed its
+  real tmux lines (the sandbox banner and the agent's prompt) as text.
+- 70 seconds later the hall had read the stage again and the page had redrawn, and the terminal was still open with
+  its lines.
+- The browser reported one error, a 404 for `/favicon.ico`.
+
+Not checked: a member's terminal through its session link, since km never seated a chair; that path is covered by
+km's captured schema 1 document in the tests. A run with chairs seated needs agents that are signed in.

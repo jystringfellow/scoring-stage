@@ -1,0 +1,325 @@
+{
+  "runs": [
+    {
+      "schema": 1,
+      "cao": "http://127.0.0.1:9889",
+      "score": {
+        "name": "default",
+        "source": "built-in",
+        "rounds": 3,
+        "steps": [
+          {
+            "name": "verify",
+            "kind": "verify"
+          },
+          {
+            "name": "plan",
+            "kind": "produce",
+            "part": "planner",
+            "next": {
+              "done": "implement"
+            }
+          },
+          {
+            "name": "test-plan",
+            "kind": "produce",
+            "part": "tester"
+          },
+          {
+            "name": "implement",
+            "kind": "produce",
+            "part": "implementer",
+            "next": {
+              "done": "review"
+            }
+          },
+          {
+            "name": "verify",
+            "kind": "verify"
+          },
+          {
+            "name": "review",
+            "kind": "review",
+            "part": "reviewer",
+            "next": {
+              "approve": "gate",
+              "changes": "implement"
+            }
+          },
+          {
+            "name": "gate",
+            "kind": "decide",
+            "part": "gate",
+            "next": {
+              "approve": "test",
+              "changes": "implement"
+            }
+          },
+          {
+            "name": "test",
+            "kind": "test",
+            "part": "tester",
+            "next": {
+              "absent": "approved",
+              "approve": "approved",
+              "changes": "implement"
+            }
+          }
+        ]
+      },
+      "current": [
+        {
+          "step": "review",
+          "round": 1,
+          "chairs": [
+            "review.second@thorough",
+            "review.lead@thorough"
+          ],
+          "started": "2026-11-20T06:46:15.172867686Z"
+        }
+      ],
+      "trail": [
+        {
+          "step": "verify",
+          "round": 0,
+          "exit": "pass",
+          "chair": "",
+          "duration_ms": 156992
+        },
+        {
+          "step": "plan",
+          "round": 0,
+          "exit": "done",
+          "chair": "leads.planner@thorough",
+          "duration_ms": 21198
+        },
+        {
+          "step": "test-plan",
+          "round": 0,
+          "exit": "done",
+          "chair": "leads.tonmeister@thorough",
+          "duration_ms": 27429
+        },
+        {
+          "step": "implement",
+          "round": 1,
+          "exit": "done",
+          "chair": "leads.implementer@thorough",
+          "duration_ms": 40582
+        },
+        {
+          "step": "verify",
+          "round": 1,
+          "exit": "pass",
+          "chair": "",
+          "duration_ms": 156799
+        }
+      ],
+      "usage": {
+        "input_tokens": 15727,
+        "output_tokens": 3718,
+        "measured": "all"
+      },
+      "run_id": "20261120-063806-7153d2",
+      "path": "/home/agent/.kapellmeister/state/runs/20261120-063806-7153d2",
+      "started": "2026-11-20T06:39:58.993343465Z",
+      "repository": "github.com/jystringfellow/kapellmeister",
+      "ensemble": {
+        "name": "thorough",
+        "source": "user",
+        "sections": [
+          {
+            "name": "leads",
+            "chairs": [
+              {
+                "address": "leads.planner@thorough",
+                "name": "planner",
+                "part": "planner",
+                "agent": "claude",
+                "provider": "claude_code",
+                "model": "claude-sonnet-5-5",
+                "tier": "medium",
+                "state": "done",
+                "step": "plan",
+                "since": "2026-11-20T06:42:57.203968175Z",
+                "memory": "fresh",
+                "terminal": "",
+                "needs_input": {
+                  "count": 0,
+                  "reason": ""
+                },
+                "usage": {
+                  "input_tokens": 8,
+                  "output_tokens": 1141,
+                  "measured": "all"
+                }
+              },
+              {
+                "address": "leads.implementer@thorough",
+                "name": "implementer",
+                "part": "implementer",
+                "agent": "codex",
+                "provider": "codex",
+                "model": "gpt-6.1-sol",
+                "tier": "medium",
+                "state": "waiting",
+                "step": "implement",
+                "since": "2026-11-20T06:43:38.359824111Z",
+                "memory": "resume",
+                "terminal": "7cdae93c",
+                "needs_input": {
+                  "count": 0,
+                  "reason": ""
+                },
+                "usage": {
+                  "input_tokens": 15709,
+                  "output_tokens": 677,
+                  "measured": "all"
+                }
+              },
+              {
+                "address": "leads.gate@thorough",
+                "name": "gate",
+                "part": "gate",
+                "agent": "claude",
+                "provider": "claude_code",
+                "model": "claude-sonnet-5-5",
+                "tier": "medium",
+                "state": "waiting",
+                "step": "",
+                "since": "2026-11-20T06:39:58.993343465Z",
+                "memory": "fresh",
+                "terminal": "",
+                "needs_input": {
+                  "count": 0,
+                  "reason": ""
+                },
+                "usage": {
+                  "input_tokens": 0,
+                  "output_tokens": 0,
+                  "measured": "none"
+                }
+              },
+              {
+                "address": "leads.classifier@thorough",
+                "name": "classifier",
+                "part": "classifier",
+                "agent": "claude",
+                "provider": "claude_code",
+                "model": "claude-haiku-5-5",
+                "tier": "small",
+                "state": "waiting",
+                "step": "",
+                "since": "2026-11-20T06:39:58.993343465Z",
+                "memory": "fresh",
+                "terminal": "",
+                "needs_input": {
+                  "count": 0,
+                  "reason": ""
+                },
+                "usage": {
+                  "input_tokens": 0,
+                  "output_tokens": 0,
+                  "measured": "none"
+                }
+              },
+              {
+                "address": "leads.tonmeister@thorough",
+                "name": "tonmeister",
+                "part": "tester",
+                "agent": "claude",
+                "provider": "claude_code",
+                "model": "claude-sonnet-5-5",
+                "tier": "medium",
+                "state": "waiting",
+                "step": "test-plan",
+                "since": "2026-11-20T06:43:25.207117855Z",
+                "memory": "fresh",
+                "terminal": "",
+                "needs_input": {
+                  "count": 0,
+                  "reason": ""
+                },
+                "usage": {
+                  "input_tokens": 10,
+                  "output_tokens": 1900,
+                  "measured": "all"
+                }
+              }
+            ]
+          },
+          {
+            "name": "review",
+            "chairs": [
+              {
+                "address": "review.lead@thorough",
+                "name": "lead",
+                "part": "reviewer",
+                "agent": "copilot",
+                "provider": "copilot_cli",
+                "model": "claude-sonnet-5.5",
+                "tier": "medium",
+                "state": "playing",
+                "step": "review",
+                "since": "2026-11-20T06:46:15.173096436Z",
+                "memory": "fresh",
+                "terminal": "",
+                "needs_input": {
+                  "count": 0,
+                  "reason": ""
+                },
+                "usage": {
+                  "input_tokens": 0,
+                  "output_tokens": 0,
+                  "measured": "none"
+                }
+              },
+              {
+                "address": "review.second@thorough",
+                "name": "second",
+                "part": "reviewer",
+                "agent": "agy",
+                "provider": "antigravity_cli",
+                "model": "gemini-4-argon-high",
+                "tier": "medium",
+                "state": "playing",
+                "step": "review",
+                "since": "2026-11-20T06:46:15.172867686Z",
+                "memory": "fresh",
+                "terminal": "",
+                "needs_input": {
+                  "count": 0,
+                  "reason": ""
+                },
+                "usage": {
+                  "input_tokens": 0,
+                  "output_tokens": 0,
+                  "measured": "none"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "command": "run",
+      "round": 1,
+      "max_rounds": 3,
+      "playing": [
+        {
+          "step": "review",
+          "chair": "review.second@thorough",
+          "started": "2026-11-20T06:46:15.172867686Z",
+          "elapsed_ms": 22677
+        },
+        {
+          "step": "review",
+          "chair": "review.lead@thorough",
+          "started": "2026-11-20T06:46:15.173096436Z",
+          "elapsed_ms": 22677
+        }
+      ],
+      "updated": "2026-11-20T06:46:15.173096853Z",
+      "liveness": "alive"
+    }
+  ]
+}
