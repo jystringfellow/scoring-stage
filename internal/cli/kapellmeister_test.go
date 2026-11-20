@@ -419,3 +419,16 @@ func TestManyStepsKmIsOnOutsideTheScoreAreBounded(t *testing.T) {
 		t.Errorf("%d steps %v, want a few current steps and the score kept", len(steps), names)
 	}
 }
+
+func TestAFinishedRunWithoutACommandIsTitledAsARun(t *testing.T) {
+	h := readyToRead(t)
+	kmPrints(t, h, `{"runs":[]}`)
+	kmReports(t, h, `{"runs":[{"run_id":"r","ensemble":"duo","outcome":"approved"},{"run_id":"t","command":"tune parts","ensemble":"duo","outcome":"approved"}]}`)
+	var titles []string
+	for _, activity := range sessionsOf(t, h, "fix").Activities {
+		titles = append(titles, activity.Title)
+	}
+	if want := []string{"km run · duo", "km tune parts · duo"}; !slices.Equal(titles, want) {
+		t.Errorf("titles %v, want %v", titles, want)
+	}
+}

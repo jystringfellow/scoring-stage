@@ -88,10 +88,11 @@ func translateKmFinished(raw json.RawMessage) (activityRecord, error) {
 	if err := json.Unmarshal(raw, &run); err != nil {
 		return activityRecord{}, errors.New("it does not have km's shape")
 	}
-	title := "km"
-	if run.Command != "" {
-		title += " " + run.Command
+	command := run.Command
+	if command == "" {
+		command = "run"
 	}
+	title := "km " + command
 	if run.Ensemble != "" {
 		title += " · " + run.Ensemble
 	}
