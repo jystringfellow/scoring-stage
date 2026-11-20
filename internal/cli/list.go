@@ -209,6 +209,8 @@ func hallPlan(hall config.Hall) readPlan {
 	for _, name := range hall.Providers {
 		if command, defined := hall.Commands[name]; defined {
 			plan.providers = append(plan.providers, stageProvider{name: name, command: command})
+		} else if builtin, ok := builtinProviders[name]; ok {
+			plan.providers = append(plan.providers, builtin)
 		}
 	}
 	return plan

@@ -51,12 +51,10 @@ const workedExample = `{
 
 func providerProgram(t *testing.T, name, script string) {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "providers")
-	path := testutil.WriteFile(t, filepath.Join(bin, name), "#!/bin/sh\n"+script)
+	path := testutil.WriteFile(t, filepath.Join(os.Getenv("FAKE_SBX_STATE"), "agent-path", name), "#!/bin/sh\n"+script)
 	if err := os.Chmod(path, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 func printsDocument(t *testing.T, name, document string) {
@@ -235,7 +233,7 @@ func TestProvidersDoNotRunInAStageWithoutTimeout(t *testing.T) {
 	printsDocument(t, "loop", `{"format":"stage-activity/1","activities":[]}`)
 	userConfig(t, h, "[hall.provider.loop]\ncommand = [\"loop\"]\n")
 	tools := t.TempDir()
-	for _, name := range []string{"sh", "grep", "sed", "head", "date", "sort", "cat", "tr", "df", "curl", "tmux", "loop"} {
+	for _, name := range []string{"sh", "grep", "sed", "head", "date", "sort", "cat", "tr", "df", "curl", "tmux"} {
 		path, err := exec.LookPath(name)
 		if err != nil {
 			t.Fatal(err)
@@ -244,7 +242,7 @@ func TestProvidersDoNotRunInAStageWithoutTimeout(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	h.sbx.SetReadPath(tools)
+	h.sbx.SetReadPath(tools + string(os.PathListSeparator) + h.sbx.AgentPath())
 	fix := sessionsOf(t, h, "fix")
 	if len(fix.ProviderErrors) != 1 || !strings.Contains(fix.ProviderErrors[0].Error, "no timeout command") {
 		t.Errorf("errors %+v", fix.ProviderErrors)

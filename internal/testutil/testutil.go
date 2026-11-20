@@ -103,6 +103,13 @@ if [ "$1" = exec ]; then
         sleep 1; rm -f "$FAKE_SBX_STATE/active/$$"
       fi
       if [ -d "$dir" ]; then cd "$dir" || exit 125; fi
+      mkdir -p "$FAKE_SBX_STATE/agent-path" "$FAKE_SBX_STATE/agent-home"
+      HOME="$FAKE_SBX_STATE/agent-home"
+      kept=; IFS=:
+      for entry in $PATH; do [ -x "$entry/km" ] || kept="$kept${kept:+:}$entry"; done
+      unset IFS
+      PATH="$FAKE_SBX_STATE/agent-path:$kept"
+      export HOME PATH
       if [ -f "$FAKE_SBX_STATE/read.path" ]; then PATH=$(cat "$FAKE_SBX_STATE/read.path"); export PATH; fi
       printf '%s\n' "$script" | "$@"; exit $? ;;
     *" -i "*) for last; do :; done; if [ -f "$FAKE_SBX_STATE/feed.hang" ]; then sleep 30; fi; if [ -f "$FAKE_SBX_STATE/feed.ignore" ]; then exit 0; fi; if [ -f "$FAKE_SBX_STATE/feed.fail" ]; then cat > /dev/null; cat "$FAKE_SBX_STATE/feed.fail" >&2; exit 1; fi; mkdir -p "$FAKE_SBX_STATE/box"; cat > "$FAKE_SBX_STATE/box/$(basename "$last")"; case " $* " in *"tar -xf -"*) echo stage-gear-unpacked ;; esac ;;
@@ -232,6 +239,14 @@ func (f *FakeSbx) HangReads(sandbox string) {
 
 func (f *FakeSbx) FloodReads(sandbox string) {
 	WriteFile(f.t, filepath.Join(f.State, "flood."+sandbox), "")
+}
+
+func (f *FakeSbx) AgentHome() string {
+	return filepath.Join(f.State, "agent-home")
+}
+
+func (f *FakeSbx) AgentPath() string {
+	return filepath.Join(f.State, "agent-path")
 }
 
 func (f *FakeSbx) FailReads(sandbox, stderr string) {
