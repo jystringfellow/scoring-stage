@@ -252,3 +252,20 @@ button {
     animation: none !important;
   }
 }
+
+#scoreboard {
+  margin-bottom: 16px;
+}
+
+#scoreboard h2 {
+  font-size: 14px;
+  margin: 0 0 6px;
+}
+
+table.scoreboard {
+  width: auto;
+}
+
+.state-succeeded {
+  color: var(--working);
+}

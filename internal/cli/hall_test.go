@@ -91,8 +91,9 @@ func hallGet(t *testing.T, method, url, host string) *http.Response {
 }
 
 type hallSnapshot struct {
-	Format string          `json:"format"`
-	Stages []hallStageJSON `json:"stages"`
+	Format     string          `json:"format"`
+	Stages     []hallStageJSON `json:"stages"`
+	Scoreboard []scoreRow      `json:"scoreboard"`
 }
 
 type hallStageJSON struct {

@@ -285,6 +285,35 @@ function drawGraph(section, stages) {
   }
 }
 
+function drawScoreboard(board) {
+  const section = document.getElementById("scoreboard");
+  section.replaceChildren();
+  section.hidden = !board.length;
+  if (!board.length) {
+    return;
+  }
+  section.appendChild(el("h2", "Finished runs"));
+  const table = el("table", null, "scoreboard");
+  const head = el("tr");
+  for (const title of ["Repository", "Runs", "Succeeded", "Failed", "Stopped", "Tokens"]) {
+    head.appendChild(el("th", title));
+  }
+  table.appendChild(el("thead")).appendChild(head);
+  const body = el("tbody");
+  for (const row of board) {
+    const line = el("tr");
+    line.appendChild(el("td", row.repository));
+    line.appendChild(el("td", row.runs));
+    line.appendChild(el("td", row.succeeded, row.succeeded ? "state-succeeded" : ""));
+    line.appendChild(el("td", row.failed, row.failed ? "state-failed" : ""));
+    line.appendChild(el("td", row.stopped));
+    line.appendChild(el("td", (row.tokens_at_least ? "≥" : "") + Math.round(row.tokens).toLocaleString()));
+    body.appendChild(line);
+  }
+  table.appendChild(body);
+  section.appendChild(table);
+}
+
 function showStatus(view) {
   const status = document.getElementById("status");
   status.textContent = "Read " + view.read_at + (view.error ? " · " + view.error : "");
@@ -297,6 +326,7 @@ function render(view) {
   }
   latest = view;
   showStatus(view);
+  drawScoreboard(view.scoreboard || []);
   const shown = mode === "graph" && narrow.matches ? "table" : mode;
   for (const button of document.querySelectorAll("nav button")) {
     button.setAttribute("aria-pressed", button.dataset.view === shown ? "true" : "false");
@@ -344,7 +374,7 @@ async function poll() {
       throw new Error(response.status + " " + response.statusText);
     }
     const view = await response.json();
-    const stages = JSON.stringify(view.stages);
+    const stages = JSON.stringify([view.stages, view.scoreboard]);
     if (stages === drawnStages) {
       latest = view;
       showStatus(view);
