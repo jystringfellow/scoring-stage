@@ -24,21 +24,23 @@ type stageListing struct {
 }
 
 type stageRecord struct {
-	Slug        string         `json:"slug"`
-	Sandbox     string         `json:"sandbox"`
-	State       string         `json:"state"`
-	Repository  string         `json:"repository,omitempty"`
-	BaseBranch  string         `json:"base_branch,omitempty"`
-	Agents      []string       `json:"agents,omitempty"`
-	CreatedAt   string         `json:"created_at,omitempty"`
-	LastUsedAt  string         `json:"last_used_at,omitempty"`
-	Disk        []diskUse      `json:"disk,omitempty"`
-	Read        *readRecord    `json:"read,omitempty"`
-	Sessions    sessionsRecord `json:"sessions"`
-	Takes       takesRecord    `json:"takes"`
-	Ships       []Ship         `json:"ships"`
-	RunningJobs int            `json:"running_jobs"`
-	TaskError   string         `json:"task_error,omitempty"`
+	Slug           string           `json:"slug"`
+	Sandbox        string           `json:"sandbox"`
+	State          string           `json:"state"`
+	Repository     string           `json:"repository,omitempty"`
+	BaseBranch     string           `json:"base_branch,omitempty"`
+	Agents         []string         `json:"agents,omitempty"`
+	CreatedAt      string           `json:"created_at,omitempty"`
+	LastUsedAt     string           `json:"last_used_at,omitempty"`
+	Disk           []diskUse        `json:"disk,omitempty"`
+	Read           *readRecord      `json:"read,omitempty"`
+	Sessions       sessionsRecord   `json:"sessions"`
+	Activities     []activityRecord `json:"activities"`
+	ProviderErrors []providerError  `json:"provider_errors"`
+	Takes          takesRecord      `json:"takes"`
+	Ships          []Ship           `json:"ships"`
+	RunningJobs    int              `json:"running_jobs"`
+	TaskError      string           `json:"task_error,omitempty"`
 }
 
 type takesRecord struct {
@@ -68,7 +70,11 @@ func (a *App) cmdList(args []string, home string) (int, error) {
 		return 0, err
 	}
 	if !*shallow {
-		a.readStages(entries)
+		settings, err := config.LoadSettings(home)
+		if err != nil {
+			return 0, err
+		}
+		a.readStages(entries, hallPlan(settings.Hall))
 	}
 	if *asJSON {
 		listing := stageListing{Format: listFormat, ReadAt: time.Now().UTC().Format(time.RFC3339), Stages: []stageRecord{}}
@@ -126,7 +132,7 @@ func recordedSlugs(home string) ([]string, error) {
 
 func describeStage(home, slug string, sandboxes map[string]sbx.Listed) *stageEntry {
 	entry := &stageEntry{record: stageRecord{Slug: config.Printable(slug), Sandbox: config.Printable(sandboxOf(slug)), Ships: []Ship{},
-		Sessions: sessionsRecord{Status: "not_read", Items: []sessionRecord{}}}}
+		Sessions: sessionsRecord{Status: "not_read", Items: []sessionRecord{}}, Activities: []activityRecord{}, ProviderErrors: []providerError{}}}
 	record := &entry.record
 	_, recordErr := os.Lstat(filepath.Join(taskDir(home, slug), "task.json"))
 	hasRecord := recordErr == nil && slugPattern.MatchString(slug)
@@ -198,7 +204,17 @@ func countTakes(home, slug string) takesRecord {
 	return kept
 }
 
-func (a *App) readStages(entries []*stageEntry) {
+func hallPlan(hall config.Hall) readPlan {
+	plan := readPlan{ports: hall.CAOPorts, disk: true}
+	for _, name := range hall.Providers {
+		if command, defined := hall.Commands[name]; defined {
+			plan.providers = append(plan.providers, stageProvider{name: name, command: command})
+		}
+	}
+	return plan
+}
+
+func (a *App) readStages(entries []*stageEntry, plan readPlan) {
 	var asking sync.WaitGroup
 	slots := make(chan struct{}, stagesReadAtOnce)
 	for _, entry := range entries {
@@ -210,9 +226,12 @@ func (a *App) readStages(entries []*stageEntry) {
 			defer asking.Done()
 			slots <- struct{}{}
 			defer func() { <-slots }()
-			record, read := readStage(entry.task, []int{defaultCAOPort})
+			record, read := readStage(entry.task, plan)
 			entry.record.Read, entry.record.Disk, entry.record.Sessions = record, read.disk, read.sessions
 			entry.record.Sessions.Items = append(entry.record.Sessions.Items, entry.jobs...)
+			if read.activities != nil {
+				entry.record.Activities, entry.record.ProviderErrors = read.activities, read.providerErrors
+			}
 		}()
 	}
 	asking.Wait()
@@ -225,13 +244,81 @@ func (a *App) readStages(entries []*stageEntry) {
 
 func (a *App) printStages(entries []*stageEntry, now time.Time) error {
 	table := tabwriter.NewWriter(a.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(table, "SLUG\tSTATE\tREPOSITORY\tAGE\tDISK\tSESSIONS\tSHIPS")
+	fmt.Fprintln(table, "SLUG\tSTATE\tREPOSITORY\tAGE\tDISK\tSESSIONS\tACTIVITY\tSHIPS")
 	for _, entry := range entries {
 		record := entry.record
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%d\n", record.Slug, strings.ReplaceAll(record.State, "_", " "),
-			repositoryAt(record), age(record.CreatedAt, now), fullestDisk(record.Disk), sessionsSummary(record.Sessions), len(record.Ships))
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\n", record.Slug, strings.ReplaceAll(record.State, "_", " "),
+			repositoryAt(record), age(record.CreatedAt, now), fullestDisk(record.Disk), sessionsSummary(record.Sessions),
+			activitySummary(record.Activities, record.ProviderErrors), len(record.Ships))
 	}
 	return table.Flush()
+}
+
+func activitySummary(activities []activityRecord, failures []providerError) string {
+	if len(activities) == 0 {
+		if len(failures) > 0 {
+			return "provider error"
+		}
+		return "-"
+	}
+	first := activities[0]
+	parts := []string{cellText(first.Title, 40)}
+	if first.Round != nil {
+		round := "round " + shortCount(float64(first.Round.Current))
+		if first.Round.Max != nil {
+			round += "/" + shortCount(float64(*first.Round.Max))
+		}
+		parts = append(parts, round)
+	}
+	for _, step := range first.Steps {
+		if step.State == "active" {
+			parts = append(parts, cellText(step.Name, 24))
+			break
+		}
+	}
+	waiting := 0
+	for _, group := range first.Groups {
+		for _, member := range group.Members {
+			if member.State == "waiting" {
+				waiting++
+			}
+		}
+	}
+	if waiting > 0 {
+		parts = append(parts, shortCount(float64(waiting))+" waiting")
+	}
+	if first.Counters != nil && first.Counters.Tokens != nil {
+		parts = append(parts, boundPrefix(first.Counters.Tokens.AtLeast)+shortCount(first.Counters.Tokens.Value)+" tokens")
+	}
+	if len(activities) > 1 {
+		parts = append(parts, fmt.Sprintf("+%d more", len(activities)-1))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func boundPrefix(atLeast bool) string {
+	if atLeast {
+		return "≥"
+	}
+	return ""
+}
+
+func cellText(text string, limit int) string {
+	return shortPrintable(strings.Join(strings.Fields(text), " "), limit)
+}
+
+func shortCount(value float64) string {
+	switch {
+	case value >= 1e12:
+		return ">999G"
+	case value >= 1e9:
+		return fmt.Sprintf("%.1fG", value/1e9)
+	case value >= 1e6:
+		return fmt.Sprintf("%.1fM", value/1e6)
+	case value >= 1e3:
+		return fmt.Sprintf("%.0fk", value/1e3)
+	}
+	return fmt.Sprintf("%.0f", value)
 }
 
 func sessionsSummary(sessions sessionsRecord) string {

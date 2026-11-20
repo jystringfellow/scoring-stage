@@ -23,7 +23,7 @@ func HasHidden(text string) bool {
 func Printable(text string) string {
 	var out strings.Builder
 	for _, r := range text {
-		if isControl(r) {
+		if isHidden(r) || r != ' ' && unicode.Is(unicode.Zs, r) {
 			fmt.Fprintf(&out, "\\x%02x", r)
 			continue
 		}

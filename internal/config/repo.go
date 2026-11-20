@@ -41,6 +41,9 @@ func LoadRepoConfig(repoDir string) (*RepoConfig, error) {
 	if err := refuseGear(data, path+": a repository"); err != nil {
 		return nil, err
 	}
+	if err := refuseHall(data, path+": a repository"); err != nil {
+		return nil, err
+	}
 	var refused []string
 	for _, key := range hostOnlyKeys {
 		if _, present := data[key]; present {

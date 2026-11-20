@@ -143,12 +143,14 @@ carried over. sbx clones the scratch clone into the sandbox, so the sandbox star
 `stage list` prints one line per stage: every task stage has and every `stage-*` sandbox sbx lists, with its state
 (`running` or `stopped` as sbx reports it, `gone` for a task whose sandbox no longer exists, `no task` for a sandbox
 stage has no record of), its repository and base, its age, the fuller of its two disks, its agent sessions and how many
-times it was shipped. `--json` prints the same stages with their agents, sbx's created and last-used times, both
+times it was shipped. `--json` prints the same stages with their agents, sbx's created and last-used times (sbx
+moves last-used when a read ends and again when the sandbox stops, so it is not the last agent activity), both
 disks, every session with the last 40 lines of its terminal, their takes, ships and pull requests, and how many
 stage jobs are running.
 
 A session is a terminal of the [CAO](https://github.com/awslabs/cli-agent-orchestrator) server inside the stage,
-on `127.0.0.1:9889`, or one of the stage's own [jobs](#jobs). Its state is `working`, `waiting` (for an answer),
+on `127.0.0.1:9889` or the ports you list (see [Activity providers](#activity-providers)), or one of the stage's
+own [jobs](#jobs). Its state is `working`, `waiting` (for an answer),
 `idle`, `exited` or `unknown`, with CAO's or the job's own word beside it. A stage with no CAO server shows `no CAO`
 and still lists its jobs.
 
@@ -161,6 +163,53 @@ jobs, as in `timed out + 1 (1 exited)`. A read whose output breaks those bounds,
 boundary inside a part, is refused whole. Each read is an sbx session, so it delays that stage's auto-stop by 30
 seconds. A stage without a `timeout` command gets no disk use and no terminal tails, since stage could not bound
 them. `--shallow` reads only what the host holds, including jobs, and runs nothing inside any sandbox.
+
+### Activity providers
+
+An orchestrator or loop running in a stage can describe what it is doing through a **provider**: a command stage
+runs inside the stage during the same read, which prints one JSON document in the format below. Providers are
+declared only in your own config; a repository's config, a book and a `[[repos]]` rule that set `[hall]` are
+refused, since the hall runs these commands inside every stage.
+
+```toml
+[hall]
+providers = ["loop"]            # order; default: every built-in provider, then yours by name
+cao_ports = [9889, 9890]        # CAO servers to read on each stage's loopback; default [9889]
+[hall.provider.loop]
+command = ["loop", "status", "--format", "stage-activity"]
+```
+
+A provider runs when its program is on the `agent` user's `PATH` in the stage; otherwise it is passed over
+silently. Every provider that runs is listed, in order. Each runs as `agent` in the repository with no input and
+may print at most 256 KiB. Together they get the read's first 4 seconds: each runs under `timeout` for what is left
+of them, and one that would start after that is reported as not run, so the CAO reads keep their time. A stage
+without `timeout` runs no provider. Anything else, an exit status other than 0, or a document that does not fit the
+format is reported for that provider alone, and stage says which provider an activity came from, whatever the
+document says.
+
+The format is `stage-activity/1`:
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `format` | yes | `"stage-activity/1"`. A later minor version, such as `"stage-activity/1.1"`, is read as `/1`; any other `stage-activity/` version is refused and named. |
+| `activities` | yes | At most 16, one per run |
+| `.id` | yes | 1 to 128 of `A-Z a-z 0-9 . _ : -`, unique in the document |
+| `.title` | yes | At most 200 characters |
+| `.status` | yes | `running`, `waiting`, `blocked`, `succeeded`, `failed`, `stopped` or `unknown` |
+| `.reason` | | At most 500 characters |
+| `.round` | | `{"current": n, "max": m}`, whole numbers, `max` optional and not below `current` |
+| `.started_at`, `.updated_at` | | RFC 3339 times |
+| `.cao_port` | | The port of the CAO server this run uses on the stage's loopback, which stage then reads too |
+| `.steps` | | At most 64, in order: `{"name", "state"}` with `pending`, `active`, `done`, `failed` or `skipped`; the active ones are current |
+| `.groups` | | At most 32: `{"name", "members"}`, both required, at most 64 members of `{"name", "agent", "state", "session"}`; state is `working`, `waiting`, `idle`, `exited` or `unknown`; `session` is `{"source": "cao" or "job", "id"}` |
+| `.counters` | | `tokens`, `cost` and `elapsed_seconds`, each `{"value", "at_least"}`; `cost` also needs a three-letter `currency` |
+
+A counter that is missing is unknown, and stage never shows it as zero; `at_least` marks a lower bound, shown as
+`≥`. stage never prices anything. Fields stage does not know are ignored, and a status or state it does not know
+is shown as `unknown` with the provider's word beside it, so a provider can add to the format before stage does.
+Field names match exactly: a key that differs from one of the format's only in case, such as `Title`, refuses the
+document. `stage list` shows the first activity's title, round, current step, waiting members and tokens, with
+runs of spaces collapsed, the title cut to 40 characters, the step to 24, and large numbers shortened.
 
 ## First task
 
@@ -1099,8 +1148,10 @@ and what has not been run live yet.
   and at most two rows.
 - **What `stage list` shows from inside a stage is what the stage says.** The agent there can write anything: fake a
   CAO server, change what `df` or `tmux` print, or leave a session looking idle. stage bounds, escapes and checks the
-  shape of what it reads, but cannot check that it is true. It sees only CAO's terminals on `127.0.0.1:9889` and its
-  own jobs: an agent run by hand in `stage shell` without CAO, or a CAO server on another port, is not listed.
+  shape of what it reads, but cannot check that it is true. It sees only CAO's terminals on the ports in `cao_ports`
+  (`9889` unless you set it) or that a provider reports, and its own jobs: an agent run by hand in `stage shell`
+  without CAO, or a CAO server on a port nothing names, is not listed. A provider's activities are its own account
+  of its work; stage checks their shape, not that they match the sessions it read.
 - **A read can start a stage that has just stopped.** stage reads only stages `sbx ls` shows running, but `sbx exec`
   starts a stopped sandbox, so a stage that stops in the moment between the two is started again and stops 30
   seconds after the read. sbx has no exec that leaves a stopped sandbox alone. If the host's 10 seconds run out,
