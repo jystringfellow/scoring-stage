@@ -50,14 +50,16 @@ field() {
 provider() {
 	index=$1
 	shift
-	if [ -z "$bounded" ]; then
+	program=$(PATH="$PATH:$HOME/.local/bin"; command -v "$1" 2>/dev/null)
+	if [ -z "$program" ]; then
+		frame "provider $index" "" absent
+	elif [ -z "$bounded" ]; then
 		frame "provider $index" "" no-timeout
 	elif [ "$(left_for_providers)" -le 0 ]; then
 		frame "provider $index" "" late
-	elif ! command -v "$1" >/dev/null 2>&1; then
-		frame "provider $index" "" absent
 	else
-		capture 262145 timeout -k 1 "$(left_for_providers)" "$@"
+		shift
+		capture 262145 timeout -k 1 "$(left_for_providers)" "$program" "$@"
 		frame "provider $index" "$captured" "$status"
 	fi
 }

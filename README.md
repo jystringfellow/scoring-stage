@@ -173,19 +173,32 @@ refused, since the hall runs these commands inside every stage.
 
 ```toml
 [hall]
-providers = ["loop"]            # order; default: every built-in provider, then yours by name
+providers = ["kapellmeister", "loop"]  # order; default: every built-in provider, then yours by name
 cao_ports = [9889, 9890]        # CAO servers to read on each stage's loopback; default [9889]
 [hall.provider.loop]
 command = ["loop", "status", "--format", "stage-activity"]
 ```
 
-A provider runs when its program is on the `agent` user's `PATH` in the stage; otherwise it is passed over
-silently. Every provider that runs is listed, in order. Each runs as `agent` in the repository with no input and
+A provider runs when its program is on the `agent` user's `PATH` in the stage, or in that user's `~/.local/bin`,
+which is searched after `PATH` so it cannot stand in for a tool stage uses; otherwise it is passed over silently. Every provider that runs is listed, in order. Each runs as `agent` in the repository with no input and
 may print at most 256 KiB. Together they get the read's first 4 seconds: each runs under `timeout` for what is left
 of them, and one that would start after that is reported as not run, so the CAO reads keep their time. A stage
 without `timeout` runs no provider. Anything else, an exit status other than 0, or a document that does not fit the
 format is reported for that provider alone, and stage says which provider an activity came from, whatever the
 document says.
+
+**kapellmeister** is built in, and runs first unless `providers` leaves it out. In a stage with
+[kapellmeister](https://github.com/jystringfellow/kapellmeister)'s `km`, stage runs `km status -json` and translates
+its output on the host into one activity per run in progress:
+- **Title and status:** the title is `km <command> · <ensemble>`. The status is `running` while km is alive, `waiting`
+  with the chair and its question when a chair needs input, and `stopped` when km has abandoned the run.
+- **Steps** are the score's: `active` while current, `done` once in the trail, otherwise `pending`.
+- **Groups** are the ensemble's sections, and their members are the chairs. Each chair links to its CAO terminal, and
+  the run's CAO server is read wherever km says it is.
+- **Tokens** count as a lower bound unless km measured them all.
+
+km's output from before its `schema` field still shows each run's step and playing chairs. A later schema than 1 is
+reported as an error for this provider alone.
 
 The format is `stage-activity/1`:
 

@@ -76,8 +76,9 @@ type stageRead struct {
 }
 
 type stageProvider struct {
-	name    string
-	command []string
+	name      string
+	command   []string
+	translate func([]byte) ([]byte, error)
 }
 
 type readPlan struct {
@@ -180,13 +181,21 @@ func shellQuote(arg string) string {
 	return "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
 }
 
-func providerOutcome(provider string, frame readFrame) ([]activityRecord, *providerError) {
+func providerOutcome(provider stageProvider, frame readFrame) ([]activityRecord, *providerError) {
 	failed := func(reason string) ([]activityRecord, *providerError) {
-		return nil, &providerError{Provider: provider, Error: reason}
+		return nil, &providerError{Provider: provider.name, Error: reason}
 	}
 	switch frame.status {
 	case "0":
-		activities, err := parseActivities(provider, []byte(frame.body))
+		document := []byte(frame.body)
+		if provider.translate != nil {
+			translated, err := provider.translate(document)
+			if err != nil {
+				return failed("output refused: " + err.Error())
+			}
+			document = translated
+		}
+		activities, err := parseActivities(provider.name, document)
 		if err != nil {
 			return failed("output refused: " + err.Error())
 		}
@@ -270,7 +279,7 @@ func readFrames(frames []readFrame, repoDir string, plan readPlan) stageRead {
 				continue
 			}
 			providerSeen[index] = true
-			activities, failure := providerOutcome(plan.providers[index].name, frame)
+			activities, failure := providerOutcome(plan.providers[index], frame)
 			read.activities = append(read.activities, activities...)
 			if failure != nil {
 				read.providerErrors = append(read.providerErrors, *failure)

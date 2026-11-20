@@ -16,7 +16,7 @@ const (
 )
 
 var (
-	BuiltinProviders = []string{}
+	BuiltinProviders = []string{"kapellmeister"}
 	hallKeys         = []string{"providers", "provider", "cao_ports"}
 	providerName     = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 )
