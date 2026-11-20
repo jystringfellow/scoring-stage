@@ -4,6 +4,12 @@ const pollEvery = 2000;
 const columns = 8;
 const expanded = new Set();
 const openTails = new Set();
+const svgNamespace = "http://www.w3.org/2000/svg";
+const graphColumn = 210;
+const graphRow = 34;
+const graphNode = 180;
+const narrow = window.matchMedia("(max-width: 720px)");
+let mode = "table";
 let showResting = false;
 let latest = null;
 let drawnStages = "";
@@ -203,6 +209,73 @@ function addActivity(parent, stage, activity) {
   }
 }
 
+function svg(tag, attributes) {
+  const node = document.createElementNS(svgNamespace, tag);
+  for (const [name, value] of Object.entries(attributes || {})) {
+    node.setAttribute(name, String(value));
+  }
+  return node;
+}
+
+function shorten(text, limit) {
+  const characters = Array.from(String(text));
+  return characters.length > limit ? characters.slice(0, limit - 1).join("") + "…" : characters.join("");
+}
+
+function drawGraph(section, stages) {
+  section.replaceChildren();
+  const drawn = stages.filter((stage) => expanded.has(stage.slug));
+  if (!drawn.length) {
+    section.appendChild(el("p", "Expand a stage in the table to draw it here.", "muted"));
+    return;
+  }
+  for (const stage of drawn) {
+    const graph = stage.graph;
+    section.appendChild(el("h2", stage.slug));
+    const width = graph.columns * graphColumn;
+    const height = Math.max(graph.rows, 1) * graphRow;
+    const picture = svg("svg", { width: width, height: height, viewBox: "0 0 " + width + " " + height, role: "img" });
+    const caption = svg("title");
+    caption.textContent = "Stage " + stage.slug + ": activities, groups and members";
+    picture.appendChild(caption);
+    const where = new Map();
+    for (const node of graph.nodes) {
+      where.set(node.id, { x: node.column * graphColumn, y: node.row * graphRow + graphRow / 2 });
+    }
+    for (const edge of graph.edges) {
+      const from = where.get(edge.from);
+      const to = where.get(edge.to);
+      if (!from || !to) {
+        continue;
+      }
+      const bend = (to.x - from.x - graphNode) / 2;
+      const path = "M" + (from.x + graphNode) + " " + from.y + " C" + (from.x + graphNode + bend) + " " + from.y + " " +
+        (to.x - bend) + " " + to.y + " " + to.x + " " + to.y;
+      picture.appendChild(svg("path", { d: path, class: "edge" }));
+    }
+    for (const node of graph.nodes) {
+      const at = where.get(node.id);
+      const group = svg("g", { class: "node node-" + node.kind });
+      group.appendChild(svg("rect", { x: at.x, y: at.y - 12, width: graphNode, height: 24, rx: 5 }));
+      let textX = at.x + 8;
+      if (node.state) {
+        group.appendChild(svg("circle", { cx: at.x + 12, cy: at.y, r: 5, class: "dot " + stateClass(node.state) }));
+        textX = at.x + 22;
+      }
+      const label = svg("text", { x: textX, y: at.y + 4 });
+      const room = node.state ? 24 : 26;
+      const detail = node.detail ? shorten(node.detail, 12) : "";
+      label.textContent = detail ? shorten(node.label, Math.max(room - detail.length - 3, 6)) + " · " + detail : shorten(node.label, room);
+      group.appendChild(label);
+      const title = svg("title");
+      title.textContent = node.label + (node.detail ? " · " + node.detail : "") + (node.state ? " · " + words(node.state) : "") + (node.session ? " · " + node.session : "");
+      group.appendChild(title);
+      picture.appendChild(group);
+    }
+    section.appendChild(picture);
+  }
+}
+
 function showStatus(view) {
   const status = document.getElementById("status");
   status.textContent = "Read " + view.read_at + (view.error ? " · " + view.error : "");
@@ -215,6 +288,15 @@ function render(view) {
   }
   latest = view;
   showStatus(view);
+  const shown = mode === "graph" && narrow.matches ? "table" : mode;
+  for (const button of document.querySelectorAll("nav button")) {
+    button.setAttribute("aria-pressed", button.dataset.view === shown ? "true" : "false");
+  }
+  document.getElementById("stages").hidden = shown !== "table";
+  document.getElementById("graph").hidden = shown !== "graph";
+  if (shown === "graph") {
+    drawGraph(document.getElementById("graph"), view.stages);
+  }
   const rows = document.getElementById("rows");
   rows.replaceChildren();
   const resting = [];
@@ -268,5 +350,26 @@ async function poll() {
   }
   setTimeout(poll, pollEvery);
 }
+
+function readStart() {
+  const start = new URLSearchParams(location.hash.slice(1));
+  if (start.get("view") === "graph") {
+    mode = "graph";
+  }
+  for (const slug of (start.get("open") || "").split(",")) {
+    if (slug) {
+      expanded.add(slug);
+    }
+  }
+}
+
+readStart();
+for (const button of document.querySelectorAll("nav button")) {
+  button.addEventListener("click", () => {
+    mode = button.dataset.view;
+    render(latest);
+  });
+}
+narrow.addEventListener("change", () => render(latest));
 
 poll();

@@ -334,6 +334,7 @@ func TestThePageInsertsOnlyTextAndNamesNoTool(t *testing.T) {
 		if !strings.HasPrefix(name, "hallpage/") {
 			continue
 		}
+		source = strings.Replace(source, `"http://www.w3.org/2000/svg"`, "", 1)
 		for _, forbidden := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function", "<script>", "style=", "http:", "https:"} {
 			if strings.Contains(source, forbidden) {
 				t.Errorf("%s contains %q", name, forbidden)
