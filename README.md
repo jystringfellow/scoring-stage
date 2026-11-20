@@ -210,7 +210,9 @@ score played by claude and codex.
   stops reporting it, after its stage is gone and after the hall restarts.
 - **The graph:** the Graph button draws each expanded stage as a tree from the stage to its activities, their
   groups and their members, with a state dot on each, the active step on each activity and the agent on each member.
-  Hovering a node shows it whole. On a narrow screen the page keeps to the table. A link can open the page with a
+  With no stage expanded, it draws every stage running a stage job, and says so; with none running, it says how to
+  pick one. Hovering a node shows it whole. A graph wider than the window scrolls sideways. In a window under 360 px
+  wide, the graph says how wide a window it needs, and the table shows below it. A link can open the page with a
   view and stages chosen, as in `<url>#view=graph&open=fix-login,docs-pass`.
 - **What it costs:** the page polls `stage hall` every 2 seconds and is answered from memory, so the page itself
   never runs sbx. `stage hall` runs `sbx ls --json` and `sbx secret ls --global --json` every 5 seconds on the host,

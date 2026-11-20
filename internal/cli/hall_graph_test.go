@@ -100,10 +100,8 @@ func TestThePageDrawsTheGraphAsSVGAndRespectsReducedMotion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"createElementNS(svgNamespace", `narrow.matches ? "table"`} {
-		if !strings.Contains(string(page), want) {
-			t.Errorf("hall.js lacks %q", want)
-		}
+	if !strings.Contains(string(page), "createElementNS(svgNamespace") {
+		t.Errorf("hall.js does not draw SVG")
 	}
 	if !strings.Contains(string(style), "prefers-reduced-motion") {
 		t.Errorf("hall.css ignores reduced motion")

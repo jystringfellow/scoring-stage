@@ -8,7 +8,8 @@ const svgNamespace = "http://www.w3.org/2000/svg";
 const graphColumn = 210;
 const graphRow = 34;
 const graphNode = 180;
-const narrow = window.matchMedia("(max-width: 720px)");
+const graphMinWidth = 360;
+const tooNarrow = window.matchMedia("(max-width: " + (graphMinWidth - 1) + "px)");
 let mode = "table";
 let showResting = false;
 let latest = null;
@@ -236,10 +237,18 @@ function shorten(text, limit) {
 
 function drawGraph(section, stages) {
   section.replaceChildren();
-  const drawn = stages.filter((stage) => expanded.has(stage.slug));
-  if (!drawn.length) {
-    section.appendChild(el("p", "Expand a stage in the table to draw it here.", "muted"));
+  if (tooNarrow.matches) {
+    section.appendChild(el("p", "The graph needs a window at least " + graphMinWidth + " px wide. Widen the window or zoom out; the table is below until then.", "error"));
     return;
+  }
+  let drawn = stages.filter((stage) => expanded.has(stage.slug));
+  if (!drawn.length) {
+    drawn = stages.filter((stage) => stage.running_jobs > 0);
+    if (!drawn.length) {
+      section.appendChild(el("p", "No stage is running a job. Expand a stage in the table to draw it here, or open the page with #view=graph&open=<stage>.", "muted"));
+      return;
+    }
+    section.appendChild(el("p", "No stage is expanded, so this draws every stage with a running job. Expand stages in the table to choose others.", "muted"));
   }
   for (const stage of drawn) {
     const graph = stage.graph;
@@ -284,7 +293,7 @@ function drawGraph(section, stages) {
       group.appendChild(title);
       picture.appendChild(group);
     }
-    section.appendChild(picture);
+    section.appendChild(el("div", null, "graph-scroll")).appendChild(picture);
   }
 }
 
@@ -331,13 +340,12 @@ function render(view) {
   latest = view;
   showStatus(view);
   drawScoreboard(view.scoreboard || []);
-  const shown = mode === "graph" && narrow.matches ? "table" : mode;
   for (const button of document.querySelectorAll("nav button")) {
-    button.setAttribute("aria-pressed", button.dataset.view === shown ? "true" : "false");
+    button.setAttribute("aria-pressed", button.dataset.view === mode ? "true" : "false");
   }
-  document.getElementById("stages").hidden = shown !== "table";
-  document.getElementById("graph").hidden = shown !== "graph";
-  if (shown === "graph") {
+  document.getElementById("stages").hidden = mode === "graph" && !tooNarrow.matches;
+  document.getElementById("graph").hidden = mode !== "graph";
+  if (mode === "graph") {
     drawGraph(document.getElementById("graph"), view.stages);
   }
   const rows = document.getElementById("rows");
@@ -413,6 +421,6 @@ for (const button of document.querySelectorAll("nav button")) {
     render(latest);
   });
 }
-narrow.addEventListener("change", () => render(latest));
+tooNarrow.addEventListener("change", () => render(latest));
 
 poll();
