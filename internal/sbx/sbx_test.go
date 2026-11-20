@@ -2,6 +2,7 @@ package sbx
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -70,6 +71,25 @@ func TestRulesWithoutStatusOrIDAreActiveAndNamedQuestionMark(t *testing.T) {
 	policy := Policy{Rules: []map[string]any{{"scope": "global", "decision": "allow", "resource_type": "network"}}}
 	if got := GlobalAllowRules(policy); !reflect.DeepEqual(got, []string{"?"}) {
 		t.Fatalf("got %v", got)
+	}
+}
+
+func TestGlobalSecretNamesCoverEveryGlobalEntryButNeverItsValue(t *testing.T) {
+	listing, err := parseGlobalSecrets(`{"secrets": [
+		{"scope": "global", "type": "service", "name": "anthropic", "secret": "canary-value-1"},
+		{"scope": "stage-other", "type": "service", "name": "copilot", "secret": "canary-value-2"},
+		{"scope": "global", "type": "registry", "name": "ghcr.io", "secret": "canary-value-3"}],
+		"custom_secrets": [{"scope": "global", "name": "acme-api", "secret": "canary-value-4"}, {"secret": "canary-value-5"}, {"scope": "stage-x", "name": "scoped"}],
+		"shadowed_services": [], "env_only_count": 0}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"anthropic", "registry ghcr.io", "custom acme-api", "a custom secret"}
+	if !reflect.DeepEqual(listing.names, want) || !reflect.DeepEqual(listing.services, []string{"anthropic"}) {
+		t.Fatalf("got %#v", listing)
+	}
+	if strings.Contains(fmt.Sprintf("%#v", listing), "canary") {
+		t.Fatal("kept a secret's value")
 	}
 }
 

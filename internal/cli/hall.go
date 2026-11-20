@@ -61,11 +61,12 @@ type hallSummary struct {
 }
 
 type hallView struct {
-	Format     string      `json:"format"`
-	ReadAt     string      `json:"read_at"`
-	Error      string      `json:"error,omitempty"`
-	Stages     []hallStage `json:"stages"`
-	Scoreboard []scoreRow  `json:"scoreboard"`
+	Format             string      `json:"format"`
+	ReadAt             string      `json:"read_at"`
+	Error              string      `json:"error,omitempty"`
+	GlobalSecretsError string      `json:"global_secrets_error,omitempty"`
+	Stages             []hallStage `json:"stages"`
+	Scoreboard         []scoreRow  `json:"scoreboard"`
 }
 
 type hall struct {
@@ -217,6 +218,9 @@ func (h *hall) refresh(now time.Time) {
 		view.Error = config.Printable(err.Error())
 		h.snapshot, _ = json.Marshal(view)
 		return
+	}
+	if err := noteGlobalSecrets(entries); err != nil {
+		view.GlobalSecretsError = config.Printable("cannot tell which global sbx secrets apply to stages: " + err.Error())
 	}
 	var due []*stageEntry
 	running := map[string]bool{}

@@ -73,6 +73,7 @@ stage up ~/Code/api fix-login --agent agy --book dotnet  # add an agent or an in
 stage up ~/Code/api fix-login --aws-profile staging    # grant an AWS profile to one box and make it the default
 stage up ~/Code/api fix-login --disk 40g  # a 40 GB root disk for one box instead of sbx's 20 GB
 stage up ~/Code/api fix-login --plan # write the env file and show sbx's plan without creating (stops first if approvals are missing)
+stage up ~/Code/api fix-login --allow-global-secrets  # go on although sbx applies its global secrets to every box
 stage shell fix-login                # login shell in the repository; run claude, codex or copilot
 stage exec fix-login -- git log -1
 stage put fix-login ./notes.txt '~/notes.txt' # copy one file into the sandbox as the agent
@@ -165,6 +166,11 @@ boundary inside a part, is refused whole. Each read is an sbx session, so it del
 seconds. A stage without a `timeout` command gets no disk use and no terminal tails, since stage could not bound
 them. `--shallow` reads only what the host holds, including jobs, and runs nothing inside any sandbox.
 
+Each stage whose sandbox exists also lists, as `global_secrets` in `--json`, the names of sbx's global secrets, which
+sbx applies to every sandbox whatever the stage's config says (see [Global secrets](#global-secrets)). They are read
+on the host with `sbx secret ls --global --json`, names only, and say what applies now, since sbx uses whatever is
+global when a sandbox makes a request. If that listing fails, `stage list` warns and lists the stages without them.
+
 `stage hall` serves the same stages as a page, until Ctrl-C. It prints a URL on `127.0.0.1` with a random port and
 a random token in its path; `--port` picks the port. No daemon is left behind, and what it keeps on disk is below. One hall
 runs per `STAGE_HOME`: a second is refused and names the running one's pid and port, since two would each read every
@@ -185,7 +191,8 @@ score played by claude and codex.
   sessions no activity claims. A session, or a member whose session was read, opens to the last lines of its
   terminal, shown as text. Stages that need attention come first: a waiting member or session, a `failed` or
   `blocked` activity, a read or provider error, or a disk at 90% or more. Stages that are not running fold into one
-  line.
+  line. A stage's detail names sbx's global secrets in a plain line; they apply to every stage, so they do not
+  mark one as needing attention.
 - **What it remembers:** while it runs, the hall keeps its last reading of a stage that stops, and shows it marked
   "last read" with the time, never as live. An activity a provider stops reporting stays under the stage as
   "Earlier", with when it was last seen, and the row names it when nothing newer runs. When a stage's job ends, the
@@ -206,7 +213,8 @@ score played by claude and codex.
   Hovering a node shows it whole. On a narrow screen the page keeps to the table. A link can open the page with a
   view and stages chosen, as in `<url>#view=graph&open=fix-login,docs-pass`.
 - **What it costs:** the page polls `stage hall` every 2 seconds and is answered from memory, so the page itself
-  never runs sbx. `stage hall` runs `sbx ls --json` every 5 seconds and reads each running stage it has a task for
+  never runs sbx. `stage hall` runs `sbx ls --json` and `sbx secret ls --global --json` every 5 seconds on the host,
+  and reads each running stage it has a task for
   once a minute, or every 10 seconds while a stage job runs in it, with the same script, bounds and four reads at
   a time as `stage list`. Each read is an sbx session, so it holds a stage up for 30 seconds after it. A minute's
   reads do not keep an idle stage running; something running in the stage, such as a stage job, has to.
@@ -566,10 +574,12 @@ No child inherits the client's input or protocol output. Bad tool arguments and 
 errors; malformed requests and unknown protocol methods return JSON-RPC errors.
 
 Only configured agent names and installed book names can be selected. The tools offer no repository approval,
-book directory, AWS profile grant, global-policy override, resource override, protected-path allowance, pull
+book directory, AWS profile grant, global-policy or global-secrets override, resource override, protected-path allowance, pull
 request creation or discarded takes. The caller may be following text from a repository or sandbox, so those
 choices stay with the person. `up` never changes the approvals file, including legacy approvals; review the
-missing items and run its returned `stage up ... --approve-repo-config ...` command, or `stage approve <repo>`, in a terminal. `ship` never
+missing items and run its returned `stage up ... --approve-repo-config ...` command, or `stage approve <repo>`, in a terminal.
+When sbx has global secrets, `up` returns their names and a `stage up ... --allow-global-secrets ...` command for
+the person instead. `ship` never
 pushes or records a ship: review its result and run the returned `stage ship ...` command to confirm and push.
 It refuses protected paths outright and enforces the same branch namespace as the command line.
 
@@ -715,6 +725,42 @@ tools do not give an agent those credential and host administration choices. `ex
 
    sbx has no command that withdraws one binding, so edit the file. Never pass `--prune-bindings` to `sbx env rm`
    for a stage sandbox: it deletes the whole shared service entry machine-wide.
+5. **Global secrets.** `stage up` stops while sbx has global secrets unless you pass `--allow-global-secrets`; see
+   [Global secrets](#global-secrets).
+
+### Global secrets
+
+sbx applies every global secret to every sandbox, whatever the sandbox's env file says. A stage made with its own
+secrets, or with dummy ones, can still use a global secret wherever its kits let it reach that service. On this
+machine that is usually your agent sign-ins, such as `anthropic` and `openai`.
+
+`stage up`, and `stage up --plan`, list the global secrets with `sbx secret ls --global --json`, name each one, and
+stop unless you pass `--allow-global-secrets`; with it, `stage up` goes on and names them in a warning. The MCP
+`up` tool never passes the flag: it returns the names and the command for a person to run, as it does for a missing
+approval. stage reads only names, scopes and types. sbx's listing also has a `secret` field, which stage never
+decodes. The flag does not cover a global `github` secret: `stage up` refuses that one whatever you pass (see GitHub
+access above). stage checks when it creates a sandbox; a global secret added later reaches running stages too, and
+`stage list --json` and the hall show what applies now.
+
+To keep a credential to the stages that need it, rather than every sandbox:
+
+1. Remove the global one with `sbx secret rm <service>`. It goes for every sandbox on the machine, inside stage or
+   not.
+2. Give stage a host command for it in `~/.scoring-stage/config.toml`. stage sets it as a per-sandbox secret in each
+   new stage's env file:
+
+   ```toml
+   [secrets.anthropic]
+   command = "op read op://Private/anthropic/key"
+   ```
+
+   For one sandbox that already exists, `sbx secret set <service> --sandbox stage-<slug>` scopes a secret to it
+   (`--command` or `--ref` stores a source instead of the value).
+
+An OAuth sign-in cannot be moved this way: `sbx secret set --oauth` stores tokens at global scope only. A stage
+whose agent signs in by OAuth either runs with `--allow-global-secrets`, or uses an API key through
+`[secrets.<service>]` and an `apiKey` binding, as `[secrets.openai]` does in the example under
+[Configuration and books](#configuration-and-books).
 
 ## What a sandbox gets
 
@@ -1267,8 +1313,13 @@ and what has not been run live yet.
 - AWS keys from the broker enter the sandbox and stay usable until they expire, up to about 12 hours, even after
   `stage down`.
 - Bindings are shared by every sandbox. One written for a sandbox stays after `stage down` and approves that service
-  for all sandboxes; a sandbox gets a value only from its own secret or a global sbx secret, and
-  `stage up` checks for a global secret only for `github`.
+  for all sandboxes; a sandbox gets a value only from its own secret or a global sbx secret. `stage up` refuses a
+  global `github` secret, and stops on any other global secret unless `--allow-global-secrets` is passed.
+- Only sbx can keep a global secret out of a sandbox. sbx has no option to create a sandbox without its global
+  secrets, and it stores OAuth sign-ins only globally, so `--allow-global-secrets` is the only way to run an agent
+  signed in that way. `stage up` checks when it creates a sandbox; a global secret added later reaches running
+  stages, as `stage list --json` and the hall show. stage also names any other global entry in that listing, such
+  as a custom secret or registry credential, but only global service secrets have been seen in a live listing.
 - The push refusal covers HTTP on ports 443 and 80. A kit that allows SSH or another port to a git host opens a
   push path the proxy does not refuse.
 - Deny-all egress limits where data can go, not what goes there: an agent can send what it can read to any host

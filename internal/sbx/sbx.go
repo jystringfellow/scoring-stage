@@ -329,28 +329,82 @@ func parseListing(text string) ([]Listed, error) {
 // GlobalSecrets lists the services that have a global sbx secret. Any binding
 // for such a service, saved by an earlier sandbox or not, can fall back to it.
 func GlobalSecrets() ([]string, error) {
-	text, err := Output("secret", "ls", "--global", "--json")
+	listing, err := readGlobalSecrets()
 	if err != nil {
 		return nil, err
 	}
+	return listing.services, nil
+}
+
+func GlobalSecretNames() ([]string, error) {
+	listing, err := readGlobalSecrets()
+	if err != nil {
+		return nil, err
+	}
+	return listing.names, nil
+}
+
+func GlobalSecretNamesWithin(timeout time.Duration) ([]string, error) {
+	text, err := ReadWithin(timeout, strings.NewReader(""), listingLimit, "secret", "ls", "--global", "--json")
+	if err != nil {
+		return nil, err
+	}
+	listing, err := parseGlobalSecrets(text)
+	return listing.names, err
+}
+
+type globalSecrets struct {
+	services []string
+	names    []string
+}
+
+func readGlobalSecrets() (globalSecrets, error) {
+	text, err := Output("secret", "ls", "--global", "--json")
+	if err != nil {
+		return globalSecrets{}, err
+	}
+	return parseGlobalSecrets(text)
+}
+
+func parseGlobalSecrets(text string) (globalSecrets, error) {
 	var listing struct {
 		Secrets *[]struct {
 			Scope string `json:"scope"`
 			Type  string `json:"type"`
 			Name  string `json:"name"`
 		} `json:"secrets"`
+		Custom []struct {
+			Scope *string `json:"scope"`
+			Name  *string `json:"name"`
+		} `json:"custom_secrets"`
 	}
 	if err := json.Unmarshal([]byte(text), &listing); err != nil || listing.Secrets == nil {
-		return nil, &Error{fmt.Sprintf("cannot read sbx secret ls --json (expected a secrets list): %v", err)}
+		return globalSecrets{}, &Error{fmt.Sprintf("cannot read sbx secret ls --json (expected a secrets list): %v", err)}
 	}
-	var services []string
+	var found globalSecrets
 	for _, secret := range *listing.Secrets {
 		if secret.Scope == "" || secret.Type == "" || secret.Name == "" {
-			return nil, &Error{"cannot read sbx secret ls --json: a secret has no scope, type or name"}
+			return globalSecrets{}, &Error{"cannot read sbx secret ls --json: a secret has no scope, type or name"}
 		}
-		if secret.Scope == "global" && secret.Type == "service" {
-			services = append(services, secret.Name)
+		if secret.Scope != "global" {
+			continue
+		}
+		if secret.Type == "service" {
+			found.services = append(found.services, secret.Name)
+			found.names = append(found.names, secret.Name)
+		} else {
+			found.names = append(found.names, secret.Type+" "+secret.Name)
 		}
 	}
-	return services, nil
+	for _, custom := range listing.Custom {
+		if custom.Scope != nil && *custom.Scope != "global" {
+			continue
+		}
+		name := "a custom secret"
+		if custom.Name != nil && *custom.Name != "" {
+			name = "custom " + *custom.Name
+		}
+		found.names = append(found.names, name)
+	}
+	return found, nil
 }

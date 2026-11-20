@@ -99,6 +99,9 @@ function addDetails(parent, stage) {
   } else if (stage.read) {
     parent.appendChild(el("p", "Read at " + stage.read.at + " in " + stage.read.took_ms + " ms", "muted"));
   }
+  if (stage.global_secrets && stage.global_secrets.length) {
+    parent.appendChild(el("p", "sbx applies its global secrets to this stage, whatever its config says: " + stage.global_secrets.join(", ")));
+  }
   if (stage.sessions.detail) {
     parent.appendChild(el("p", stage.sessions.detail, "muted"));
   }
@@ -316,8 +319,9 @@ function drawScoreboard(board) {
 
 function showStatus(view) {
   const status = document.getElementById("status");
-  status.textContent = "Read " + view.read_at + (view.error ? " · " + view.error : "");
-  status.className = view.error ? "error" : "";
+  const problems = [view.error, view.global_secrets_error].filter(Boolean);
+  status.textContent = ["Read " + view.read_at].concat(problems).join(" · ");
+  status.className = problems.length ? "error" : "";
 }
 
 function render(view) {

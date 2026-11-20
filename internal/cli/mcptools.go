@@ -264,10 +264,16 @@ func (s *mcpServer) up(raw json.RawMessage) (map[string]any, error) {
 	_, err = s.child(out, errOut).cmdUp(append(append([]string{}, args...), "--", p.Repo, p.Slug), s.home)
 	result := map[string]any{"output": out.text(), "stderr": errOut.text(), "truncated": out.truncated() || errOut.truncated()}
 	var needed *approvalNeeded
-	if errors.As(err, &needed) {
+	var secrets *globalSecretsNeeded
+	switch {
+	case errors.As(err, &needed):
 		result["needs_person"] = true
 		result["approvals"] = needed.missing
 		result["command"] = mcpCommand(append(append([]string{"stage", "up"}, args...), "--approve-repo-config", "--", p.Repo, p.Slug)...)
+	case errors.As(err, &secrets):
+		result["needs_person"] = true
+		result["global_secrets"] = secrets.names
+		result["command"] = mcpCommand(append(append([]string{"stage", "up"}, args...), "--allow-global-secrets", "--", p.Repo, p.Slug)...)
 	}
 	return result, err
 }
