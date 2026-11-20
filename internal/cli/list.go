@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -216,8 +217,16 @@ func hallPlan(hall config.Hall) readPlan {
 	return plan
 }
 
-func (a *App) readStages(entries []*stageEntry, plan readPlan) {
+type stageReading struct {
+	at     time.Time
+	record *readRecord
+	read   stageRead
+}
+
+func readEntries(entries []*stageEntry, plan readPlan) map[*stageEntry]stageReading {
 	var asking sync.WaitGroup
+	var mu sync.Mutex
+	readings := map[*stageEntry]stageReading{}
 	slots := make(chan struct{}, stagesReadAtOnce)
 	for _, entry := range entries {
 		if entry.task == nil || entry.record.State != "running" {
@@ -229,14 +238,28 @@ func (a *App) readStages(entries []*stageEntry, plan readPlan) {
 			slots <- struct{}{}
 			defer func() { <-slots }()
 			record, read := readStage(entry.task, plan)
-			entry.record.Read, entry.record.Disk, entry.record.Sessions = record, read.disk, read.sessions
-			entry.record.Sessions.Items = append(entry.record.Sessions.Items, entry.jobs...)
-			if read.activities != nil {
-				entry.record.Activities, entry.record.ProviderErrors = read.activities, read.providerErrors
-			}
+			mu.Lock()
+			readings[entry] = stageReading{record: record, read: read}
+			mu.Unlock()
 		}()
 	}
 	asking.Wait()
+	return readings
+}
+
+func applyReading(entry *stageEntry, reading stageReading) {
+	read := reading.read
+	entry.record.Read, entry.record.Disk, entry.record.Sessions = reading.record, read.disk, read.sessions
+	entry.record.Sessions.Items = append(slices.Clone(read.sessions.Items), entry.jobs...)
+	if read.activities != nil {
+		entry.record.Activities, entry.record.ProviderErrors = read.activities, read.providerErrors
+	}
+}
+
+func (a *App) readStages(entries []*stageEntry, plan readPlan) {
+	for entry, reading := range readEntries(entries, plan) {
+		applyReading(entry, reading)
+	}
 	for _, entry := range entries {
 		if entry.task != nil {
 			a.warnOfFullDisk(entry.task, entry.record.Disk)

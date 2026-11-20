@@ -1,0 +1,282 @@
+package cli
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/jystringfellow/scoring-stage/internal/testutil"
+)
+
+type runningHall struct {
+	url  string
+	port string
+	stop func() int
+}
+
+func startHall(t *testing.T, h *harness, args ...string) runningHall {
+	t.Helper()
+	reader, writer := io.Pipe()
+	stop := make(chan struct{})
+	var stderr bytes.Buffer
+	app := &App{
+		Stdin:           strings.NewReader(""),
+		Stdout:          writer,
+		Stderr:          &stderr,
+		FindGh:          func() string { return h.gh },
+		BrokerPID:       func(string) int { return 0 },
+		IsTerminal:      func() bool { return false },
+		StdinIsTerminal: func() bool { return false },
+		GitHubAPI:       h.github.api(),
+		hallStop:        stop,
+	}
+	exited := make(chan int, 1)
+	go func() {
+		exited <- app.Main(append([]string{"hall"}, args...))
+		writer.Close()
+	}()
+	lines := bufio.NewScanner(reader)
+	if !lines.Scan() {
+		t.Fatalf("stage hall printed nothing; exit %d, stderr %q", <-exited, stderr.String())
+	}
+	url := regexp.MustCompile(`http://127\.0\.0\.1:([0-9]+)/[0-9a-f]{32}/`).FindStringSubmatch(lines.Text())
+	if url == nil {
+		t.Fatalf("stage hall printed %q", lines.Text())
+	}
+	go io.Copy(io.Discard, reader)
+	code := -1
+	running := runningHall{url: url[0], port: url[1], stop: func() int {
+		if code >= 0 {
+			return code
+		}
+		close(stop)
+		select {
+		case code = <-exited:
+			return code
+		case <-time.After(10 * time.Second):
+			t.Fatalf("stage hall did not stop")
+			return -1
+		}
+	}}
+	t.Cleanup(func() { running.stop() })
+	return running
+}
+
+func hallGet(t *testing.T, method, url, host string) *http.Response {
+	t.Helper()
+	request, err := http.NewRequest(method, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host != "" {
+		request.Host = host
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { response.Body.Close() })
+	return response
+}
+
+type hallSnapshot struct {
+	Format string `json:"format"`
+	Stages []struct {
+		stageRecord
+		Attention []string `json:"attention"`
+		Summary   struct {
+			Sessions string `json:"sessions"`
+			Activity string `json:"activity"`
+			Disk     string `json:"disk"`
+			Age      string `json:"age"`
+		} `json:"summary"`
+	} `json:"stages"`
+}
+
+func readHall(t *testing.T, hall runningHall) hallSnapshot {
+	t.Helper()
+	response := hallGet(t, "GET", hall.url+"api/hall", "")
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("api/hall: %s", response.Status)
+	}
+	var snapshot hallSnapshot
+	if err := json.NewDecoder(response.Body).Decode(&snapshot); err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
+}
+
+func quickHall(t *testing.T, list, read, jobRead time.Duration) {
+	t.Helper()
+	before := [3]time.Duration{hallListEvery, hallReadEvery, hallJobReadEvery}
+	hallListEvery, hallReadEvery, hallJobReadEvery = list, read, jobRead
+	t.Cleanup(func() { hallListEvery, hallReadEvery, hallJobReadEvery = before[0], before[1], before[2] })
+}
+
+func TestHallServesTheStagesOnLoopbackBehindAToken(t *testing.T) {
+	h := readyToRead(t)
+	serveCAO(h, "9889")
+	hall := startHall(t, h)
+	snapshot := readHall(t, hall)
+	if snapshot.Format != "stage-hall/1" || len(snapshot.Stages) != 1 {
+		t.Fatalf("snapshot %+v", snapshot)
+	}
+	fix := snapshot.Stages[0]
+	if fix.Slug != "fix" || fix.Sessions.Status != "ok" || len(fix.Sessions.Items) != 4 ||
+		fix.Summary.Sessions != "4 (1 working, 1 waiting, 1 idle, 1 unknown)" || fix.Summary.Disk != "95%" {
+		t.Errorf("fix %+v", fix)
+	}
+	for _, path := range []string{"", "hall.js", "hall.css", "api/hall"} {
+		response := hallGet(t, "GET", hall.url+path, "")
+		if response.StatusCode != http.StatusOK {
+			t.Errorf("%q: %s", path, response.Status)
+		}
+		for header, want := range map[string]string{
+			"Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; frame-ancestors 'none'",
+			"X-Content-Type-Options":  "nosniff",
+			"Referrer-Policy":         "no-referrer",
+			"Cache-Control":           "no-store",
+		} {
+			if got := response.Header.Get(header); got != want {
+				t.Errorf("%q: %s = %q, want %q", path, header, got, want)
+			}
+		}
+	}
+	if code := hall.stop(); code != 0 {
+		t.Errorf("stage hall exited %d", code)
+	}
+	if _, err := http.Get(hall.url + "api/hall"); err == nil {
+		t.Errorf("the page is still served after stage hall stopped")
+	}
+}
+
+func TestHallAnswersOnlyGETsForItsTokenAndItsOwnHost(t *testing.T) {
+	h := readyToRead(t)
+	hall := startHall(t, h)
+	base := strings.TrimSuffix(hall.url, "/")
+	root := base[:strings.LastIndex(base, "/")]
+	for _, check := range []struct {
+		method, url, host string
+		want              int
+	}{
+		{"GET", root + "/", "", http.StatusNotFound},
+		{"GET", root + "/00000000000000000000000000000000/api/hall", "", http.StatusNotFound},
+		{"GET", hall.url + "../api/hall", "", http.StatusNotFound},
+		{"GET", hall.url + "nothing", "", http.StatusNotFound},
+		{"POST", hall.url + "api/hall", "", http.StatusMethodNotAllowed},
+		{"DELETE", hall.url, "", http.StatusMethodNotAllowed},
+		{"GET", hall.url + "api/hall", "attacker.example:" + hall.port, http.StatusForbidden},
+		{"GET", hall.url + "api/hall", "127.0.0.1", http.StatusForbidden},
+		{"GET", hall.url + "api/hall", "localhost:" + hall.port, http.StatusOK},
+	} {
+		if got := hallGet(t, check.method, check.url, check.host).StatusCode; got != check.want {
+			t.Errorf("%s %s Host %q: %d, want %d", check.method, check.url, check.host, got, check.want)
+		}
+	}
+}
+
+func TestHallListensOnlyOnLoopback(t *testing.T) {
+	h := readyToRead(t)
+	hall := startHall(t, h, "--port", "0")
+	if !strings.HasPrefix(hall.url, "http://127.0.0.1:") {
+		t.Errorf("url %s", hall.url)
+	}
+	h.expect(2, "hall", "--port", "70000")
+}
+
+func TestThePageNeverCausesAnSbxCall(t *testing.T) {
+	h := readyToRead(t)
+	quickHall(t, time.Hour, time.Hour, time.Hour)
+	hall := startHall(t, h)
+	before := len(h.sbx.Calls())
+	for range 20 {
+		readHall(t, hall)
+	}
+	if after := len(h.sbx.Calls()); after != before {
+		t.Errorf("20 page polls made %d sbx calls", after-before)
+	}
+}
+
+func TestHallReadsARunningStageOnItsCadenceAndNeverAStoppedOne(t *testing.T) {
+	h := readyToRead(t)
+	h.expect(0, "up", h.remote.Checkout, "other")
+	h.sbx.SetSandboxes("stage-fix\n")
+	h.sbx.SetStopped("stage-other\n")
+	quickHall(t, 100*time.Millisecond, time.Hour, time.Hour)
+	hall := startHall(t, h)
+	time.Sleep(1500 * time.Millisecond)
+	hall.stop()
+	reads := strings.Fields(testutil.ReadFile(t, filepath.Join(h.sbx.State, "reads.log")))
+	if len(reads) != 1 || reads[0] != "stage-fix" {
+		t.Errorf("reads %v, want stage-fix once in an hour's cadence and stage-other never", reads)
+	}
+}
+
+func TestHallReadsAStageWithARunningJobMoreOften(t *testing.T) {
+	h, _ := jobsReady(t)
+	fakeDf(t, nearlyFullDf(h))
+	_, args := gated(t, h)
+	h.expect(0, args...)
+	eventually(t, func() bool { return len(h.sbx.Sessions()) == 1 })
+	h.sbx.SetSandboxes("stage-fix\n")
+	quickHall(t, 100*time.Millisecond, time.Hour, 300*time.Millisecond)
+	hall := startHall(t, h)
+	time.Sleep(1500 * time.Millisecond)
+	hall.stop()
+	if reads := strings.Fields(testutil.ReadFile(t, filepath.Join(h.sbx.State, "reads.log"))); len(reads) < 3 {
+		t.Errorf("reads %v, want the job's faster cadence", reads)
+	}
+}
+
+func TestStagesThatNeedAttentionComeFirst(t *testing.T) {
+	h := readyToRead(t)
+	h.expect(0, "up", h.remote.Checkout, "other")
+	h.sbx.SetSandboxes("stage-fix\nstage-other\n")
+	fakeDf(t, "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/vda 100 10 90 10% /\n")
+	serveCAO(h, "9889")
+	h.sbx.SetCAO("9889", "/terminals/5e6f7a8b", caoTerminal("5e6f7a8b", "review-5e6f", "codex", "review", "processing"))
+	h.sbx.FailReads("stage-other", "boom\n")
+	snapshot := readHall(t, startHall(t, h))
+	var order []string
+	for _, stage := range snapshot.Stages {
+		order = append(order, stage.Slug+":"+strings.Join(stage.Attention, ","))
+	}
+	if want := "other:read,fix:"; strings.Join(order, ",") != want {
+		t.Errorf("order %v, want %s", order, want)
+	}
+}
+
+func TestThePageInsertsOnlyTextAndNamesNoTool(t *testing.T) {
+	sources := map[string]string{}
+	for _, name := range []string{"hallpage/index.html", "hallpage/hall.js", "hallpage/hall.css", "hall.go", "list.go"} {
+		data, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sources[name] = string(data)
+	}
+	for name, source := range sources {
+		if !strings.HasPrefix(name, "hallpage/") {
+			continue
+		}
+		for _, forbidden := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function", "<script>", "style=", "http:", "https:"} {
+			if strings.Contains(source, forbidden) {
+				t.Errorf("%s contains %q", name, forbidden)
+			}
+		}
+	}
+	toolWords := regexp.MustCompile(`(?i)\b(km|kapellmeister|ensemble|chairs?)\b`)
+	for name, source := range sources {
+		if word := toolWords.FindString(source); word != "" {
+			t.Errorf("%s names a tool's own word %q", name, word)
+		}
+	}
+}

@@ -1,0 +1,165 @@
+:root {
+  color-scheme: light dark;
+  --bg: #fbfbfa;
+  --fg: #1d1d1b;
+  --muted: #6b6b66;
+  --line: #e2e1dc;
+  --row: #ffffff;
+  --attention: #b54708;
+  --attention-bg: #fff4e5;
+  --working: #1f7a3a;
+  --waiting: #b54708;
+  --idle: #6b6b66;
+  --bad: #b42318;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161615;
+    --fg: #ecebe6;
+    --muted: #9b9a94;
+    --line: #2e2d2a;
+    --row: #1d1d1b;
+    --attention: #f5a35c;
+    --attention-bg: #2b2014;
+    --working: #6fcf8a;
+    --waiting: #f5a35c;
+    --idle: #9b9a94;
+    --bad: #f97066;
+  }
+}
+
+body {
+  margin: 0;
+  padding: 16px 24px 32px;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+h1 {
+  font-size: 18px;
+  margin: 0 0 12px;
+}
+
+#status,
+footer {
+  color: var(--muted);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--row);
+}
+
+th,
+td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+th {
+  font-weight: 600;
+  color: var(--muted);
+}
+
+tr.attention > td {
+  background: var(--attention-bg);
+}
+
+.badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--attention);
+  border: 1px solid var(--attention);
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0 6px;
+  cursor: pointer;
+}
+
+.detail > td {
+  padding-left: 40px;
+  background: var(--bg);
+}
+
+.detail h2 {
+  font-size: 13px;
+  margin: 8px 0 4px;
+}
+
+.detail ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.state-working,
+.state-running,
+.state-ok {
+  color: var(--working);
+}
+
+.state-waiting,
+.state-blocked {
+  color: var(--waiting);
+}
+
+.state-idle,
+.state-exited,
+.state-stopped,
+.state-pending {
+  color: var(--idle);
+}
+
+.state-failed,
+.state-unreadable,
+.state-timed_out,
+.state-gone,
+.error {
+  color: var(--bad);
+}
+
+.hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+@media (max-width: 720px) {
+  body {
+    padding: 12px;
+  }
+
+  th:nth-child(4),
+  td:nth-child(4),
+  th:nth-child(5),
+  td:nth-child(5) {
+    display: none;
+  }
+}
