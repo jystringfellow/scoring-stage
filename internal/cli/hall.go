@@ -60,10 +60,11 @@ type hallSummary struct {
 }
 
 type hallView struct {
-	Format string      `json:"format"`
-	ReadAt string      `json:"read_at"`
-	Error  string      `json:"error,omitempty"`
-	Stages []hallStage `json:"stages"`
+	Format     string      `json:"format"`
+	ReadAt     string      `json:"read_at"`
+	Error      string      `json:"error,omitempty"`
+	Stages     []hallStage `json:"stages"`
+	Scoreboard []scoreRow  `json:"scoreboard"`
 }
 
 type hall struct {
@@ -74,6 +75,8 @@ type hall struct {
 	readings map[string]stageReading
 	jobs     map[string]int
 	earlier  map[string][]earlierActivity
+	finished map[string][]earlierActivity
+	loaded   map[string]bool
 	keep     time.Duration
 }
 
@@ -106,7 +109,7 @@ func (a *App) cmdHall(args []string, home string) (int, error) {
 	if err != nil {
 		return 0, errorf("cannot listen on 127.0.0.1: %v", err)
 	}
-	served := &hall{home: home, plan: hallPlan(settings.Hall), readings: map[string]stageReading{}, jobs: map[string]int{}, earlier: map[string][]earlierActivity{}, keep: settings.Hall.Keep}
+	served := &hall{home: home, plan: hallPlan(settings.Hall), readings: map[string]stageReading{}, jobs: map[string]int{}, earlier: map[string][]earlierActivity{}, finished: map[string][]earlierActivity{}, loaded: map[string]bool{}, keep: settings.Hall.Keep}
 	served.refresh(time.Now())
 	token := newHallToken()
 	bound := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
@@ -228,9 +231,12 @@ func (h *hall) refresh(now time.Time) {
 	}
 	fresh := map[string]bool{}
 	for entry, reading := range readEntries(due, h.plan) {
-		h.rememberEnded(entry.record.Slug, reading)
-		h.readings[entry.record.Slug] = reading
-		fresh[entry.record.Slug] = true
+		slug := entry.record.Slug
+		h.rememberEnded(slug, reading)
+		h.readings[slug] = reading
+		fresh[slug] = true
+		h.loadFinished(slug, now)
+		h.finished[slug] = keepFinished(h.finished[slug], reading, h.keep, now)
 	}
 	listedSlugs := map[string]bool{}
 	for _, entry := range entries {
@@ -242,7 +248,7 @@ func (h *hall) refresh(now time.Time) {
 		if reading, ok := h.readings[slug]; ok {
 			applyReading(entry, reading)
 			if fresh[slug] && h.keep > 0 {
-				saveHallView(h.home, entry.record, reading.at, earlier, now)
+				saveHallView(h.home, entry.record, reading.at, earlier, h.finished[slug], now)
 			}
 			if !running[slug] {
 				remembered = reading.at.UTC().Format(time.RFC3339)
@@ -251,6 +257,9 @@ func (h *hall) refresh(now time.Time) {
 			if saved, found := loadHallView(h.home, slug, h.keep, now); found {
 				entry.record.Sessions, entry.record.Activities = saved.sessions(entry.jobs), saved.Activities
 				earlier, remembered = saved.Earlier, saved.SavedAt
+				if !h.loaded[slug] {
+					h.finished[slug], h.loaded[slug] = saved.Finished, true
+				}
 				if saved.ReadAt != "" {
 					remembered = saved.ReadAt
 				}
@@ -272,13 +281,22 @@ func (h *hall) refresh(now time.Time) {
 		if saved.ReadAt != "" {
 			remembered = saved.ReadAt
 		}
+		h.finished[slug], h.loaded[slug] = saved.Finished, true
 		view.Stages = append(view.Stages, h.describeRemembered(record, saved.Earlier, remembered, now))
+		listedSlugs[slug] = true
 	}
+	view.Scoreboard = scoreboard(view.Stages, h.finished)
 	for slug := range h.readings {
 		if !listedSlugs[slug] {
 			delete(h.readings, slug)
 			delete(h.jobs, slug)
 			delete(h.earlier, slug)
+		}
+	}
+	for slug := range h.finished {
+		if !listedSlugs[slug] {
+			delete(h.finished, slug)
+			delete(h.loaded, slug)
 		}
 	}
 	slices.SortStableFunc(view.Stages, func(a, b hallStage) int {
@@ -294,6 +312,16 @@ func (h *hall) refresh(now time.Time) {
 	h.mu.Lock()
 	h.snapshot = snapshot
 	h.mu.Unlock()
+}
+
+func (h *hall) loadFinished(slug string, now time.Time) {
+	if h.loaded[slug] {
+		return
+	}
+	h.loaded[slug] = true
+	if saved, found := loadHallView(h.home, slug, h.keep, now); found {
+		h.finished[slug] = saved.Finished
+	}
 }
 
 func (h *hall) describeRemembered(record stageRecord, earlier []earlierActivity, remembered string, now time.Time) hallStage {

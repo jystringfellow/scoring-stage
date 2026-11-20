@@ -188,6 +188,10 @@ Ctrl-C stops it at once, even while sbx is slow to answer, and a second Ctrl-C e
   whose sandbox and task are gone shows as `gone` with it. `[hall] keep` in your config says for how long: `"30d"`
   by default, whole days or hours such as `"7d"` or `"12h"`, or `"0"` to keep nothing. Older views are deleted. A
   view is at most 1 MiB, and when read back it is checked again as untrusted, as on its first read, and escaped.
+- **Finished runs:** every activity a stage reports as `succeeded`, `failed` or `stopped` is kept with that view, up
+  to 64 per stage and for as long as `keep`, and the page sums them by repository above the stages: runs, each
+  outcome, and tokens, marked `≥` when a count was a lower bound or unknown. A run stays counted after its provider
+  stops reporting it, after its stage is gone and after the hall restarts.
 - **The graph:** the Graph button draws each expanded stage as a tree from the stage to its activities, their
   groups and their members, with a state dot on each, the active step on each activity and the agent on each member.
   Hovering a node shows it whole. On a narrow screen the page keeps to the table. A link can open the page with a

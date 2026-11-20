@@ -39,13 +39,14 @@ type savedView struct {
 	Sessions   []savedSession    `json:"sessions"`
 	Activities []activityRecord  `json:"activities"`
 	Earlier    []earlierActivity `json:"earlier"`
+	Finished   []earlierActivity `json:"finished"`
 }
 
-func saveHallView(home string, record stageRecord, readAt time.Time, earlier []earlierActivity, now time.Time) error {
+func saveHallView(home string, record stageRecord, readAt time.Time, earlier, finished []earlierActivity, now time.Time) error {
 	view := savedView{
 		Format: hallViewFormat, Slug: record.Slug, SavedAt: now.UTC().Format(time.RFC3339), ReadAt: readAt.UTC().Format(time.RFC3339),
 		Repository: record.Repository, BaseBranch: record.BaseBranch, Sessions: []savedSession{},
-		Activities: record.Activities, Earlier: earlier,
+		Activities: record.Activities, Earlier: earlier, Finished: finished,
 	}
 	for _, session := range record.Sessions.Items {
 		if session.Source == "cao" {
@@ -111,7 +112,7 @@ func loadHallView(home, slug string, keep time.Duration, now time.Time) (savedVi
 }
 
 func checkSavedView(view savedView) savedView {
-	checked := savedView{Format: view.Format, Slug: view.Slug, SavedAt: view.SavedAt, Sessions: []savedSession{}, Activities: []activityRecord{}, Earlier: []earlierActivity{}}
+	checked := savedView{Format: view.Format, Slug: view.Slug, SavedAt: view.SavedAt, Sessions: []savedSession{}, Activities: []activityRecord{}, Earlier: []earlierActivity{}, Finished: []earlierActivity{}}
 	if _, err := time.Parse(time.RFC3339, view.ReadAt); err == nil {
 		checked.ReadAt = view.ReadAt
 	}
@@ -129,10 +130,21 @@ func checkSavedView(view savedView) savedView {
 			checked.Activities = append(checked.Activities, valid)
 		}
 	}
-	for _, earlier := range view.Earlier[:min(len(view.Earlier), maxEarlierActivities)] {
+	checked.Earlier = recheckEarlier(view.Earlier, maxEarlierActivities)
+	for _, finished := range recheckEarlier(view.Finished, maxFinishedActivities) {
+		if slices.Contains(finishedStatuses, finished.Activity.Status) {
+			checked.Finished = append(checked.Finished, finished)
+		}
+	}
+	return checked
+}
+
+func recheckEarlier(list []earlierActivity, limit int) []earlierActivity {
+	checked := []earlierActivity{}
+	for _, earlier := range list[:min(len(list), limit)] {
 		valid, ok := recheckActivity(earlier.Activity)
 		if _, err := time.Parse(time.RFC3339, earlier.LastSeenAt); ok && err == nil {
-			checked.Earlier = append(checked.Earlier, earlierActivity{Activity: valid, LastSeenAt: earlier.LastSeenAt})
+			checked = append(checked, earlierActivity{Activity: valid, LastSeenAt: earlier.LastSeenAt})
 		}
 	}
 	return checked
