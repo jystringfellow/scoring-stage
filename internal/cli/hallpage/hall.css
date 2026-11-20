@@ -198,10 +198,12 @@ button {
   margin: 16px 0 6px;
 }
 
+.graph-scroll {
+  overflow-x: auto;
+}
+
 #graph svg {
   display: block;
-  max-width: 100%;
-  height: auto;
 }
 
 .node rect {
