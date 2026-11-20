@@ -79,6 +79,7 @@ type stageProvider struct {
 	name      string
 	command   []string
 	translate func([]byte) ([]activityRecord, []string, error)
+	since     time.Duration
 }
 
 type readPlan struct {
@@ -166,6 +167,9 @@ func readScriptFor(boundary string, plan readPlan) string {
 		line := []string{"provider", strconv.Itoa(index)}
 		for _, arg := range provider.command {
 			line = append(line, shellQuote(arg))
+		}
+		if provider.since > 0 {
+			line = append(line, "-since", shellQuote(time.Now().Add(-provider.since).UTC().Format(time.RFC3339)))
 		}
 		providers = append(providers, strings.Join(line, " "))
 	}
@@ -283,7 +287,11 @@ func readFrames(frames []readFrame, repoDir string, plan readPlan) stageRead {
 			}
 			providerSeen[index] = true
 			activities, failures := providerOutcome(plan.providers[index], frame)
-			read.activities = append(read.activities, activities...)
+			for _, activity := range activities {
+				if !slices.ContainsFunc(read.activities, func(a activityRecord) bool { return a.Provider == activity.Provider && a.ID == activity.ID }) {
+					read.activities = append(read.activities, activity)
+				}
+			}
 			read.providerErrors = append(read.providerErrors, failures...)
 		case len(fields) == 3 && fields[0] == "cao" && fields[2] == "sessions" && askedFor(fields[1], ports):
 			servers[fields[1]] = serverState(frame.status)

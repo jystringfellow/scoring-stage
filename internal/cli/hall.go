@@ -44,10 +44,12 @@ var (
 
 type hallStage struct {
 	stageRecord
-	Attention []string        `json:"attention"`
-	Summary   hallSummary     `json:"summary"`
-	Unclaimed []sessionRecord `json:"unclaimed_sessions"`
-	Graph     hallGraph       `json:"graph"`
+	Attention  []string          `json:"attention"`
+	Summary    hallSummary       `json:"summary"`
+	Unclaimed  []sessionRecord   `json:"unclaimed_sessions"`
+	Graph      hallGraph         `json:"graph"`
+	Remembered string            `json:"remembered,omitempty"`
+	Earlier    []earlierActivity `json:"earlier_activities"`
 }
 
 type hallSummary struct {
@@ -70,7 +72,16 @@ type hall struct {
 	mu       sync.Mutex
 	snapshot []byte
 	readings map[string]stageReading
+	jobs     map[string]int
+	earlier  map[string][]earlierActivity
 }
+
+type earlierActivity struct {
+	Activity   activityRecord `json:"activity"`
+	LastSeenAt string         `json:"last_seen_at"`
+}
+
+const maxEarlierActivities = 16
 
 func (a *App) cmdHall(args []string, home string) (int, error) {
 	fs := a.newFlags("hall", "[--port N]")
@@ -94,7 +105,7 @@ func (a *App) cmdHall(args []string, home string) (int, error) {
 	if err != nil {
 		return 0, errorf("cannot listen on 127.0.0.1: %v", err)
 	}
-	served := &hall{home: home, plan: hallPlan(settings.Hall), readings: map[string]stageReading{}}
+	served := &hall{home: home, plan: hallPlan(settings.Hall), readings: map[string]stageReading{}, jobs: map[string]int{}, earlier: map[string][]earlierActivity{}}
 	served.refresh(time.Now())
 	token := newHallToken()
 	bound := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
@@ -209,23 +220,41 @@ func (h *hall) refresh(now time.Time) {
 		if entry.record.RunningJobs > 0 {
 			every = hallJobReadEvery
 		}
-		if last, ok := h.readings[entry.record.Slug]; !ok || now.Sub(last.at) >= every {
+		jobEnded := h.jobs[entry.record.Slug] > 0 && entry.record.RunningJobs == 0
+		if last, ok := h.readings[entry.record.Slug]; !ok || last.at.IsZero() || now.Sub(last.at) >= every || jobEnded {
 			due = append(due, entry)
 		}
 	}
 	for entry, reading := range readEntries(due, h.plan) {
+		h.rememberEnded(entry.record.Slug, reading)
 		h.readings[entry.record.Slug] = reading
 	}
-	for slug := range h.readings {
-		if !running[slug] {
-			delete(h.readings, slug)
-		}
-	}
+	listedSlugs := map[string]bool{}
 	for _, entry := range entries {
-		if reading, ok := h.readings[entry.record.Slug]; ok {
+		slug := entry.record.Slug
+		listedSlugs[slug] = true
+		h.jobs[slug] = entry.record.RunningJobs
+		reading, ok := h.readings[slug]
+		if ok {
 			applyReading(entry, reading)
 		}
-		view.Stages = append(view.Stages, describeForHall(entry.record, now))
+		stage := describeForHall(entry.record, now)
+		stage.Earlier = append([]earlierActivity{}, h.earlier[slug]...)
+		if len(entry.record.Activities) == 0 && len(stage.Earlier) > 0 {
+			stage.Summary.Activity = "last seen: " + activitySummary([]activityRecord{stage.Earlier[len(stage.Earlier)-1].Activity}, nil)
+		}
+		if ok && !running[slug] {
+			stage.Remembered = reading.at.UTC().Format(time.RFC3339)
+			stage.Attention = []string{}
+		}
+		view.Stages = append(view.Stages, stage)
+	}
+	for slug := range h.readings {
+		if !listedSlugs[slug] {
+			delete(h.readings, slug)
+			delete(h.jobs, slug)
+			delete(h.earlier, slug)
+		}
 	}
 	slices.SortStableFunc(view.Stages, func(a, b hallStage) int {
 		if (len(a.Attention) > 0) != (len(b.Attention) > 0) {
@@ -240,6 +269,28 @@ func (h *hall) refresh(now time.Time) {
 	h.mu.Lock()
 	h.snapshot = snapshot
 	h.mu.Unlock()
+}
+
+func (h *hall) rememberEnded(slug string, next stageReading) {
+	key := func(a activityRecord) string { return a.Provider + " " + a.ID }
+	live := map[string]bool{}
+	for _, activity := range next.read.activities {
+		live[key(activity)] = true
+	}
+	kept := []earlierActivity{}
+	for _, earlier := range h.earlier[slug] {
+		if !live[key(earlier.Activity)] {
+			kept = append(kept, earlier)
+		}
+	}
+	if previous, ok := h.readings[slug]; ok {
+		for _, activity := range previous.read.activities {
+			if !live[key(activity)] {
+				kept = append(kept, earlierActivity{Activity: activity, LastSeenAt: previous.at.UTC().Format(time.RFC3339)})
+			}
+		}
+	}
+	h.earlier[slug] = kept[max(len(kept)-maxEarlierActivities, 0):]
 }
 
 func describeForHall(record stageRecord, now time.Time) hallStage {

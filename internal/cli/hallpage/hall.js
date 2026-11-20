@@ -82,7 +82,7 @@ function addStage(rows, stage) {
   cell(row, repository);
   cell(row, stage.summary.age);
   cell(row, stage.summary.disk);
-  cell(row, stage.summary.sessions, stateClass(stage.sessions.status));
+  cell(row, stage.remembered ? stage.summary.sessions + " (last read)" : stage.summary.sessions, stage.remembered ? "muted" : stateClass(stage.sessions.status));
   cell(row, stage.summary.activity);
   rows.appendChild(row);
   if (open) {
@@ -91,6 +91,9 @@ function addStage(rows, stage) {
 }
 
 function addDetails(parent, stage) {
+  if (stage.remembered) {
+    parent.appendChild(el("p", "Not running. This is what the hall last read, at " + stage.remembered + "; none of it is live.", "muted"));
+  }
   if (stage.read && stage.read.error) {
     parent.appendChild(el("p", "The last read failed: " + stage.read.error, "error"));
   } else if (stage.read) {
@@ -104,6 +107,9 @@ function addDetails(parent, stage) {
   }
   for (const activity of stage.activities || []) {
     addActivity(parent, stage, activity);
+  }
+  for (const earlier of stage.earlier_activities || []) {
+    addActivity(parent, stage, earlier.activity, earlier.last_seen_at);
   }
   if (stage.unclaimed_sessions.length) {
     const list = addSection(parent, "Sessions");
@@ -161,9 +167,12 @@ function addSession(list, stage, session) {
   list.appendChild(item);
 }
 
-function addActivity(parent, stage, activity) {
+function addActivity(parent, stage, activity, lastSeen) {
   const heading = activity.provider + " · " + activity.title;
-  parent.appendChild(el("h2", heading));
+  parent.appendChild(el("h2", lastSeen ? "Earlier · " + heading : heading));
+  if (lastSeen) {
+    parent.appendChild(el("p", "No longer reported; last seen at " + lastSeen + ". Its states are as they were then.", "muted"));
+  }
   const facts = el("p");
   facts.appendChild(el("span", stateText(activity.status, activity.raw_status), stateClass(activity.status)));
   if (activity.round) {
@@ -301,7 +310,7 @@ function render(view) {
   rows.replaceChildren();
   const resting = [];
   for (const stage of view.stages) {
-    if (stage.state !== "running" && stage.attention.length === 0) {
+    if (stage.state !== "running" && stage.attention.length === 0 && !stage.remembered) {
       resting.push(stage);
     } else {
       addStage(rows, stage);

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -93,6 +94,11 @@ type hallSnapshot struct {
 	Format string `json:"format"`
 	Stages []struct {
 		stageRecord
+		Remembered string `json:"remembered"`
+		Earlier    []struct {
+			Activity   activityRecord `json:"activity"`
+			LastSeenAt string         `json:"last_seen_at"`
+		} `json:"earlier_activities"`
 		Attention []string `json:"attention"`
 		Summary   struct {
 			Sessions string `json:"sessions"`
@@ -356,5 +362,95 @@ func TestAnOpenTerminalShowsItsNewestLines(t *testing.T) {
 	}
 	if !strings.Contains(string(page), "lines.scrollTop = lines.scrollHeight") {
 		t.Errorf("an open terminal is not scrolled to its last line")
+	}
+}
+
+func stageInHall(t *testing.T, hall runningHall, slug string) (stage struct {
+	Slug, State, Remembered, Activity string
+	Sessions                          int
+	Activities, Earlier               []string
+	Attention                         []string
+}) {
+	t.Helper()
+	for _, found := range readHall(t, hall).Stages {
+		if found.Slug != slug {
+			continue
+		}
+		stage.Slug, stage.State, stage.Remembered, stage.Sessions, stage.Attention = found.Slug, found.State, found.Remembered, len(found.Sessions.Items), found.Attention
+		stage.Activity = found.Summary.Activity
+		for _, activity := range found.Activities {
+			stage.Activities = append(stage.Activities, activity.ID+"="+activity.Status)
+		}
+		for _, earlier := range found.Earlier {
+			if earlier.LastSeenAt == "" {
+				t.Errorf("earlier activity %s has no last-seen time", earlier.Activity.ID)
+			}
+			stage.Earlier = append(stage.Earlier, earlier.Activity.ID+"="+earlier.Activity.Status)
+		}
+		return stage
+	}
+	t.Fatalf("no stage %s", slug)
+	return stage
+}
+
+func TestAStageThatStopsKeepsItsLastReadingMarkedAsRemembered(t *testing.T) {
+	h := readyToRead(t)
+	serveCAO(h, "9889")
+	printsDocument(t, "loop", `{"format":"stage-activity/1","activities":[{"id":"a","title":"t","status":"running"}]}`)
+	userConfig(t, h, "[hall.provider.loop]\ncommand = [\"loop\"]\n")
+	quickHall(t, 100*time.Millisecond, time.Hour, time.Hour)
+	hall := startHall(t, h)
+	if live := stageInHall(t, hall, "fix"); live.Remembered != "" || live.Sessions != 4 {
+		t.Fatalf("live stage %+v", live)
+	}
+	h.sbx.SetSandboxes("")
+	h.sbx.SetStopped("stage-fix\n")
+	eventually(t, func() bool { return stageInHall(t, hall, "fix").State == "stopped" })
+	stopped := stageInHall(t, hall, "fix")
+	if stopped.Remembered == "" || stopped.Sessions != 4 || !slices.Equal(stopped.Activities, []string{"a=running"}) || len(stopped.Attention) != 0 {
+		t.Errorf("stopped stage %+v, want its last reading kept, marked, and asking for no attention", stopped)
+	}
+}
+
+func TestAnActivityThatEndsIsKeptAsEarlierActivity(t *testing.T) {
+	h := readyToRead(t)
+	document := filepath.Join(t.TempDir(), "activity.json")
+	testutil.WriteFile(t, document, `{"format":"stage-activity/1","activities":[{"id":"a","title":"t","status":"running"}]}`)
+	providerProgram(t, "loop", "cat '"+document+"'\n")
+	userConfig(t, h, "[hall.provider.loop]\ncommand = [\"loop\"]\n")
+	quickHall(t, 100*time.Millisecond, 300*time.Millisecond, time.Hour)
+	hall := startHall(t, h)
+	testutil.WriteFile(t, document, `{"format":"stage-activity/1","activities":[{"id":"b","title":"t","status":"running"}]}`)
+	eventually(t, func() bool { return len(stageInHall(t, hall, "fix").Earlier) == 1 })
+	stage := stageInHall(t, hall, "fix")
+	if !slices.Equal(stage.Activities, []string{"b=running"}) || !slices.Equal(stage.Earlier, []string{"a=running"}) {
+		t.Errorf("stage %+v, want b live and a kept as earlier", stage)
+	}
+	testutil.WriteFile(t, document, `{"format":"stage-activity/1","activities":[]}`)
+	eventually(t, func() bool { return len(stageInHall(t, hall, "fix").Earlier) == 2 })
+	if stage := stageInHall(t, hall, "fix"); stage.Activity != "last seen: t" {
+		t.Errorf("row %q, want the last ended activity named as such", stage.Activity)
+	}
+}
+
+func TestAStageIsReadOnceMoreWhenItsJobEnds(t *testing.T) {
+	h, _ := jobsReady(t)
+	fakeDf(t, nearlyFullDf(h))
+	gate, args := gated(t, h)
+	h.expect(0, args...)
+	eventually(t, func() bool { return len(h.sbx.Sessions()) == 1 })
+	h.sbx.SetSandboxes("stage-fix\n")
+	quickHall(t, 100*time.Millisecond, time.Hour, time.Hour)
+	hall := startHall(t, h)
+	reads := func() int { return len(strings.Fields(testutil.ReadFile(t, filepath.Join(h.sbx.State, "reads.log")))) }
+	if got := reads(); got != 1 {
+		t.Fatalf("reads %d before the job ended", got)
+	}
+	testutil.WriteFile(t, gate, "")
+	eventually(t, func() bool { return reads() == 2 })
+	time.Sleep(500 * time.Millisecond)
+	hall.stop()
+	if got := reads(); got != 2 {
+		t.Errorf("reads %d, want one more read when the job ended and no more", got)
 	}
 }
