@@ -378,3 +378,23 @@ func TestAKmReportThatSkipsOrFailsLeavesLiveRunsShown(t *testing.T) {
 		t.Errorf("activities %+v errors %+v, want the live run kept and one error", fix.Activities, fix.ProviderErrors)
 	}
 }
+
+func TestAStepKmIsOnThatIsNotInTheScoreShowsFirstAsActive(t *testing.T) {
+	h := readyToRead(t)
+	kmPrints(t, h, fixture(t, "km-status-preflight.json"))
+	run := sessionsOf(t, h, "fix").Activities[0]
+	var steps []string
+	for _, step := range run.Steps {
+		steps = append(steps, step.Name+"="+step.State)
+	}
+	if want := []string{"preflight=active", "draft=pending", "check=pending"}; !slices.Equal(steps, want) {
+		t.Errorf("steps %v, want %v", steps, want)
+	}
+	if len(run.Groups) != 2 || run.Groups[1].Members[1].Agent != "agy" || run.Groups[1].Members[1].State != "idle" {
+		t.Errorf("groups %+v", run.Groups)
+	}
+	h.expect(0, "list")
+	if !strings.Contains(h.stdout.String(), "km run · duo · round 0/2 · preflight") {
+		t.Errorf("stdout %q", h.stdout.String())
+	}
+}

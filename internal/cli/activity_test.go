@@ -319,12 +319,18 @@ func TestHangingProvidersShareOneBudgetAndLeaveTimeForCAO(t *testing.T) {
 	}
 }
 
+func serveOneTerminal(h *harness, port string) {
+	h.sbx.SetCAO(port, "/sessions", `[{"id":"cao-alpha","name":"cao-alpha","status":"active"}]`)
+	h.sbx.SetCAO(port, "/sessions/cao-alpha/terminals", `[{"id":"1a2b3c4d"}]`)
+	h.sbx.SetCAO(port, "/terminals/1a2b3c4d", caoTerminal("1a2b3c4d", "lead-1a2b", "claude_code", "lead", "processing"))
+}
+
 func TestAtMostEightReportedPortsAreReadAndRepeatsCollapse(t *testing.T) {
 	h := readyToRead(t)
 	var activities []string
 	for i := range 16 {
 		port := 9900 + i%10
-		serveCAO(h, strconv.Itoa(port))
+		serveOneTerminal(h, strconv.Itoa(port))
 		activities = append(activities, fmt.Sprintf(`{"id":"a%d","title":"t","status":"running","cao_port":%d}`, i, port))
 	}
 	printsDocument(t, "loop", `{"format":"stage-activity/1","activities":[`+strings.Join(activities, ",")+`]}`)
@@ -339,7 +345,7 @@ func TestAtMostEightReportedPortsAreReadAndRepeatsCollapse(t *testing.T) {
 		t.Errorf("servers %v, want 8", servers)
 	}
 	for server, terminals := range servers {
-		if terminals != 4 {
+		if terminals != 1 {
 			t.Errorf("%s has %d terminals, want each port read once", server, terminals)
 		}
 	}

@@ -344,7 +344,14 @@ func kmSteps(run kmRun) []activityStep {
 	doneThisRound := func(name string) bool {
 		return slices.ContainsFunc(run.Trail, func(s kmStep) bool { return s.Step == name && (s.Round == run.Round || s.Round == 0) })
 	}
-	for _, step := range run.Score.Steps[:min(len(run.Score.Steps), maxSteps)] {
+	for _, current := range run.Current {
+		name := clip(current.Step, 100)
+		inScore := slices.ContainsFunc(run.Score.Steps, func(s kmStep) bool { return s.Name == current.Step })
+		if name != "" && !inScore && !slices.ContainsFunc(steps, func(s activityStep) bool { return s.Name == name }) {
+			steps = append(steps, activityStep{Name: name, State: "active"})
+		}
+	}
+	for _, step := range run.Score.Steps[:min(len(run.Score.Steps), maxSteps-len(steps))] {
 		if step.Name == "" {
 			continue
 		}
