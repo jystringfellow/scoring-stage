@@ -17,8 +17,113 @@ const (
 	maxKmTokens           = 1e15
 )
 
-var builtinProviders = map[string]stageProvider{
-	kapellmeisterProvider: {name: kapellmeisterProvider, command: []string{"km", "status", "-json"}, translate: translateKmStatus},
+var builtinProviders = map[string][]stageProvider{
+	kapellmeisterProvider: {
+		{name: kapellmeisterProvider, command: []string{"km", "status", "-json"}, translate: translateKmStatus},
+		{name: kapellmeisterProvider, command: []string{"km", "report", "-json"}, since: kmReportWindow, translate: translateKmReport},
+	},
+}
+
+const (
+	kmReportWindow  = 2 * time.Hour
+	maxKmReportRuns = 8
+)
+
+type kmReport struct {
+	Runs []json.RawMessage `json:"runs"`
+}
+
+type kmFinishedRun struct {
+	RunID      string `json:"run_id"`
+	Command    string `json:"command"`
+	Ensemble   string `json:"ensemble"`
+	Started    string `json:"started"`
+	Outcome    string `json:"outcome"`
+	Reason     string `json:"reason"`
+	Rounds     *int   `json:"rounds"`
+	DurationMS *int64 `json:"duration_ms"`
+	Usage      struct {
+		Known        bool    `json:"known"`
+		UnknownSteps int     `json:"unknown_steps"`
+		InputTokens  float64 `json:"input_tokens"`
+		OutputTokens float64 `json:"output_tokens"`
+	} `json:"usage"`
+}
+
+func translateKmReport(output []byte) ([]activityRecord, []string, error) {
+	var report kmReport
+	if err := json.Unmarshal(output, &report); err != nil {
+		return nil, nil, errKmUnreadable
+	}
+	activities := []activityRecord{}
+	var notes []string
+	for index, raw := range report.Runs {
+		activity, err := translateKmFinished(raw)
+		if err != nil {
+			notes = append(notes, fmt.Sprintf("finished km run %d left out: %s", index, err))
+			continue
+		}
+		activities = append(activities, activity)
+	}
+	slices.SortStableFunc(activities, func(a, b activityRecord) int {
+		switch {
+		case a.StartedAt == b.StartedAt:
+			return 0
+		case a.StartedAt == "":
+			return 1
+		case b.StartedAt == "":
+			return -1
+		}
+		return -strings.Compare(a.StartedAt, b.StartedAt)
+	})
+	return activities[:min(len(activities), maxKmReportRuns)], notes, nil
+}
+
+func translateKmFinished(raw json.RawMessage) (activityRecord, error) {
+	if len(raw) == 0 || raw[0] != '{' {
+		return activityRecord{}, errors.New("it is not a run")
+	}
+	var run kmFinishedRun
+	if err := json.Unmarshal(raw, &run); err != nil {
+		return activityRecord{}, errors.New("it does not have km's shape")
+	}
+	title := "km"
+	if run.Command != "" {
+		title += " " + run.Command
+	}
+	if run.Ensemble != "" {
+		title += " · " + run.Ensemble
+	}
+	activity := activityRecord{ID: run.RunID, Title: clip(title, 200), Status: clip(run.Outcome, 64), StartedAt: rfc3339OrEmpty(run.Started)}
+	switch run.Outcome {
+	case "approved":
+		activity.Status = "succeeded"
+	case "failed":
+		activity.Status = "failed"
+	case "changes_requested":
+		activity.Status = "stopped"
+	case "":
+		activity.Status = "unknown"
+	}
+	activity.Reason = strings.ReplaceAll(run.Outcome, "_", " ")
+	if run.Reason != "" {
+		activity.Reason += ": " + run.Reason
+	}
+	activity.Reason = clip(activity.Reason, 500)
+	if run.Rounds != nil && *run.Rounds >= 0 {
+		activity.Round = &activityRound{Current: *run.Rounds}
+	}
+	counters := &activityCounters{}
+	if total := run.Usage.InputTokens + run.Usage.OutputTokens; run.Usage.Known && total >= 0 && total <= maxKmTokens {
+		counters.Tokens = &counter{Value: total, AtLeast: run.Usage.UnknownSteps > 0}
+	}
+	if run.DurationMS != nil && *run.DurationMS >= 0 {
+		counters.ElapsedSeconds = &counter{Value: float64(*run.DurationMS / 1000)}
+	}
+	if counters.Tokens != nil || counters.ElapsedSeconds != nil {
+		activity.Counters = counters
+	}
+	return checkKmActivity(activity)
 }
 
 var errKmUnreadable = errors.New("km status -json printed something stage cannot read")
@@ -134,6 +239,10 @@ func translateKmEntry(raw json.RawMessage) (activityRecord, error) {
 	if err != nil {
 		return activityRecord{}, err
 	}
+	return checkKmActivity(activity)
+}
+
+func checkKmActivity(activity activityRecord) (activityRecord, error) {
 	document, err := json.Marshal(struct {
 		Format     string           `json:"format"`
 		Activities []activityRecord `json:"activities"`

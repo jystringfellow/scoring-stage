@@ -177,6 +177,11 @@ Ctrl-C stops it at once, even while sbx is slow to answer, and a second Ctrl-C e
   terminal, shown as text. Stages that need attention come first: a waiting member or session, a `failed` or
   `blocked` activity, a read or provider error, or a disk at 90% or more. Stages that are not running fold into one
   line.
+- **What it remembers:** while it runs, the hall keeps its last reading of a stage that stops, and shows it marked
+  "last read" with the time, never as live. An activity a provider stops reporting stays under the stage as
+  "Earlier", with when it was last seen, and the row names it when nothing newer runs. When a stage's job ends, the
+  hall reads the stage once more, in the half minute before sbx stops it, so a run's end is caught. All of this is
+  in memory and goes when the hall stops.
 - **The graph:** the Graph button draws each expanded stage as a tree from the stage to its activities, their
   groups and their members, with a state dot on each, the active step on each activity and the agent on each member.
   Hovering a node shows it whole. On a narrow screen the page keeps to the table. A link can open the page with a
@@ -224,7 +229,11 @@ its output on the host into one activity per run in progress:
   the run's CAO server is read wherever km says it is.
 - **Tokens** count as a lower bound unless km measured them all.
 
-km's output from before its `schema` field still shows each run's step and playing chairs. A later schema than 1 is
+stage also runs `km report -json -since <two hours ago>` and shows the runs that finished in that time:
+`succeeded` for `approved`, `failed`, or `stopped` for `changes_requested`, with km's outcome as the reason, its
+rounds, time and tokens, so a row reads like `km run · duo · round 1 · succeeded · 1m31s · 19k tokens`. A run km
+still lists as in progress is shown once, as live. km's output from before its `schema` field still shows each
+run's step and playing chairs. A later schema than 1 is
 reported as an error for this provider alone.
 
 The format is `stage-activity/1`:

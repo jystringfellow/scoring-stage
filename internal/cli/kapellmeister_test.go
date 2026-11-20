@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jystringfellow/scoring-stage/internal/testutil"
 )
@@ -15,10 +16,15 @@ func kmPrints(t *testing.T, h *harness, document string) {
 	t.Helper()
 	file := testutil.WriteFile(t, filepath.Join(t.TempDir(), "status.json"), document)
 	path := testutil.WriteFile(t, filepath.Join(h.sbx.AgentHome(), ".local", "bin", "km"),
-		"#!/bin/sh\n[ \"$*\" = \"status -json\" ] || exit 64\ncat '"+file+"'\n")
+		"#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HOME/km-calls.log\"\ncase \"$1 $2\" in\n\"status -json\") cat '"+file+"' ;;\n\"report -json\") cat \"$HOME/km-report.json\" 2>/dev/null || echo '{\"runs\":[]}' ;;\n*) exit 64 ;;\nesac\n")
 	if err := os.Chmod(path, 0o755); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func kmReports(t *testing.T, h *harness, document string) {
+	t.Helper()
+	testutil.WriteFile(t, filepath.Join(h.sbx.AgentHome(), "km-report.json"), document)
 }
 
 func fixture(t *testing.T, name string) string {
@@ -308,5 +314,67 @@ func TestAKmThatCannotBeRunIsAbsentAndRepeatedStepsCollapse(t *testing.T) {
 	kmPrints(t, h, kmRuns(t, `{"run_id":"r","command":"run","ensemble":"e","liveness":"alive","playing":[{"step":"`+long+`","chair":"a"},{"step":"`+long+`","chair":"b"}]}`))
 	if steps := sessionsOf(t, h, "fix").Activities[0].Steps; len(steps) != 1 {
 		t.Errorf("steps %+v, want the repeated step once", steps)
+	}
+}
+
+func TestFinishedKmRunsComeFromKmsReport(t *testing.T) {
+	h := readyToRead(t)
+	kmPrints(t, h, kmRuns(t, `{"run_id":"live","command":"run","ensemble":"duo","liveness":"alive"}`))
+	kmReports(t, h, `{"runs":[
+		{"run_id":"r-done","command":"run","ensemble":"duo","started":"2026-11-20T10:55:39.5Z","outcome":"approved","rounds":1,"duration_ms":91000,
+		 "usage":{"known":true,"input_tokens":15000,"output_tokens":4000,"cache_read_tokens":99}},
+		{"run_id":"r-changes","command":"run","ensemble":"duo","outcome":"changes_requested","rounds":2,"usage":{"known":false}},
+		{"run_id":"live","command":"run","ensemble":"duo","outcome":"approved"}]}`)
+	started := time.Now()
+	fix := sessionsOf(t, h, "fix")
+	var got []string
+	for _, activity := range fix.Activities {
+		got = append(got, activity.ID+"="+activity.Status+"/"+activity.Reason)
+	}
+	if want := []string{"live=running/", "r-done=succeeded/approved", "r-changes=stopped/changes requested"}; !slices.Equal(got, want) {
+		t.Errorf("activities %v, want %v", got, want)
+	}
+	done := fix.Activities[1]
+	if done.Round == nil || done.Round.Current != 1 || done.Counters == nil || done.Counters.Tokens == nil || done.Counters.Tokens.Value != 19000 ||
+		done.Counters.Tokens.AtLeast || done.Counters.ElapsedSeconds == nil || done.Counters.ElapsedSeconds.Value != 91 || done.StartedAt != "2026-11-20T10:55:39Z" {
+		t.Errorf("finished run %+v counters %+v", done, done.Counters)
+	}
+	if changes := fix.Activities[2]; changes.Counters != nil && changes.Counters.Tokens != nil {
+		t.Errorf("tokens km did not know are shown: %+v", changes.Counters)
+	}
+	calls := testutil.ReadFile(t, filepath.Join(h.sbx.AgentHome(), "km-calls.log"))
+	var since string
+	for _, call := range strings.Split(calls, "\n") {
+		if rest, ok := strings.CutPrefix(call, "report -json -since "); ok {
+			since = rest
+		}
+	}
+	at, err := time.Parse(time.RFC3339, since)
+	if err != nil || at.Before(started.Add(-2*time.Hour-time.Minute)) || at.After(started.Add(-2*time.Hour+time.Minute)) {
+		t.Errorf("km report was asked for runs since %q, want two hours ago; calls %q", since, calls)
+	}
+}
+
+func TestARowNamesAFinishedRunsOutcomeTimeAndTokens(t *testing.T) {
+	h := readyToRead(t)
+	kmPrints(t, h, `{"runs":[]}`)
+	kmReports(t, h, `{"runs":[{"run_id":"r","command":"run","ensemble":"duo","outcome":"approved","rounds":1,"duration_ms":91000,"usage":{"known":true,"input_tokens":15000,"output_tokens":4000}}]}`)
+	h.expect(0, "list")
+	if !strings.Contains(h.stdout.String(), "km run · duo · round 1 · succeeded · 1m31s · 19k tokens") {
+		t.Errorf("stdout %q", h.stdout.String())
+	}
+}
+
+func TestAKmReportThatSkipsOrFailsLeavesLiveRunsShown(t *testing.T) {
+	h := readyToRead(t)
+	kmPrints(t, h, kmRuns(t, `{"run_id":"live","command":"run","ensemble":"duo","liveness":"alive"}`))
+	kmReports(t, h, `{"runs":[{"run_id":"r","command":"run","outcome":"approved"}],"skipped_dirs":["/home/agent/missing"]}`)
+	if fix := sessionsOf(t, h, "fix"); len(fix.Activities) != 2 || len(fix.ProviderErrors) != 0 {
+		t.Errorf("activities %+v errors %+v, want both runs and no error for a skipped directory", fix.Activities, fix.ProviderErrors)
+	}
+	kmReports(t, h, "not json")
+	fix := sessionsOf(t, h, "fix")
+	if len(fix.Activities) != 1 || fix.Activities[0].ID != "live" || len(fix.ProviderErrors) != 1 || fix.ProviderErrors[0].Provider != "kapellmeister" {
+		t.Errorf("activities %+v errors %+v, want the live run kept and one error", fix.Activities, fix.ProviderErrors)
 	}
 }

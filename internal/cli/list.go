@@ -211,7 +211,7 @@ func hallPlan(hall config.Hall) readPlan {
 		if command, defined := hall.Commands[name]; defined {
 			plan.providers = append(plan.providers, stageProvider{name: name, command: command})
 		} else if builtin, ok := builtinProviders[name]; ok {
-			plan.providers = append(plan.providers, builtin)
+			plan.providers = append(plan.providers, builtin...)
 		}
 	}
 	return plan
@@ -312,6 +312,12 @@ func activitySummary(activities []activityRecord, failures []providerError) stri
 	if waiting > 0 {
 		parts = append(parts, shortCount(float64(waiting))+" waiting")
 	}
+	if slices.Contains([]string{"succeeded", "failed", "stopped"}, first.Status) {
+		parts = append(parts, first.Status)
+		if first.Counters != nil && first.Counters.ElapsedSeconds != nil {
+			parts = append(parts, shortDuration(first.Counters.ElapsedSeconds.Value))
+		}
+	}
 	if first.Counters != nil && first.Counters.Tokens != nil {
 		parts = append(parts, boundPrefix(first.Counters.Tokens.AtLeast)+shortCount(first.Counters.Tokens.Value)+" tokens")
 	}
@@ -326,6 +332,18 @@ func boundPrefix(atLeast bool) string {
 		return "≥"
 	}
 	return ""
+}
+
+func shortDuration(seconds float64) string {
+	switch total := int64(seconds); {
+	case total < 60:
+		return fmt.Sprintf("%ds", total)
+	case total < 3600:
+		return fmt.Sprintf("%dm%02ds", total/60, total%60)
+	case total < 100*3600:
+		return fmt.Sprintf("%dh%02dm", total/3600, total%3600/60)
+	}
+	return ">99h"
 }
 
 func cellText(text string, limit int) string {
