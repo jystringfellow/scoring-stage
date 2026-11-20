@@ -160,3 +160,44 @@ func TestKapellmeisterRunsFirstByDefaultAndCanBeLeftOut(t *testing.T) {
 		t.Errorf("order %v with kapellmeister left out", order)
 	}
 }
+
+func TestAKmStatusCapturedFromARealRunTranslates(t *testing.T) {
+	h := readyToRead(t)
+	serveCAO(h, "9889")
+	kmPrints(t, h, fixture(t, "km-status-schema-1-captured.json"))
+	fix := sessionsOf(t, h, "fix")
+	if len(fix.ProviderErrors) != 0 || len(fix.Activities) != 1 {
+		t.Fatalf("activities %+v errors %+v", fix.Activities, fix.ProviderErrors)
+	}
+	run := fix.Activities[0]
+	if run.ID != "20261120-063806-7153d2" || run.Title != "km run · thorough" || run.Status != "running" || run.CAOPort != 9889 ||
+		run.Round.Current != 1 || *run.Round.Max != 3 {
+		t.Errorf("run %+v", run)
+	}
+	var steps []string
+	for _, step := range run.Steps {
+		steps = append(steps, step.Name+"="+step.State)
+	}
+	if want := []string{"verify=done", "plan=done", "test-plan=done", "implement=done", "verify=done", "review=active", "gate=pending", "test=pending"}; !slices.Equal(steps, want) {
+		t.Errorf("steps %v, want %v", steps, want)
+	}
+	var members []string
+	for _, group := range run.Groups {
+		for _, member := range group.Members {
+			session := "-"
+			if member.Session != nil {
+				session = member.Session.ID
+			}
+			members = append(members, group.Name+"/"+member.Name+"/"+member.State+"/"+session)
+		}
+	}
+	if want := []string{
+		"leads/planner/exited/-", "leads/implementer/idle/7cdae93c", "leads/gate/idle/-", "leads/classifier/idle/-", "leads/tonmeister/idle/-",
+		"review/lead/working/-", "review/second/working/-",
+	}; !slices.Equal(members, want) {
+		t.Errorf("members %v, want %v", members, want)
+	}
+	if tokens := run.Counters.Tokens; tokens == nil || tokens.Value != 19445 || tokens.AtLeast {
+		t.Errorf("tokens %+v", run.Counters.Tokens)
+	}
+}
