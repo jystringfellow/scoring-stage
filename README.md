@@ -76,6 +76,7 @@ stage up ~/Code/api fix-login --plan # write the env file and show sbx's plan wi
 stage up ~/Code/api fix-login --allow-global-secrets  # go on although sbx applies its global secrets to every box
 stage shell fix-login                # login shell in the repository; run claude, codex or copilot
 stage exec fix-login -- git log -1
+stage attach fix-login 5e6f7a8b      # open a CAO agent's tmux window to answer it; Ctrl-b d detaches (--watch: read-only)
 stage put fix-login ./notes.txt '~/notes.txt' # copy one file into the sandbox as the agent
 id=$(stage exec --detach fix-login -- sh -c 'sleep 150; echo done; exit 7')
 stage mcp                            # stdio tools for a host agent
@@ -193,6 +194,13 @@ score played by claude and codex.
   `blocked` activity, a read or provider error, or a disk at 90% or more. Stages that are not running fold into one
   line. A stage's detail names sbx's global secrets in a plain line; they apply to every stage, so they do not
   mark one as needing attention.
+- **Getting an agent unstuck:** each CAO session in a running stage shows the command that opens it in your own
+  terminal, such as `stage attach fix-login 5e6f7a8b`. The hall only shows the command; it never sends input itself.
+  `stage attach` reads the stage once to find that terminal's tmux session and window, the same way the hall does,
+  refuses a stage that is not running so it never starts one, and then runs `tmux attach-session` in the stage as
+  the agent, through `sbx exec`, with your keyboard connected. Your tmux detach keys, Ctrl-b d by default, leave the
+  agent running; Ctrl-C goes to the agent. `--watch` attaches read-only, to look without typing. Attaching resizes
+  the agent's window to your terminal, and the open session keeps the stage running until you detach.
 - **What it remembers:** while it runs, the hall keeps its last reading of a stage that stops, and shows it marked
   "last read" with the time, never as live. An activity a provider stops reporting stays under the stage as
   "Earlier", with when it was last seen, and the row names it when nothing newer runs. When a stage's job ends, the

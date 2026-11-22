@@ -119,5 +119,6 @@ setImmediate(() => {
     drawn: graph.all("h2").map((heading) => heading.textContent),
     pictures: graph.all("svg").length,
     pressed: pressed ? pressed.dataset.view : "",
+    code: byID.rows.all("code").map((code) => code.textContent),
   }));
 });

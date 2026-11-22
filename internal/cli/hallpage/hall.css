@@ -118,6 +118,11 @@ button {
   color: var(--muted);
 }
 
+.attach code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  user-select: all;
+}
+
 .tail pre {
   margin: 4px 0 8px;
   padding: 8px;

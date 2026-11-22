@@ -110,6 +110,8 @@ commands:
   login <slug>                      save the sandbox's copyable agent logins (copy_logins) for future sandboxes
   exec <slug> -- <command> [args]   run a command in the repository
   exec --detach <slug> -- <command> [args] start a job held open by a host process
+  attach <slug> <terminal> [--watch]
+                                    open a CAO agent's tmux window in your terminal (--watch: read-only)
   job list <slug> [--json]           list jobs
   job status|wait|output|stop <slug> <id> [options]
                                     read, wait for, follow or stop a job
@@ -133,7 +135,7 @@ func (a *App) Main(args []string) int {
 	}
 	commands := map[string]func([]string, string) (int, error){
 		"init": a.cmdInit, "setup": a.cmdSetup, "broker": a.cmdBroker, "up": a.cmdUp, "shell": a.cmdShell,
-		"exec": a.cmdExec, "ship": a.cmdShip, "list": a.cmdList, "hall": a.cmdHall, "down": a.cmdDown, "login": a.cmdLogin, "take": a.cmdTake,
+		"exec": a.cmdExec, "attach": a.cmdAttach, "ship": a.cmdShip, "list": a.cmdList, "hall": a.cmdHall, "down": a.cmdDown, "login": a.cmdLogin, "take": a.cmdTake,
 		"github": a.cmdGitHub,
 		"token":  a.cmdToken,
 		"put":    a.cmdPut, "job": a.cmdJob, "mcp": a.cmdMCP,

@@ -62,6 +62,7 @@ type sessionRecord struct {
 	State    string   `json:"state"`
 	RawState string   `json:"raw_state,omitempty"`
 	Tail     []string `json:"tail,omitempty"`
+	tmux     string
 }
 
 type readFrame struct {
@@ -385,6 +386,7 @@ func caoSession(port, id string, frame readFrame) (*sessionRecord, bool) {
 		Provider     string `json:"provider"`
 		AgentProfile string `json:"agent_profile"`
 		Status       string `json:"status"`
+		SessionName  string `json:"session_name"`
 	}
 	if err := json.Unmarshal([]byte(frame.body), &terminal); err != nil || terminal.ID != id {
 		return nil, false
@@ -394,7 +396,7 @@ func caoSession(port, id string, frame readFrame) (*sessionRecord, bool) {
 	if name == "" {
 		name = terminal.Name
 	}
-	return &sessionRecord{
+	session := &sessionRecord{
 		Source:   "cao",
 		ID:       id,
 		Server:   fmt.Sprintf(caoServerFormat, portNumber),
@@ -402,7 +404,11 @@ func caoSession(port, id string, frame readFrame) (*sessionRecord, bool) {
 		Agent:    shortPrintable(terminal.Provider, 64),
 		State:    caoState(terminal.Status),
 		RawState: rawWord(terminal.Status, caoState(terminal.Status)),
-	}, true
+	}
+	if tmuxName.MatchString(terminal.SessionName) && tmuxName.MatchString(terminal.Name) {
+		session.tmux = terminal.SessionName + ":" + terminal.Name
+	}
+	return session, true
 }
 
 func caoState(status string) string {

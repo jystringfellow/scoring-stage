@@ -158,6 +158,16 @@ function sessionOf(stage, ref) {
   return (stage.sessions.items || []).find((session) => session.source === ref.source && session.id === ref.id);
 }
 
+function addAttach(item, stage, ref) {
+  if (!ref || ref.source !== "cao" || stage.state !== "running" || stage.remembered) {
+    return;
+  }
+  const line = el("div", null, "attach");
+  line.appendChild(el("span", "attach from a terminal: ", "muted"));
+  line.appendChild(el("code", "stage attach " + stage.slug + " " + ref.id));
+  item.appendChild(line);
+}
+
 function addSession(list, stage, session) {
   const item = el("li");
   item.appendChild(el("span", session.name || session.id));
@@ -167,6 +177,7 @@ function addSession(list, stage, session) {
   }
   item.appendChild(el("span", " · "));
   item.appendChild(el("span", stateText(session.state, session.raw_state), stateClass(session.state)));
+  addAttach(item, stage, session);
   addTail(item, stage, session);
   list.appendChild(item);
 }
@@ -215,6 +226,7 @@ function addActivity(parent, stage, activity, lastSeen) {
       item.appendChild(el("span", stateText(member.state, member.raw_state), stateClass(member.state)));
       if (member.session) {
         item.appendChild(el("span", " · " + member.session.source + " " + member.session.id, "muted"));
+        addAttach(item, stage, member.session);
         addTail(item, stage, sessionOf(stage, member.session));
       }
       list.appendChild(item);
