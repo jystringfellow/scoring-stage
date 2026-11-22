@@ -188,12 +188,17 @@ Ctrl-C stops it at once, even while sbx is slow to answer, and a second Ctrl-C e
 
 These are from a stage made for the purpose, `draft-demo` on kapellmeister, with kapellmeister's `draft-and-check`
 score played by claude and codex.
-- **What it serves:** a table of stages that expand into their activities, steps, groups and members, and the
-  sessions no activity claims. A session, or a member whose session was read, opens to the last lines of its
-  terminal, shown as text. Stages that need attention come first: a waiting member or session, a `failed` or
-  `blocked` activity, a read or provider error, or a disk at 90% or more. Stages that are not running fold into one
-  line. A stage's detail names sbx's global secrets in a plain line; they apply to every stage, so they do not
-  mark one as needing attention.
+- **What it serves:** four numbers across the top (stages running, stages that need you, sessions by state and
+  finished runs), then one panel per stage, collapsed, with its state, repository, sessions, disk, age and the
+  current activity's steps. A panel opens to its activities, groups and members, and the sessions no activity
+  claims; a session, or a member whose session was read, opens to the last lines of its terminal, shown as text. An
+  open running stage also lists commands to run from your own terminal, such as `stage shell` and `stage ship`,
+  each with a Copy button; the page shows them and never runs them. Stages that need attention come first and are
+  outlined: a waiting member or session, a `failed` or `blocked` activity, a read or provider error, or a disk at
+  90% or more. Stages that are not running fold into one line. A stage's detail names sbx's global secrets in a
+  plain line; they apply to every stage, so they do not mark one as needing attention. Beside the stages are a short
+  guide to the commands, which can be hidden and stays hidden in that browser, and the finished runs by repository.
+  With no stages yet, the page says how to start one.
 - **Getting an agent unstuck:** each CAO session in a running stage shows the command that opens it in your own
   terminal, such as `stage attach fix-login 5e6f7a8b`. The hall only shows the command; it never sends input itself.
   `stage attach` reads the stage once to find that terminal's tmux session and window, the same way the hall does,
@@ -216,12 +221,21 @@ score played by claude and codex.
   to 64 per stage and for as long as `keep`, and the page sums them by repository above the stages: runs, each
   outcome, and tokens, marked `≥` when a count was a lower bound or unknown. A run stays counted after its provider
   stops reporting it, after its stage is gone and after the hall restarts.
-- **The graph:** the Graph button draws each expanded stage as a tree from the stage to its activities, their
-  groups and their members, with a state dot on each, the active step on each activity and the agent on each member.
-  With no stage expanded, it draws every stage running a stage job, and says so; with none running, it says how to
-  pick one. Hovering a node shows it whole. A graph wider than the window scrolls sideways. In a window under 360 px
-  wide, the graph says how wide a window it needs, and the table shows below it. A link can open the page with a
-  view and stages chosen, as in `<url>#view=graph&open=fix-login,docs-pass`.
+- **The graph:** each stage's Graph button opens that stage in a dialog, drawn as a tree from the stage to its
+  activities, their groups and their members, and the sessions no activity claims, with a state dot on each, the
+  active step on each activity and the agent on each member. A tree wider than the dialog scrolls sideways, and in a
+  narrow window the dialog fills it. The dialog opens on the agent that needs you, or the first with a session;
+  clicking another agent shows its last terminal lines and how to reach it from your terminal: `stage attach`, or
+  `stage attach --watch` to look without typing, for a CAO agent, and `stage job output --follow` for a stage job.
+  A stopped stage offers nothing to attach to. The dialog keeps updating while open; Esc or Close closes it. A link
+  can open the page with stages expanded, as in `<url>#open=fix-login,docs-pass`, or with a stage's graph open, as
+  in `<url>#graph=fix-login`.
+- **Colors and mode:** the page is dark, with neon green for what is working and deep purple for what needs you,
+  unless `[hall.theme]` in your config says otherwise: `mode` is `"dark"`, `"light"` or `"auto"` (follow the
+  system), and `accent` and `second` are colors such as `"#39FF14"` and `"#5B21B6"`. stage works out from them the
+  shades it uses for text, so that text stays readable on both backgrounds whatever colors you pick; the colors
+  themselves fill buttons, badges and the current step. The page's Light or Dark button switches mode, and the
+  browser remembers the choice for that page.
 - **What it costs:** the page polls `stage hall` every 2 seconds and is answered from memory, so the page itself
   never runs sbx. `stage hall` runs `sbx ls --json` and `sbx secret ls --global --json` every 5 seconds on the host,
   and reads each running stage it has a task for
@@ -245,6 +259,10 @@ refused, since the hall runs these commands inside every stage.
 providers = ["kapellmeister", "loop"]  # order; default: every built-in provider, then yours by name
 cao_ports = [9889, 9890]        # CAO servers to read on each stage's loopback; default [9889]
 keep = "30d"                    # how long the hall keeps each stage's last view on disk; "0" keeps nothing
+[hall.theme]
+mode = "dark"                   # "dark", "light" or "auto"; default "dark"
+accent = "#39FF14"              # what is working and the current step; default neon green
+second = "#5B21B6"              # what needs you; default deep purple
 [hall.provider.loop]
 command = ["loop", "status", "--format", "stage-activity"]
 ```

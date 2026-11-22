@@ -19,7 +19,7 @@ const (
 
 var (
 	BuiltinProviders = []string{"kapellmeister"}
-	hallKeys         = []string{"providers", "provider", "cao_ports", "keep"}
+	hallKeys         = []string{"providers", "provider", "cao_ports", "keep", "theme"}
 	keepPattern      = regexp.MustCompile(`^([0-9]{1,5})([dh])$`)
 	providerName     = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 )
@@ -29,6 +29,7 @@ type Hall struct {
 	Commands  map[string][]string
 	CAOPorts  []int
 	Keep      time.Duration
+	Theme     HallTheme
 }
 
 const (
@@ -67,7 +68,7 @@ func refuseHall(data map[string]any, who string) error {
 }
 
 func decodeHall(value any, where string) (Hall, error) {
-	hall := Hall{Commands: map[string][]string{}, CAOPorts: []int{defaultCAOPort}, Keep: defaultKeep}
+	hall := Hall{Commands: map[string][]string{}, CAOPorts: []int{defaultCAOPort}, Keep: defaultKeep, Theme: defaultHallTheme}
 	if value == nil {
 		hall.Providers = slices.Clone(BuiltinProviders)
 		return hall, nil
@@ -99,6 +100,13 @@ func decodeHall(value any, where string) (Hall, error) {
 			return hall, err
 		}
 		hall.CAOPorts = ports
+	}
+	if _, present := table["theme"]; present {
+		theme, err := decodeHallTheme(table["theme"], where)
+		if err != nil {
+			return hall, err
+		}
+		hall.Theme = theme
 	}
 	return hall, nil
 }
