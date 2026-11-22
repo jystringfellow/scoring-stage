@@ -194,7 +194,7 @@ These show the page drawing example stages, so their names, terminal lines and c
 follows your GitHub theme; the hall itself is dark unless your config or its Light button says otherwise.
 - **What it serves:** four numbers across the top (stages running, stages that need you, sessions by state and
   finished runs), then one panel per stage, collapsed, with its state, repository, sessions, disk, age and the
-  current activity's steps. A panel opens to its activities, groups and members, and the sessions no activity
+  current activity's steps, or "No activity reported" when no provider reports one. A panel opens to its activities, groups and members, and the sessions no activity
   claims; a session, or a member whose session was read, opens to the last lines of its terminal, shown as text. An
   open running stage also lists commands to run from your own terminal, such as `stage shell` and `stage ship`,
   each with a Copy button; the page shows them and never runs them. Stages that need attention come first and are
@@ -233,7 +233,8 @@ follows your GitHub theme; the hall itself is dark unless your config or its Lig
   `stage attach --watch` to look without typing, for a CAO agent, and `stage job output --follow` for a stage job.
   A stopped stage offers nothing to attach to. The dialog keeps updating while open; Esc or Close closes it. A link
   can open the page with stages expanded, as in `<url>#open=fix-login,docs-pass`, or with a stage's graph open, as
-  in `<url>#graph=fix-login`.
+  in `<url>#graph=fix-login`. Opening the dialog puts that `#graph=` part in the address bar, and the dialog shows
+  only that part, so the hall's token stays out of screenshots and screen shares.
 - **Colors and mode:** the page is dark, with neon green for what is working and deep purple for what needs you,
   unless `[hall.theme]` in your config says otherwise: `mode` is `"dark"`, `"light"` or `"auto"` (follow the
   system), and `accent` and `second` are colors such as `"#39FF14"` and `"#5B21B6"`. stage works out from them the
