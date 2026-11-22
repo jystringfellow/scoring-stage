@@ -27,6 +27,7 @@ type pageResult struct {
 	Drawn       []string `json:"drawn"`
 	Pictures    int      `json:"pictures"`
 	Pressed     string   `json:"pressed"`
+	Code        []string `json:"code"`
 }
 
 func showPage(t *testing.T, scenario pageScenario) pageResult {
@@ -120,5 +121,22 @@ func TestWithNoStageExpandedOrRunningAJobTheGraphSaysHowToPickOne(t *testing.T) 
 		if !strings.Contains(text, want) {
 			t.Errorf("graph says %q, want %q", text, want)
 		}
+	}
+}
+
+func TestAnExpandedRunningStageShowsHowToAttachToEachCAOTerminal(t *testing.T) {
+	page := showPage(t, pageScenario{Width: 1280, Hash: "open=fix", View: pageView(pageStage("fix", 0))})
+	want := []string{"stage attach fix 1a2b3c4d", "stage attach fix 5e6f7a8b"}
+	if !slices.Equal(page.Code, want) {
+		t.Errorf("commands %q, want %q", page.Code, want)
+	}
+}
+
+func TestAStoppedStageShowsNoAttachCommand(t *testing.T) {
+	stopped := pageStage("fix", 0)
+	stopped.State = "stopped"
+	page := showPage(t, pageScenario{Width: 1280, Hash: "open=fix", View: pageView(stopped)})
+	if len(page.Code) != 0 {
+		t.Errorf("commands %q on a stopped stage", page.Code)
 	}
 }
