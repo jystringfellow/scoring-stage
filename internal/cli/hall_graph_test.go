@@ -91,17 +91,10 @@ func TestTheGraphOfAStageIsBounded(t *testing.T) {
 	}
 }
 
-func TestThePageDrawsTheGraphAsSVGAndRespectsReducedMotion(t *testing.T) {
-	page, err := os.ReadFile("hallpage/hall.js")
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestThePageRespectsReducedMotion(t *testing.T) {
 	style, err := os.ReadFile("hallpage/hall.css")
 	if err != nil {
 		t.Fatal(err)
-	}
-	if !strings.Contains(string(page), "createElementNS(svgNamespace") {
-		t.Errorf("hall.js does not draw SVG")
 	}
 	if !strings.Contains(string(style), "prefers-reduced-motion") {
 		t.Errorf("hall.css ignores reduced motion")

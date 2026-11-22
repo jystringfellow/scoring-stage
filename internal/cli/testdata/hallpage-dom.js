@@ -15,6 +15,7 @@ class FakeElement {
     this.dataset = {};
     this.style = {};
     this.hidden = false;
+    this.open = false;
     this.className = "";
     this.ownText = "";
   }
@@ -50,9 +51,24 @@ class FakeElement {
     (this.listeners[type] = this.listeners[type] || []).push(listener);
   }
 
-  click() {
-    for (const listener of this.listeners.click || []) {
+  fire(type) {
+    for (const listener of this.listeners[type] || []) {
       listener();
+    }
+  }
+
+  click() {
+    this.fire("click");
+  }
+
+  showModal() {
+    this.open = true;
+  }
+
+  close() {
+    if (this.open) {
+      this.open = false;
+      this.fire("close");
     }
   }
 
@@ -72,17 +88,15 @@ class FakeElement {
 }
 
 const byID = {};
-for (const id of ["status", "scoreboard", "graph", "stages", "rows"]) {
-  byID[id] = new FakeElement(id === "rows" ? "tbody" : "section");
-}
-byID.graph.hidden = true;
-for (const id of ["tiles", "guide", "where"]) {
+for (const id of ["status", "tiles", "where", "rows", "scoreboard", "guide", "graph-title", "graph-facts", "graph-body", "graph-link"]) {
   byID[id] = new FakeElement("section");
 }
-byID.mode = new FakeElement("button");
-byID["guide-toggle"] = new FakeElement("button");
-const copied = [];
+for (const id of ["guide-toggle", "mode", "graph-close"]) {
+  byID[id] = new FakeElement("button");
+}
+byID["graph-dialog"] = new FakeElement("dialog");
 const root = new FakeElement("html");
+const copied = [];
 const stored = Object.assign({}, scenario.stored || {});
 const storage = {
   getItem: (key) => (key in stored ? stored[key] : null),
@@ -90,30 +104,22 @@ const storage = {
     stored[key] = String(value);
   },
 };
-const buttons = ["table", "graph"].map((view) => {
-  const button = new FakeElement("button");
-  button.dataset.view = view;
-  return button;
-});
-
-function matches(query) {
-  let all = true;
-  for (const [, side, pixels] of query.matchAll(/(max|min)-width:\s*([0-9.]+)px/g)) {
-    all = all && (side === "max" ? scenario.width <= Number(pixels) : scenario.width >= Number(pixels));
-  }
-  return all;
-}
+const location = { hash: scenario.hash ? "#" + scenario.hash : "", host: "127.0.0.1:7420", origin: "http://127.0.0.1:7420", pathname: "/token/", search: "" };
 
 const context = vm.createContext({
-  window: { matchMedia: (query) => ({ media: query, matches: matches(query), addEventListener() {} }) },
+  window: { matchMedia: () => ({ matches: false, addEventListener() {} }) },
   document: {
     documentElement: root,
     createElement: (tag) => new FakeElement(tag),
-    createElementNS: (namespace, tag) => new FakeElement(tag),
     getElementById: (id) => byID[id],
-    querySelectorAll: (selector) => (selector === "nav button" ? buttons : []),
   },
-  location: { hash: scenario.hash ? "#" + scenario.hash : "", host: "127.0.0.1:7420" },
+  location: location,
+  history: {
+    replaceState: (state, title, url) => {
+      const at = String(url).indexOf("#");
+      location.hash = at < 0 ? "" : String(url).slice(at);
+    },
+  },
   navigator: {
     clipboard: {
       writeText: async (text) => {
@@ -132,28 +138,38 @@ const context = vm.createContext({
 
 vm.runInContext(fs.readFileSync(pagePath, "utf8"), context, { filename: pagePath });
 
-setImmediate(() => {
-  if (scenario.click === "mode") {
+function act(action) {
+  const [verb, ...rest] = action.split(" ");
+  const argument = rest.join(" ");
+  if (verb === "mode") {
     byID.mode.click();
-  } else if (scenario.click === "guide") {
+  } else if (verb === "guide") {
     byID["guide-toggle"].click();
-  } else if (scenario.click && scenario.click.startsWith("copy ")) {
-    const wanted = scenario.click.slice("copy ".length);
-    const row = byID.rows.all("div").find((line) => line.className === "command" && line.all("code").some((code) => code.textContent === wanted));
-    row.all("button")[0].click();
-  } else if (scenario.click) {
-    buttons.find((button) => button.dataset.view === scenario.click).click();
+  } else if (verb === "close") {
+    byID["graph-close"].click();
+  } else if (verb === "escape") {
+    byID["graph-dialog"].close();
+  } else if (verb === "copy") {
+    const lines = byID.rows.all("div").concat(byID["graph-body"].all("div"));
+    const line = lines.find((part) => part.className === "command" && part.all("code").some((code) => code.textContent === argument));
+    line.all("button")[0].click();
+  } else if (verb === "graph") {
+    byID.rows.all("button").find((button) => button.className === "open-graph" && button.dataset.slug === argument).click();
+  } else if (verb === "agent") {
+    byID["graph-body"].all("button").find((button) => button.dataset.label === argument).click();
+  } else {
+    throw new Error("unknown action " + action);
   }
-  const graph = byID.graph;
-  const pressed = buttons.find((button) => button.getAttribute("aria-pressed") === "true");
+}
+
+setImmediate(() => {
+  for (const action of scenario.clicks || []) {
+    act(action);
+  }
+  const body = byID["graph-body"];
+  const picked = body.all("button").find((button) => button.getAttribute("aria-pressed") === "true");
   process.stdout.write(JSON.stringify({
     status: byID.status.textContent,
-    graph_hidden: graph.hidden,
-    table_hidden: byID.stages.hidden,
-    graph_text: graph.all("p").map((paragraph) => paragraph.textContent),
-    drawn: graph.all("h2").map((heading) => heading.textContent),
-    pictures: graph.all("svg").length,
-    pressed: pressed ? pressed.dataset.view : "",
     code: byID.rows.all("code").map((code) => code.textContent),
     theme: root.getAttribute("data-theme") || "",
     stored: stored,
@@ -165,5 +181,17 @@ setImmediate(() => {
     guide_hidden: byID.guide.hidden,
     guide_label: byID["guide-toggle"].textContent,
     where: byID.where.textContent,
+    hash: location.hash,
+    dialog: {
+      open: byID["graph-dialog"].open,
+      title: byID["graph-title"].textContent,
+      facts: byID["graph-facts"].textContent,
+      labels: body.all("span").filter((span) => span.className === "label").map((span) => span.textContent),
+      picked: picked ? picked.dataset.label : "",
+      code: body.all("code").map((code) => code.textContent),
+      tail: body.all("pre").map((pre) => pre.textContent).join("\n"),
+      text: body.textContent,
+      link: byID["graph-link"].textContent,
+    },
   }));
 });

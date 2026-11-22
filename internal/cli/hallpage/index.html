@@ -24,22 +24,13 @@
   </div>
   <div class="controls">
     <p id="status" role="status">Reading the stages…</p>
-    <nav aria-label="Views">
-      <button type="button" data-view="table" aria-pressed="true">Table</button>
-      <button type="button" data-view="graph" aria-pressed="false">Graph</button>
-    </nav>
     <button type="button" id="guide-toggle" aria-controls="guide" aria-expanded="true">Hide guide</button>
     <button type="button" id="mode" aria-label="Switch to light mode">Light</button>
   </div>
 </header>
 <section id="tiles" aria-label="Summary"></section>
 <div class="columns">
-  <main>
-    <section id="graph" hidden aria-label="Graph of stages"></section>
-    <div id="stages">
-      <div id="rows"></div>
-    </div>
-  </main>
+  <main id="rows"></main>
   <aside>
     <section id="guide" class="card" aria-labelledby="guide-title">
       <h2 id="guide-title">Using stage</h2>
@@ -60,5 +51,16 @@
   <p>Colors and mode come from <code>[hall.theme]</code> in your config.toml.</p>
 </footer>
 </div>
+<dialog id="graph-dialog" aria-labelledby="graph-title">
+  <div class="dialog-head">
+    <div>
+      <h2 id="graph-title"></h2>
+      <p id="graph-facts" class="muted"></p>
+    </div>
+    <button type="button" id="graph-close" aria-label="Close the graph">Close</button>
+  </div>
+  <div id="graph-body"></div>
+  <p class="dialog-foot muted">Esc closes. Link to this view: <code id="graph-link"></code>. The graph keeps updating while it is open.</p>
+</dialog>
 </body>
 </html>

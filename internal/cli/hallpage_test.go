@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -13,22 +12,27 @@ import (
 )
 
 type pageScenario struct {
-	Width       int               `json:"width"`
 	Hash        string            `json:"hash,omitempty"`
-	Click       string            `json:"click,omitempty"`
+	Clicks      []string          `json:"clicks,omitempty"`
 	View        hallView          `json:"view"`
 	Stored      map[string]string `json:"stored,omitempty"`
 	DefaultMode string            `json:"default_mode,omitempty"`
 }
 
+type pageDialog struct {
+	Open   bool     `json:"open"`
+	Title  string   `json:"title"`
+	Facts  string   `json:"facts"`
+	Labels []string `json:"labels"`
+	Picked string   `json:"picked"`
+	Code   []string `json:"code"`
+	Tail   string   `json:"tail"`
+	Text   string   `json:"text"`
+	Link   string   `json:"link"`
+}
+
 type pageResult struct {
 	Status      string            `json:"status"`
-	GraphHidden bool              `json:"graph_hidden"`
-	TableHidden bool              `json:"table_hidden"`
-	GraphText   []string          `json:"graph_text"`
-	Drawn       []string          `json:"drawn"`
-	Pictures    int               `json:"pictures"`
-	Pressed     string            `json:"pressed"`
 	Code        []string          `json:"code"`
 	Theme       string            `json:"theme"`
 	Stored      map[string]string `json:"stored"`
@@ -40,109 +44,8 @@ type pageResult struct {
 	GuideHidden bool              `json:"guide_hidden"`
 	GuideLabel  string            `json:"guide_label"`
 	Where       string            `json:"where"`
-}
-
-func stoppedStage(slug string) stageRecord {
-	record := pageStage(slug, 0)
-	record.State = "stopped"
-	record.Activities = []activityRecord{}
-	record.Sessions = sessionsRecord{Status: "not_read", Items: []sessionRecord{}}
-	return record
-}
-
-func TestTheSummaryCountsWhatRunsWhatNeedsYouItsSessionsAndFinishedRuns(t *testing.T) {
-	view := pageView(pageStage("fix", 1), stoppedStage("old"))
-	view.Scoreboard = []scoreRow{{Repository: "acme/web", Runs: 6, Succeeded: 5, Failed: 1}, {Repository: "acme/api", Runs: 3, Succeeded: 3}}
-	page := showPage(t, pageScenario{Width: 1280, View: view})
-	want := [][]string{
-		{"Running", "1", "of 2 stages"},
-		{"Needs you", "1", "fix: waiting"},
-		{"Sessions", "3", "2 working · 1 idle"},
-		{"Finished runs", "9", "8 succeeded · 1 failed"},
-	}
-	if len(page.Tiles) != len(want) {
-		t.Fatalf("tiles %q, want %q", page.Tiles, want)
-	}
-	for i := range want {
-		if !slices.Equal(page.Tiles[i], want[i]) {
-			t.Errorf("tile %d is %q, want %q", i, page.Tiles[i], want[i])
-		}
-	}
-	if page.Where != "read-only · 127.0.0.1:7420 · 2 stages" {
-		t.Errorf("header says %q", page.Where)
-	}
-}
-
-func TestStagesStartCollapsedAndOpenToWhatYouCanRunFromYourTerminal(t *testing.T) {
-	page := showPage(t, pageScenario{Width: 1280, View: pageView(pageStage("fix", 0))})
-	if page.OpenDetails != 0 || len(page.Code) != 0 {
-		t.Errorf("collapsed page shows %d details and commands %q", page.OpenDetails, page.Code)
-	}
-	page = showPage(t, pageScenario{Width: 1280, Hash: "open=fix", View: pageView(pageStage("fix", 0))})
-	if page.OpenDetails != 1 {
-		t.Errorf("open details %d, want 1", page.OpenDetails)
-	}
-	for _, want := range []string{"stage attach fix 1a2b3c4d", "stage shell fix", "stage ship fix"} {
-		if !slices.Contains(page.Code, want) {
-			t.Errorf("commands %q lack %q", page.Code, want)
-		}
-	}
-}
-
-func TestACopyButtonCopiesItsCommandAndNothingElse(t *testing.T) {
-	page := showPage(t, pageScenario{Width: 1280, Hash: "open=fix", Click: "copy stage ship fix", View: pageView(pageStage("fix", 0))})
-	if !slices.Equal(page.Copied, []string{"stage ship fix"}) {
-		t.Errorf("copied %q", page.Copied)
-	}
-}
-
-func TestWithNoStagesThePageSaysHowToStartOne(t *testing.T) {
-	page := showPage(t, pageScenario{Width: 1280, View: pageView()})
-	for _, want := range []string{"No stages yet", "stage up <repo> <slug>"} {
-		if !strings.Contains(page.RowsText, want) {
-			t.Errorf("page says %q, want %q", page.RowsText, want)
-		}
-	}
-	if len(page.Tiles) != 0 {
-		t.Errorf("tiles %q with no stages", page.Tiles)
-	}
-}
-
-func TestTheGuideCanBeHiddenAndStaysHiddenInThisBrowser(t *testing.T) {
-	page := showPage(t, pageScenario{Width: 1280, View: pageView(pageStage("fix", 0))})
-	if page.GuideHidden || page.GuideLabel != "Hide guide" {
-		t.Errorf("first visit: hidden %v, label %q", page.GuideHidden, page.GuideLabel)
-	}
-	page = showPage(t, pageScenario{Width: 1280, Click: "guide", View: pageView(pageStage("fix", 0))})
-	if !page.GuideHidden || page.GuideLabel != "Guide" || page.Stored["stage-hall-guide"] != "hidden" {
-		t.Errorf("after hiding: hidden %v, label %q, stored %v", page.GuideHidden, page.GuideLabel, page.Stored)
-	}
-	page = showPage(t, pageScenario{Width: 1280, Stored: map[string]string{"stage-hall-guide": "hidden"}, View: pageView(pageStage("fix", 0))})
-	if !page.GuideHidden {
-		t.Errorf("a hidden guide came back")
-	}
-}
-
-func TestTheModeSwitchFlipsTheThemeAndRemembersItInThisBrowser(t *testing.T) {
-	page := showPage(t, pageScenario{Width: 1280, Click: "mode", DefaultMode: "dark", View: pageView(pageStage("fix", 0))})
-	if page.Theme != "light" || page.Stored["stage-hall-mode"] != "light" || page.ModeLabel != "Switch to dark mode" {
-		t.Errorf("theme %q, stored %v, label %q; want light, remembered, and a switch back to dark", page.Theme, page.Stored, page.ModeLabel)
-	}
-	page = showPage(t, pageScenario{Width: 1280, DefaultMode: "light", View: pageView(pageStage("fix", 0))})
-	if page.Theme != "" || page.ModeLabel != "Switch to dark mode" {
-		t.Errorf("unclicked: theme %q, label %q; want the configured mode left alone", page.Theme, page.ModeLabel)
-	}
-}
-
-func TestAModeChosenBeforeIsKeptOnTheNextVisit(t *testing.T) {
-	page := showPage(t, pageScenario{Width: 1280, DefaultMode: "dark", Stored: map[string]string{"stage-hall-mode": "light"}, View: pageView(pageStage("fix", 0))})
-	if page.Theme != "light" || page.ModeLabel != "Switch to dark mode" {
-		t.Errorf("theme %q, label %q", page.Theme, page.ModeLabel)
-	}
-	page = showPage(t, pageScenario{Width: 1280, DefaultMode: "dark", Stored: map[string]string{"stage-hall-mode": "neon"}, View: pageView(pageStage("fix", 0))})
-	if page.Theme != "" {
-		t.Errorf("an unknown stored mode was applied: %q", page.Theme)
-	}
+	Hash        string            `json:"hash"`
+	Dialog      pageDialog        `json:"dialog"`
 }
 
 func showPage(t *testing.T, scenario pageScenario) pageResult {
@@ -188,59 +91,111 @@ func pageStage(slug string, jobs int) stageRecord {
 	return record
 }
 
-func TestTheGraphDrawsInAWindowNarrowerThanTheTableNeeds(t *testing.T) {
-	page := showPage(t, pageScenario{Width: 400, Hash: "view=graph&open=fix", View: pageView(pageStage("fix", 0))})
-	if page.GraphHidden || !page.TableHidden || page.Pressed != "graph" || page.Pictures != 1 {
-		t.Errorf("page %+v, want the graph of fix", page)
+func stoppedStage(slug string) stageRecord {
+	record := pageStage(slug, 0)
+	record.State = "stopped"
+	record.Activities = []activityRecord{}
+	record.Sessions = sessionsRecord{Status: "not_read", Items: []sessionRecord{}}
+	return record
+}
+
+func TestTheSummaryCountsWhatRunsWhatNeedsYouItsSessionsAndFinishedRuns(t *testing.T) {
+	view := pageView(pageStage("fix", 1), stoppedStage("old"))
+	view.Scoreboard = []scoreRow{{Repository: "acme/web", Runs: 6, Succeeded: 5, Failed: 1}, {Repository: "acme/api", Runs: 3, Succeeded: 3}}
+	page := showPage(t, pageScenario{View: view})
+	want := [][]string{
+		{"Running", "1", "of 2 stages"},
+		{"Needs you", "1", "fix: waiting"},
+		{"Sessions", "3", "2 working · 1 idle"},
+		{"Finished runs", "9", "8 succeeded · 1 failed"},
+	}
+	if len(page.Tiles) != len(want) {
+		t.Fatalf("tiles %q, want %q", page.Tiles, want)
+	}
+	for i := range want {
+		if !slices.Equal(page.Tiles[i], want[i]) {
+			t.Errorf("tile %d is %q, want %q", i, page.Tiles[i], want[i])
+		}
+	}
+	if page.Where != "read-only · 127.0.0.1:7420 · 2 stages" {
+		t.Errorf("header says %q", page.Where)
 	}
 }
 
-func TestTheGraphSaysHowWideAWindowItNeedsWhenTheWindowIsTooNarrow(t *testing.T) {
-	page := showPage(t, pageScenario{Width: 320, Hash: "view=graph&open=fix", View: pageView(pageStage("fix", 0))})
-	if page.GraphHidden || page.Pictures != 0 || page.Pressed != "graph" {
-		t.Fatalf("page %+v, want a message in place of the graph", page)
+func TestStagesStartCollapsedAndOpenToWhatYouCanRunFromYourTerminal(t *testing.T) {
+	page := showPage(t, pageScenario{View: pageView(pageStage("fix", 0))})
+	if page.OpenDetails != 0 || len(page.Code) != 0 {
+		t.Errorf("collapsed page shows %d details and commands %q", page.OpenDetails, page.Code)
 	}
-	text := strings.Join(page.GraphText, " ")
-	if !regexp.MustCompile(`needs a window at least [0-9]+ px wide`).MatchString(text) {
-		t.Errorf("graph says %q, want how wide a window it needs", text)
+	page = showPage(t, pageScenario{Hash: "open=fix", View: pageView(pageStage("fix", 0))})
+	if page.OpenDetails != 1 {
+		t.Errorf("open details %d, want 1", page.OpenDetails)
 	}
-	if page.TableHidden {
-		t.Errorf("the table is hidden while the graph cannot be drawn")
-	}
-}
-
-func TestWithNoStageExpandedTheGraphDrawsEveryStageRunningAJob(t *testing.T) {
-	page := showPage(t, pageScenario{Width: 1280, Click: "graph", View: pageView(pageStage("docs", 0), pageStage("fix", 1))})
-	if page.GraphHidden || !slices.Equal(page.Drawn, []string{"fix"}) || page.Pictures != 1 {
-		t.Fatalf("page %+v, want the graph of fix alone", page)
-	}
-	if text := strings.Join(page.GraphText, " "); !strings.Contains(text, "running job") {
-		t.Errorf("graph says %q, want why these stages are drawn", text)
-	}
-}
-
-func TestAnExpandedStageIsDrawnInsteadOfTheStagesRunningJobs(t *testing.T) {
-	page := showPage(t, pageScenario{Width: 1280, Hash: "view=graph&open=docs", View: pageView(pageStage("docs", 0), pageStage("fix", 1))})
-	if !slices.Equal(page.Drawn, []string{"docs"}) || page.Pictures != 1 {
-		t.Errorf("page %+v, want the graph of docs alone", page)
-	}
-}
-
-func TestWithNoStageExpandedOrRunningAJobTheGraphSaysHowToPickOne(t *testing.T) {
-	page := showPage(t, pageScenario{Width: 1280, Click: "graph", View: pageView(pageStage("docs", 0), pageStage("fix", 0))})
-	if page.GraphHidden || page.Pictures != 0 {
-		t.Fatalf("page %+v, want a message in place of the graph", page)
-	}
-	text := strings.Join(page.GraphText, " ")
-	for _, want := range []string{"No stage is running a job", "Expand a stage in the table"} {
-		if !strings.Contains(text, want) {
-			t.Errorf("graph says %q, want %q", text, want)
+	for _, want := range []string{"stage attach fix 1a2b3c4d", "stage shell fix", "stage ship fix"} {
+		if !slices.Contains(page.Code, want) {
+			t.Errorf("commands %q lack %q", page.Code, want)
 		}
 	}
 }
 
+func TestACopyButtonCopiesItsCommandAndNothingElse(t *testing.T) {
+	page := showPage(t, pageScenario{Hash: "open=fix", Clicks: []string{"copy stage ship fix"}, View: pageView(pageStage("fix", 0))})
+	if !slices.Equal(page.Copied, []string{"stage ship fix"}) {
+		t.Errorf("copied %q", page.Copied)
+	}
+}
+
+func TestWithNoStagesThePageSaysHowToStartOne(t *testing.T) {
+	page := showPage(t, pageScenario{View: pageView()})
+	for _, want := range []string{"No stages yet", "stage up <repo> <slug>"} {
+		if !strings.Contains(page.RowsText, want) {
+			t.Errorf("page says %q, want %q", page.RowsText, want)
+		}
+	}
+	if len(page.Tiles) != 0 {
+		t.Errorf("tiles %q with no stages", page.Tiles)
+	}
+}
+
+func TestTheGuideCanBeHiddenAndStaysHiddenInThisBrowser(t *testing.T) {
+	page := showPage(t, pageScenario{View: pageView(pageStage("fix", 0))})
+	if page.GuideHidden || page.GuideLabel != "Hide guide" {
+		t.Errorf("first visit: hidden %v, label %q", page.GuideHidden, page.GuideLabel)
+	}
+	page = showPage(t, pageScenario{Clicks: []string{"guide"}, View: pageView(pageStage("fix", 0))})
+	if !page.GuideHidden || page.GuideLabel != "Guide" || page.Stored["stage-hall-guide"] != "hidden" {
+		t.Errorf("after hiding: hidden %v, label %q, stored %v", page.GuideHidden, page.GuideLabel, page.Stored)
+	}
+	page = showPage(t, pageScenario{Stored: map[string]string{"stage-hall-guide": "hidden"}, View: pageView(pageStage("fix", 0))})
+	if !page.GuideHidden {
+		t.Errorf("a hidden guide came back")
+	}
+}
+
+func TestTheModeSwitchFlipsTheThemeAndRemembersItInThisBrowser(t *testing.T) {
+	page := showPage(t, pageScenario{Clicks: []string{"mode"}, DefaultMode: "dark", View: pageView(pageStage("fix", 0))})
+	if page.Theme != "light" || page.Stored["stage-hall-mode"] != "light" || page.ModeLabel != "Switch to dark mode" {
+		t.Errorf("theme %q, stored %v, label %q; want light, remembered, and a switch back to dark", page.Theme, page.Stored, page.ModeLabel)
+	}
+	page = showPage(t, pageScenario{DefaultMode: "light", View: pageView(pageStage("fix", 0))})
+	if page.Theme != "" || page.ModeLabel != "Switch to dark mode" {
+		t.Errorf("unclicked: theme %q, label %q; want the configured mode left alone", page.Theme, page.ModeLabel)
+	}
+}
+
+func TestAModeChosenBeforeIsKeptOnTheNextVisit(t *testing.T) {
+	page := showPage(t, pageScenario{DefaultMode: "dark", Stored: map[string]string{"stage-hall-mode": "light"}, View: pageView(pageStage("fix", 0))})
+	if page.Theme != "light" || page.ModeLabel != "Switch to dark mode" {
+		t.Errorf("theme %q, label %q", page.Theme, page.ModeLabel)
+	}
+	page = showPage(t, pageScenario{DefaultMode: "dark", Stored: map[string]string{"stage-hall-mode": "neon"}, View: pageView(pageStage("fix", 0))})
+	if page.Theme != "" {
+		t.Errorf("an unknown stored mode was applied: %q", page.Theme)
+	}
+}
+
 func TestAnExpandedRunningStageShowsHowToAttachToEachCAOTerminal(t *testing.T) {
-	page := showPage(t, pageScenario{Width: 1280, Hash: "open=fix", View: pageView(pageStage("fix", 0))})
+	page := showPage(t, pageScenario{Hash: "open=fix", View: pageView(pageStage("fix", 0))})
 	var attach []string
 	for _, command := range page.Code {
 		if strings.HasPrefix(command, "stage attach ") {
@@ -256,8 +211,89 @@ func TestAnExpandedRunningStageShowsHowToAttachToEachCAOTerminal(t *testing.T) {
 func TestAStoppedStageShowsNoAttachCommand(t *testing.T) {
 	stopped := pageStage("fix", 0)
 	stopped.State = "stopped"
-	page := showPage(t, pageScenario{Width: 1280, Hash: "open=fix", View: pageView(stopped)})
+	page := showPage(t, pageScenario{Hash: "open=fix", View: pageView(stopped)})
 	if len(page.Code) != 0 {
 		t.Errorf("commands %q on a stopped stage", page.Code)
+	}
+}
+
+func waitingOnSecurity(slug string) stageRecord {
+	record := pageStage(slug, 0)
+	members := record.Activities[0].Groups[1].Members
+	members[0].State, members[1].State = "waiting", "idle"
+	return record
+}
+
+func TestEachStageOpensItsOwnGraphInADialog(t *testing.T) {
+	page := showPage(t, pageScenario{Clicks: []string{"graph fix"}, View: pageView(pageStage("docs", 0), pageStage("fix", 0))})
+	if !page.Dialog.Open || page.Dialog.Title != "fix" || page.Hash != "#graph=fix" {
+		t.Fatalf("dialog %+v, hash %q; want fix's graph open and linked", page.Dialog, page.Hash)
+	}
+	for _, want := range []string{"fix", "Fix the login redirect", "builders", "lead", "reviewers", "security", "style", "sessions", "go test ./..."} {
+		if !slices.Contains(page.Dialog.Labels, want) {
+			t.Errorf("graph %q lacks %q", page.Dialog.Labels, want)
+		}
+	}
+	if slices.Contains(page.Dialog.Labels, "docs") {
+		t.Errorf("fix's graph draws another stage: %q", page.Dialog.Labels)
+	}
+	if !strings.Contains(page.Dialog.Link, "#graph=fix") {
+		t.Errorf("link %q", page.Dialog.Link)
+	}
+}
+
+func TestTheGraphDialogStartsOnTheAgentThatNeedsYou(t *testing.T) {
+	page := showPage(t, pageScenario{Clicks: []string{"graph fix", "copy stage attach fix 5e6f7a8b"}, View: pageView(waitingOnSecurity("fix"))})
+	if page.Dialog.Picked != "security" {
+		t.Fatalf("picked %q, want the waiting security agent", page.Dialog.Picked)
+	}
+	if want := []string{"stage attach fix 5e6f7a8b", "stage attach fix 5e6f7a8b --watch"}; !slices.Equal(page.Dialog.Code, want) {
+		t.Errorf("commands %q, want %q", page.Dialog.Code, want)
+	}
+	if !slices.Equal(page.Copied, []string{"stage attach fix 5e6f7a8b"}) {
+		t.Errorf("copied %q", page.Copied)
+	}
+}
+
+func TestClickingAnAgentInTheGraphShowsItsTerminalLinesAndHowToReachIt(t *testing.T) {
+	page := showPage(t, pageScenario{Clicks: []string{"graph fix", "agent go test ./..."}, View: pageView(pageStage("fix", 0))})
+	if page.Dialog.Picked != "go test ./..." || page.Dialog.Tail != "ok" {
+		t.Errorf("picked %q with terminal %q, want the job and its last line", page.Dialog.Picked, page.Dialog.Tail)
+	}
+	if want := []string{"stage job output fix 1 --follow"}; !slices.Equal(page.Dialog.Code, want) {
+		t.Errorf("commands %q, want %q", page.Dialog.Code, want)
+	}
+	page = showPage(t, pageScenario{Clicks: []string{"graph fix", "agent lead"}, View: pageView(pageStage("fix", 0))})
+	if want := []string{"stage attach fix 1a2b3c4d", "stage attach fix 1a2b3c4d --watch"}; page.Dialog.Picked != "lead" || !slices.Equal(page.Dialog.Code, want) {
+		t.Errorf("picked %q with commands %q, want lead and %q", page.Dialog.Picked, page.Dialog.Code, want)
+	}
+}
+
+func TestClosingTheGraphDialogClearsItsLink(t *testing.T) {
+	for _, closing := range []string{"close", "escape"} {
+		page := showPage(t, pageScenario{Clicks: []string{"graph fix", closing}, View: pageView(pageStage("fix", 0))})
+		if page.Dialog.Open || page.Hash != "" {
+			t.Errorf("%s: open %v, hash %q", closing, page.Dialog.Open, page.Hash)
+		}
+	}
+}
+
+func TestALinkOpensAStagesGraphDialog(t *testing.T) {
+	page := showPage(t, pageScenario{Hash: "graph=fix", View: pageView(pageStage("fix", 0))})
+	if !page.Dialog.Open || page.Dialog.Title != "fix" {
+		t.Errorf("dialog %+v, want fix's graph", page.Dialog)
+	}
+	page = showPage(t, pageScenario{Hash: "graph=gone", View: pageView(pageStage("fix", 0))})
+	if page.Dialog.Open {
+		t.Errorf("a link to a stage the hall does not have opened %+v", page.Dialog)
+	}
+}
+
+func TestAStoppedStagesGraphOffersNothingToAttachTo(t *testing.T) {
+	stopped := pageStage("fix", 0)
+	stopped.State = "stopped"
+	page := showPage(t, pageScenario{Clicks: []string{"graph fix", "agent lead"}, View: pageView(stopped)})
+	if len(page.Dialog.Code) != 0 || !strings.Contains(page.Dialog.Text, "not running") {
+		t.Errorf("commands %q, text %q; want none, and that the stage is not running", page.Dialog.Code, page.Dialog.Text)
 	}
 }

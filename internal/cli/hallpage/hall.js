@@ -3,16 +3,12 @@
 const pollEvery = 2000;
 const expanded = new Set();
 const openTails = new Set();
-const svgNamespace = "http://www.w3.org/2000/svg";
-const graphColumn = 210;
-const graphRow = 34;
-const graphNode = 180;
-const graphMinWidth = 360;
-const tooNarrow = window.matchMedia("(max-width: " + (graphMinWidth - 1) + "px)");
+const graphPick = {};
 const themeKey = "stage-hall-mode";
 const guideKey = "stage-hall-guide";
 const sessionOrder = ["working", "waiting", "idle", "exited", "unknown"];
-let mode = "table";
+let graphSlug = "";
+let pendingGraph = "";
 let showResting = false;
 let latest = null;
 let drawnStages = "";
@@ -186,6 +182,14 @@ function addStage(list, stage) {
       line.appendChild(el("span", mark + step.name, "step step-" + String(step.state).replace(/[^a-z]/g, "")));
     }
   }
+  line.appendChild(el("span", null, "spacer"));
+  const graph = el("button", "Graph", "open-graph");
+  graph.type = "button";
+  graph.dataset.slug = stage.slug;
+  graph.setAttribute("aria-haspopup", "dialog");
+  graph.setAttribute("aria-label", "Open the graph of " + stage.slug);
+  graph.addEventListener("click", () => openGraph(stage.slug));
+  line.appendChild(graph);
   article.appendChild(line);
 
   if (open) {
@@ -335,79 +339,140 @@ function addActivity(parent, stage, activity, lastSeen) {
   }
 }
 
-function svg(tag, attributes) {
-  const node = document.createElementNS(svgNamespace, tag);
-  for (const [name, value] of Object.entries(attributes || {})) {
-    node.setAttribute(name, String(value));
+function graphChildren(graph) {
+  const children = new Map();
+  for (const edge of graph.edges) {
+    if (!children.has(edge.from)) {
+      children.set(edge.from, []);
+    }
+    children.get(edge.from).push(edge.to);
   }
-  return node;
+  const more = graph.nodes.find((node) => node.kind === "more");
+  if (more) {
+    if (!children.has("s")) {
+      children.set("s", []);
+    }
+    children.get("s").push(more.id);
+  }
+  return children;
 }
 
-function shorten(text, limit) {
-  const characters = Array.from(String(text));
-  return characters.length > limit ? characters.slice(0, limit - 1).join("") + "…" : characters.join("");
+function pickedNode(stage) {
+  const members = stage.graph.nodes.filter((node) => node.kind === "member");
+  const chosen = members.find((node) => node.id === graphPick[stage.slug]);
+  return chosen || members.find((node) => node.state === "waiting") || members.find((node) => node.session) || members[0] || null;
 }
 
-function drawGraph(section, stages) {
-  section.replaceChildren();
-  if (tooNarrow.matches) {
-    section.appendChild(el("p", "The graph needs a window at least " + graphMinWidth + " px wide. Widen the window or zoom out; the table is below until then.", "error"));
+function graphNodeElement(stage, node, picked) {
+  const member = node.kind === "member";
+  const box = el(member ? "button" : "span", null, "node node-" + node.kind);
+  if (member) {
+    box.type = "button";
+    box.dataset.label = node.label;
+    box.setAttribute("aria-pressed", picked && picked.id === node.id ? "true" : "false");
+    box.addEventListener("click", () => {
+      graphPick[stage.slug] = node.id;
+      drawDialog();
+    });
+  }
+  if (node.state) {
+    box.appendChild(el("span", null, "dot " + stateClass(node.state)));
+  }
+  box.appendChild(el("span", node.label, "label"));
+  if (node.detail) {
+    box.appendChild(el("span", node.kind === "activity" ? "now: " + node.detail : node.detail, "muted"));
+  }
+  if (member && node.state) {
+    box.appendChild(el("span", words(node.state), stateClass(node.state)));
+  }
+  return box;
+}
+
+function graphBranch(stage, nodes, children, id, picked) {
+  const branch = el("div", null, "branch");
+  branch.appendChild(graphNodeElement(stage, nodes.get(id), picked));
+  const below = (children.get(id) || []).filter((child) => nodes.has(child));
+  if (below.length) {
+    branch.appendChild(el("span", null, "link"));
+    const list = el("div", null, "children");
+    for (const child of below) {
+      const item = el("div", null, "child");
+      item.appendChild(graphBranch(stage, nodes, children, child, picked));
+      list.appendChild(item);
+    }
+    branch.appendChild(list);
+  }
+  return branch;
+}
+
+function agentPanel(stage, node) {
+  const panel = el("div", null, "agent");
+  if (!node) {
+    panel.appendChild(el("p", "No agents read in this stage yet.", "muted"));
+    return panel;
+  }
+  const head = el("h3");
+  head.appendChild(el("span", node.label + (node.detail ? " · " + node.detail : "")));
+  if (node.state) {
+    head.appendChild(el("span", " " + words(node.state), stateClass(node.state)));
+  }
+  panel.appendChild(head);
+  const [source, id] = (node.session || "").split(" ");
+  const session = node.session ? sessionOf(stage, { source: source, id: id }) : null;
+  if (session && session.tail && session.tail.length) {
+    panel.appendChild(el("pre", session.tail.join("\n"), "terminal"));
+  } else {
+    panel.appendChild(el("p", "No terminal lines read for it.", "muted"));
+  }
+  if (!isLive(stage)) {
+    panel.appendChild(el("p", "This stage is not running, so there is nothing to attach to.", "muted"));
+  } else if (source === "cao") {
+    addCommand(panel, "stage attach " + stage.slug + " " + id, "answer it in its own terminal");
+    addCommand(panel, "stage attach " + stage.slug + " " + id + " --watch", "watch it without typing");
+    panel.appendChild(el("p", "Your tmux detach keys (Ctrl-b d by default) leave the agent running; Ctrl-C goes to the agent.", "muted"));
+  } else if (source === "job") {
+    addCommand(panel, "stage job output " + stage.slug + " " + id + " --follow", "follow the job from your terminal");
+  } else {
+    panel.appendChild(el("p", "It has no session the hall can reach.", "muted"));
+  }
+  return panel;
+}
+
+function drawDialog() {
+  if (!graphSlug || !latest) {
     return;
   }
-  let drawn = stages.filter((stage) => expanded.has(stage.slug));
-  if (!drawn.length) {
-    drawn = stages.filter((stage) => stage.running_jobs > 0);
-    if (!drawn.length) {
-      section.appendChild(el("p", "No stage is running a job. Expand a stage in the table to draw it here, or open the page with #view=graph&open=<stage>.", "muted"));
-      return;
-    }
-    section.appendChild(el("p", "No stage is expanded, so this draws every stage with a running job. Expand stages in the table to choose others.", "muted"));
+  const body = document.getElementById("graph-body");
+  const stage = latest.stages.find((candidate) => candidate.slug === graphSlug);
+  document.getElementById("graph-title").textContent = graphSlug;
+  document.getElementById("graph-link").textContent = (location.origin || "") + location.pathname + "#graph=" + graphSlug;
+  body.replaceChildren();
+  if (!stage) {
+    document.getElementById("graph-facts").textContent = "";
+    body.appendChild(el("p", "This stage is no longer listed.", "muted"));
+    return;
   }
-  for (const stage of drawn) {
-    const graph = stage.graph;
-    section.appendChild(el("h2", stage.slug));
-    const width = graph.columns * graphColumn;
-    const height = Math.max(graph.rows, 1) * graphRow;
-    const picture = svg("svg", { width: width, height: height, viewBox: "0 0 " + width + " " + height, role: "img" });
-    const caption = svg("title");
-    caption.textContent = "Stage " + stage.slug + ": activities, groups and members";
-    picture.appendChild(caption);
-    const where = new Map();
-    for (const node of graph.nodes) {
-      where.set(node.id, { x: node.column * graphColumn, y: node.row * graphRow + graphRow / 2 });
-    }
-    for (const edge of graph.edges) {
-      const from = where.get(edge.from);
-      const to = where.get(edge.to);
-      if (!from || !to) {
-        continue;
-      }
-      const bend = (to.x - from.x - graphNode) / 2;
-      const path = "M" + (from.x + graphNode) + " " + from.y + " C" + (from.x + graphNode + bend) + " " + from.y + " " +
-        (to.x - bend) + " " + to.y + " " + to.x + " " + to.y;
-      picture.appendChild(svg("path", { d: path, class: "edge" }));
-    }
-    for (const node of graph.nodes) {
-      const at = where.get(node.id);
-      const group = svg("g", { class: "node node-" + node.kind });
-      group.appendChild(svg("rect", { x: at.x, y: at.y - 12, width: graphNode, height: 24, rx: 5 }));
-      let textX = at.x + 8;
-      if (node.state) {
-        group.appendChild(svg("circle", { cx: at.x + 12, cy: at.y, r: 5, class: "dot " + stateClass(node.state) }));
-        textX = at.x + 22;
-      }
-      const label = svg("text", { x: textX, y: at.y + 4 });
-      const room = node.state ? 24 : 26;
-      const detail = node.detail ? shorten(node.detail, 12) : "";
-      label.textContent = detail ? shorten(node.label, Math.max(room - detail.length - 3, 6)) + " · " + detail : shorten(node.label, room);
-      group.appendChild(label);
-      const title = svg("title");
-      title.textContent = node.label + (node.detail ? " · " + node.detail : "") + (node.state ? " · " + words(node.state) : "") + (node.session ? " · " + node.session : "");
-      group.appendChild(title);
-      picture.appendChild(group);
-    }
-    section.appendChild(el("div", null, "graph-scroll")).appendChild(picture);
+  const repository = stage.repository ? stage.repository + (stage.base_branch ? "@" + stage.base_branch : "") : "";
+  const freshness = isLive(stage) ? "live" : stage.remembered ? "last read " + stage.remembered + ", not live" : words(stage.state);
+  document.getElementById("graph-facts").textContent = [repository, stage.summary.activity, freshness].filter(Boolean).join(" · ");
+  const nodes = new Map(stage.graph.nodes.map((node) => [node.id, node]));
+  const picked = pickedNode(stage);
+  const tree = el("div", null, "tree");
+  if (nodes.has("s")) {
+    tree.appendChild(graphBranch(stage, nodes, graphChildren(stage.graph), "s", picked));
   }
+  body.appendChild(tree);
+  body.appendChild(agentPanel(stage, picked));
+}
+
+function openGraph(slug) {
+  graphSlug = slug;
+  drawDialog();
+  const dialog = document.getElementById("graph-dialog");
+  if (!dialog.open) {
+    dialog.showModal();
+  }
+  history.replaceState(null, "", "#graph=" + slug);
 }
 
 function drawScoreboard(board) {
@@ -467,14 +532,13 @@ function render(view) {
   drawTiles(view);
   drawScoreboard(view.scoreboard || []);
   document.getElementById("where").textContent = "read-only · " + location.host + " · " + count(view.stages.length, "stage");
-  for (const button of document.querySelectorAll("nav button")) {
-    button.setAttribute("aria-pressed", button.dataset.view === mode ? "true" : "false");
+  if (pendingGraph) {
+    if (view.stages.some((stage) => stage.slug === pendingGraph)) {
+      openGraph(pendingGraph);
+    }
+    pendingGraph = "";
   }
-  document.getElementById("stages").hidden = mode === "graph" && !tooNarrow.matches;
-  document.getElementById("graph").hidden = mode !== "graph";
-  if (mode === "graph") {
-    drawGraph(document.getElementById("graph"), view.stages);
-  }
+  drawDialog();
   const rows = document.getElementById("rows");
   rows.replaceChildren();
   if (!view.stages.length) {
@@ -534,9 +598,7 @@ async function poll() {
 
 function readStart() {
   const start = new URLSearchParams(location.hash.slice(1));
-  if (start.get("view") === "graph") {
-    mode = "graph";
-  }
+  pendingGraph = start.get("graph") || "";
   for (const slug of (start.get("open") || "").split(",")) {
     if (slug) {
       expanded.add(slug);
@@ -585,13 +647,15 @@ document.getElementById("guide-toggle").addEventListener("click", () => {
 readStoredTheme();
 showThemeSwitch();
 showGuide(remembered(guideKey) !== "hidden");
+document.getElementById("graph-close").addEventListener("click", () => {
+  document.getElementById("graph-dialog").close();
+});
+
+document.getElementById("graph-dialog").addEventListener("close", () => {
+  graphSlug = "";
+  history.replaceState(null, "", location.pathname + location.search);
+});
+
 readStart();
-for (const button of document.querySelectorAll("nav button")) {
-  button.addEventListener("click", () => {
-    mode = button.dataset.view;
-    render(latest);
-  });
-}
-tooNarrow.addEventListener("change", () => render(latest));
 
 poll();

@@ -102,24 +102,6 @@ h1 {
   border-color: var(--bad);
 }
 
-nav {
-  display: inline-flex;
-  border: 1px solid var(--line2);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-nav button {
-  border: 0;
-  border-radius: 0;
-  font-weight: 600;
-}
-
-nav button[aria-pressed="true"] {
-  background: var(--accent);
-  color: var(--on-accent);
-}
-
 #tiles {
   display: flex;
   flex-wrap: wrap;
@@ -560,63 +542,167 @@ footer p {
   color: var(--bad);
 }
 
-#graph h2 {
-  font-size: 14px;
-  margin: 16px 0 6px;
+.open-graph {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
 }
 
-.graph-scroll {
-  overflow-x: auto;
-  padding: 12px;
+dialog {
+  width: min(1120px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  padding: 0;
   background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 12px;
+  color: var(--text);
+  border: 1px solid var(--line2);
+  border-radius: 14px;
 }
 
-#graph svg {
-  display: block;
+dialog::backdrop {
+  background: rgba(0, 0, 0, 0.6);
 }
 
-.node rect {
-  fill: var(--bg);
-  stroke: var(--line2);
+.dialog-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--line);
 }
 
-.node-stage rect {
-  stroke: var(--text);
+.dialog-head h2 {
+  margin: 0;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 18px;
 }
 
-.node-more rect {
-  stroke-dasharray: 4 3;
+.dialog-head p {
+  margin: 4px 0 0;
 }
 
-.node text {
-  fill: var(--text);
+#graph-body {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.dialog-foot {
+  margin: 0;
+  padding: 12px 20px;
+  border-top: 1px solid var(--line);
   font-size: 12px;
 }
 
-.edge {
-  fill: none;
-  stroke: var(--line2);
+.tree {
+  overflow-x: auto;
+  padding-bottom: 4px;
 }
 
-circle.dot {
-  fill: var(--idle);
+.branch,
+.child {
+  display: flex;
+  align-items: center;
+  min-width: max-content;
 }
 
-circle.dot.state-working,
-circle.dot.state-running {
-  fill: var(--accent-ink);
+.link {
+  width: 24px;
+  border-top: 1px solid var(--line2);
 }
 
-circle.dot.state-waiting,
-circle.dot.state-blocked {
-  fill: var(--second-ink);
+.children {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0;
+  border-left: 1px solid var(--line2);
 }
 
-circle.dot.state-failed,
-circle.dot.state-gone {
-  fill: var(--bad);
+.child::before {
+  content: "";
+  width: 18px;
+  border-top: 1px solid var(--line2);
+}
+
+.node {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--line2);
+  border-radius: 8px;
+  background: var(--bg);
+  white-space: nowrap;
+}
+
+.node-stage {
+  border: 2px solid var(--text);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-weight: 700;
+}
+
+.node-activity .label {
+  font-weight: 600;
+}
+
+.node-more {
+  border-style: dashed;
+  color: var(--muted);
+}
+
+button.node {
+  min-height: 44px;
+  text-align: left;
+}
+
+button.node .label {
+  font-weight: 600;
+}
+
+button.node[aria-pressed="true"] {
+  border: 2px solid var(--accent-ink);
+  background: var(--accent-soft);
+}
+
+.agent {
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.agent h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.agent .terminal {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  max-height: 320px;
+  overflow: auto;
+  background: var(--term-bg);
+  color: var(--term-fg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.agent .command:first-of-type {
+  border-color: var(--second-ink);
+}
+
+.agent .command:first-of-type .copy {
+  background: var(--second);
+  color: var(--on-second);
+  border-color: var(--second);
 }
 
 .hidden {
@@ -635,6 +721,15 @@ circle.dot.state-gone {
   .activity-line,
   .detail {
     padding-left: 16px;
+  }
+
+  dialog {
+    width: 100vw;
+    max-width: 100vw;
+    height: 100vh;
+    max-height: 100vh;
+    margin: 0;
+    border-radius: 0;
   }
 }
 
