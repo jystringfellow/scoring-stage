@@ -1,41 +1,13 @@
 :root {
-  color-scheme: light dark;
-  --bg: #fbfbfa;
-  --fg: #1d1d1b;
-  --muted: #6b6b66;
-  --line: #e2e1dc;
-  --row: #ffffff;
-  --attention: #b54708;
-  --attention-bg: #fff4e5;
-  --working: #1f7a3a;
-  --waiting: #b54708;
-  --idle: #6b6b66;
-  --bad: #b42318;
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: 14px;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #161615;
-    --fg: #ecebe6;
-    --muted: #9b9a94;
-    --line: #2e2d2a;
-    --row: #1d1d1b;
-    --attention: #f5a35c;
-    --attention-bg: #2b2014;
-    --working: #6fcf8a;
-    --waiting: #f5a35c;
-    --idle: #9b9a94;
-    --bad: #f97066;
-  }
 }
 
 body {
   margin: 0;
   padding: 16px 24px 32px;
   background: var(--bg);
-  color: var(--fg);
+  color: var(--text);
 }
 
 header {
@@ -58,7 +30,7 @@ footer {
 table {
   width: 100%;
   border-collapse: collapse;
-  background: var(--row);
+  background: var(--panel);
 }
 
 th,
@@ -75,7 +47,7 @@ th {
 }
 
 tr.attention > td {
-  background: var(--attention-bg);
+  background: var(--second-soft);
 }
 
 .badge {
@@ -84,8 +56,8 @@ tr.attention > td {
   padding: 0 6px;
   border-radius: 8px;
   font-size: 12px;
-  color: var(--attention);
-  border: 1px solid var(--attention);
+  color: var(--second-ink);
+  border: 1px solid var(--second-ink);
 }
 
 button {
@@ -140,12 +112,12 @@ button {
 .state-working,
 .state-running,
 .state-ok {
-  color: var(--working);
+  color: var(--accent-ink);
 }
 
 .state-waiting,
 .state-blocked {
-  color: var(--waiting);
+  color: var(--second-ink);
 }
 
 .state-idle,
@@ -190,7 +162,7 @@ nav {
 }
 
 nav button[aria-pressed="true"] {
-  border-color: var(--fg);
+  border-color: var(--text);
   font-weight: 600;
 }
 
@@ -212,12 +184,12 @@ button {
 }
 
 .node rect {
-  fill: var(--row);
+  fill: var(--panel);
   stroke: var(--line);
 }
 
 .node-stage rect {
-  stroke: var(--fg);
+  stroke: var(--text);
 }
 
 .node-more rect {
@@ -225,7 +197,7 @@ button {
 }
 
 .node text {
-  fill: var(--fg);
+  fill: var(--text);
   font-size: 12px;
 }
 
@@ -240,12 +212,12 @@ button {
 
 .dot.state-working,
 .dot.state-running {
-  fill: var(--working);
+  fill: var(--accent-ink);
 }
 
 .dot.state-waiting,
 .dot.state-blocked {
-  fill: var(--waiting);
+  fill: var(--second-ink);
 }
 
 .dot.state-failed,
@@ -274,5 +246,5 @@ table.scoreboard {
 }
 
 .state-succeeded {
-  color: var(--working);
+  color: var(--accent-ink);
 }

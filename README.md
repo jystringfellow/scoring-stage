@@ -222,6 +222,12 @@ score played by claude and codex.
   pick one. Hovering a node shows it whole. A graph wider than the window scrolls sideways. In a window under 360 px
   wide, the graph says how wide a window it needs, and the table shows below it. A link can open the page with a
   view and stages chosen, as in `<url>#view=graph&open=fix-login,docs-pass`.
+- **Colors and mode:** the page is dark, with neon green for what is working and deep purple for what needs you,
+  unless `[hall.theme]` in your config says otherwise: `mode` is `"dark"`, `"light"` or `"auto"` (follow the
+  system), and `accent` and `second` are colors such as `"#39FF14"` and `"#5B21B6"`. stage works out from them the
+  shades it uses for text, so that text stays readable on both backgrounds whatever colors you pick; the colors
+  themselves fill buttons, badges and the current step. The page's Light or Dark button switches mode, and the
+  browser remembers the choice for that page.
 - **What it costs:** the page polls `stage hall` every 2 seconds and is answered from memory, so the page itself
   never runs sbx. `stage hall` runs `sbx ls --json` and `sbx secret ls --global --json` every 5 seconds on the host,
   and reads each running stage it has a task for
@@ -245,6 +251,10 @@ refused, since the hall runs these commands inside every stage.
 providers = ["kapellmeister", "loop"]  # order; default: every built-in provider, then yours by name
 cao_ports = [9889, 9890]        # CAO servers to read on each stage's loopback; default [9889]
 keep = "30d"                    # how long the hall keeps each stage's last view on disk; "0" keeps nothing
+[hall.theme]
+mode = "dark"                   # "dark", "light" or "auto"; default "dark"
+accent = "#39FF14"              # what is working and the current step; default neon green
+second = "#5B21B6"              # what needs you; default deep purple
 [hall.provider.loop]
 command = ["loop", "status", "--format", "stage-activity"]
 ```

@@ -80,6 +80,7 @@ type hall struct {
 	finished map[string][]earlierActivity
 	loaded   map[string]bool
 	keep     time.Duration
+	theme    string
 }
 
 type earlierActivity struct {
@@ -111,7 +112,7 @@ func (a *App) cmdHall(args []string, home string) (int, error) {
 	if err != nil {
 		return 0, errorf("cannot listen on 127.0.0.1: %v", err)
 	}
-	served := &hall{home: home, plan: hallPlan(settings.Hall), readings: map[string]stageReading{}, jobs: map[string]int{}, earlier: map[string][]earlierActivity{}, finished: map[string][]earlierActivity{}, loaded: map[string]bool{}, keep: settings.Hall.Keep}
+	served := &hall{home: home, plan: hallPlan(settings.Hall), readings: map[string]stageReading{}, jobs: map[string]int{}, earlier: map[string][]earlierActivity{}, finished: map[string][]earlierActivity{}, loaded: map[string]bool{}, keep: settings.Hall.Keep, theme: hallThemeCSS(settings.Hall.Theme)}
 	served.refresh(time.Now())
 	token := newHallToken()
 	bound := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
@@ -458,6 +459,11 @@ func (h *hall) handler(token, port string) http.Handler {
 			h.mu.Unlock()
 			headers.Set("Content-Type", "application/json")
 			w.Write(snapshot)
+			return
+		}
+		if rest == "theme.css" {
+			headers.Set("Content-Type", "text/css; charset=utf-8")
+			w.Write([]byte(h.theme))
 			return
 		}
 		asset, ok := hallAssets[rest]

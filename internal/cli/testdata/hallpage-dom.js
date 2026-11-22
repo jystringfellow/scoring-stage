@@ -75,6 +75,15 @@ for (const id of ["status", "scoreboard", "graph", "stages", "rows"]) {
   byID[id] = new FakeElement(id === "rows" ? "tbody" : "section");
 }
 byID.graph.hidden = true;
+byID.mode = new FakeElement("button");
+const root = new FakeElement("html");
+const stored = Object.assign({}, scenario.stored || {});
+const storage = {
+  getItem: (key) => (key in stored ? stored[key] : null),
+  setItem: (key, value) => {
+    stored[key] = String(value);
+  },
+};
 const buttons = ["table", "graph"].map((view) => {
   const button = new FakeElement("button");
   button.dataset.view = view;
@@ -92,6 +101,7 @@ function matches(query) {
 const context = vm.createContext({
   window: { matchMedia: (query) => ({ media: query, matches: matches(query), addEventListener() {} }) },
   document: {
+    documentElement: root,
     createElement: (tag) => new FakeElement(tag),
     createElementNS: (namespace, tag) => new FakeElement(tag),
     getElementById: (id) => byID[id],
@@ -101,12 +111,18 @@ const context = vm.createContext({
   fetch: async () => ({ ok: true, json: async () => scenario.view }),
   setTimeout: () => {},
   URLSearchParams,
+  localStorage: storage,
+  getComputedStyle: (element) => ({
+    getPropertyValue: (name) => (name === "--mode" ? element.getAttribute("data-theme") || scenario.default_mode || "dark" : ""),
+  }),
 });
 
 vm.runInContext(fs.readFileSync(pagePath, "utf8"), context, { filename: pagePath });
 
 setImmediate(() => {
-  if (scenario.click) {
+  if (scenario.click === "mode") {
+    byID.mode.click();
+  } else if (scenario.click) {
     buttons.find((button) => button.dataset.view === scenario.click).click();
   }
   const graph = byID.graph;
@@ -120,5 +136,8 @@ setImmediate(() => {
     pictures: graph.all("svg").length,
     pressed: pressed ? pressed.dataset.view : "",
     code: byID.rows.all("code").map((code) => code.textContent),
+    theme: root.getAttribute("data-theme") || "",
+    stored: stored,
+    mode_label: byID.mode.getAttribute("aria-label") || "",
   }));
 });

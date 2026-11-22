@@ -426,6 +426,44 @@ function readStart() {
   }
 }
 
+const themeKey = "stage-hall-mode";
+
+function currentTheme() {
+  return getComputedStyle(document.documentElement).getPropertyValue("--mode").trim() === "light" ? "light" : "dark";
+}
+
+function showThemeSwitch() {
+  const next = currentTheme() === "dark" ? "light" : "dark";
+  const button = document.getElementById("mode");
+  button.textContent = next === "light" ? "Light" : "Dark";
+  button.setAttribute("aria-label", "Switch to " + next + " mode");
+}
+
+function readStoredTheme() {
+  let stored = null;
+  try {
+    stored = localStorage.getItem(themeKey);
+  } catch (error) {
+    stored = null;
+  }
+  if (stored === "dark" || stored === "light") {
+    document.documentElement.setAttribute("data-theme", stored);
+  }
+}
+
+document.getElementById("mode").addEventListener("click", () => {
+  const next = currentTheme() === "dark" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", next);
+  showThemeSwitch();
+  try {
+    localStorage.setItem(themeKey, next);
+  } catch (error) {
+    return;
+  }
+});
+
+readStoredTheme();
+showThemeSwitch();
 readStart();
 for (const button of document.querySelectorAll("nav button")) {
   button.addEventListener("click", () => {

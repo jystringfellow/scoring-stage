@@ -13,21 +13,48 @@ import (
 )
 
 type pageScenario struct {
-	Width int      `json:"width"`
-	Hash  string   `json:"hash,omitempty"`
-	Click string   `json:"click,omitempty"`
-	View  hallView `json:"view"`
+	Width       int               `json:"width"`
+	Hash        string            `json:"hash,omitempty"`
+	Click       string            `json:"click,omitempty"`
+	View        hallView          `json:"view"`
+	Stored      map[string]string `json:"stored,omitempty"`
+	DefaultMode string            `json:"default_mode,omitempty"`
 }
 
 type pageResult struct {
-	Status      string   `json:"status"`
-	GraphHidden bool     `json:"graph_hidden"`
-	TableHidden bool     `json:"table_hidden"`
-	GraphText   []string `json:"graph_text"`
-	Drawn       []string `json:"drawn"`
-	Pictures    int      `json:"pictures"`
-	Pressed     string   `json:"pressed"`
-	Code        []string `json:"code"`
+	Status      string            `json:"status"`
+	GraphHidden bool              `json:"graph_hidden"`
+	TableHidden bool              `json:"table_hidden"`
+	GraphText   []string          `json:"graph_text"`
+	Drawn       []string          `json:"drawn"`
+	Pictures    int               `json:"pictures"`
+	Pressed     string            `json:"pressed"`
+	Code        []string          `json:"code"`
+	Theme       string            `json:"theme"`
+	Stored      map[string]string `json:"stored"`
+	ModeLabel   string            `json:"mode_label"`
+}
+
+func TestTheModeSwitchFlipsTheThemeAndRemembersItInThisBrowser(t *testing.T) {
+	page := showPage(t, pageScenario{Width: 1280, Click: "mode", DefaultMode: "dark", View: pageView(pageStage("fix", 0))})
+	if page.Theme != "light" || page.Stored["stage-hall-mode"] != "light" || page.ModeLabel != "Switch to dark mode" {
+		t.Errorf("theme %q, stored %v, label %q; want light, remembered, and a switch back to dark", page.Theme, page.Stored, page.ModeLabel)
+	}
+	page = showPage(t, pageScenario{Width: 1280, DefaultMode: "light", View: pageView(pageStage("fix", 0))})
+	if page.Theme != "" || page.ModeLabel != "Switch to dark mode" {
+		t.Errorf("unclicked: theme %q, label %q; want the configured mode left alone", page.Theme, page.ModeLabel)
+	}
+}
+
+func TestAModeChosenBeforeIsKeptOnTheNextVisit(t *testing.T) {
+	page := showPage(t, pageScenario{Width: 1280, DefaultMode: "dark", Stored: map[string]string{"stage-hall-mode": "light"}, View: pageView(pageStage("fix", 0))})
+	if page.Theme != "light" || page.ModeLabel != "Switch to dark mode" {
+		t.Errorf("theme %q, label %q", page.Theme, page.ModeLabel)
+	}
+	page = showPage(t, pageScenario{Width: 1280, DefaultMode: "dark", Stored: map[string]string{"stage-hall-mode": "neon"}, View: pageView(pageStage("fix", 0))})
+	if page.Theme != "" {
+		t.Errorf("an unknown stored mode was applied: %q", page.Theme)
+	}
 }
 
 func showPage(t *testing.T, scenario pageScenario) pageResult {
