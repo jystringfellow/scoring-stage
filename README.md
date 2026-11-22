@@ -180,14 +180,18 @@ and port; the system releases it when the hall's process ends, a crash included,
 the next hall.
 Ctrl-C stops it at once, even while sbx is slow to answer, and a second Ctrl-C ends it outright.
 
-![The hall's table: a stage running a kapellmeister run, expanded to its steps, its sections and chairs, with one chair's terminal open](docs/images/hall-table.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/hall-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/hall-light.png">
+  <img alt="The hall: four numbers across the top, one collapsed panel per stage with its current steps and a Graph button, the guide to the commands, and finished runs by repository" src="docs/images/hall-dark.png">
+</picture>
 
-![The same stage as a graph: the stage, its run with the current step, its sections, and each chair with its agent and state](docs/images/hall-graph.png)
+![A stage's panel opened: its run, groups and members, the stage attach command for each CAO terminal, and the commands to run from your own terminal, each with a Copy button](docs/images/hall-open.png)
 
-![A finished run on the stage's row, and finished runs by repository above the stages](docs/images/hall-finished.png)
+![The stage's graph in its dialog, open on the reviewer that waits for an answer, with its last terminal lines and the commands to attach to it](docs/images/hall-graph.png)
 
-These are from a stage made for the purpose, `draft-demo` on kapellmeister, with kapellmeister's `draft-and-check`
-score played by claude and codex.
+These show the page drawing example stages, so their names, terminal lines and counts are made up. The overview
+follows your GitHub theme; the hall itself is dark unless your config or its Light button says otherwise.
 - **What it serves:** four numbers across the top (stages running, stages that need you, sessions by state and
   finished runs), then one panel per stage, collapsed, with its state, repository, sessions, disk, age and the
   current activity's steps. A panel opens to its activities, groups and members, and the sessions no activity
