@@ -1,7 +1,6 @@
 "use strict";
 
 const pollEvery = 2000;
-const columns = 8;
 const expanded = new Set();
 const openTails = new Set();
 const svgNamespace = "http://www.w3.org/2000/svg";
@@ -10,6 +9,9 @@ const graphRow = 34;
 const graphNode = 180;
 const graphMinWidth = 360;
 const tooNarrow = window.matchMedia("(max-width: " + (graphMinWidth - 1) + "px)");
+const themeKey = "stage-hall-mode";
+const guideKey = "stage-hall-guide";
+const sessionOrder = ["working", "waiting", "idle", "exited", "unknown"];
 let mode = "table";
 let showResting = false;
 let latest = null;
@@ -34,38 +36,114 @@ function words(state) {
   return String(state || "unknown").replace(/_/g, " ");
 }
 
-function cell(row, text, className) {
-  const td = el("td", text, className);
-  row.appendChild(td);
-  return td;
+function stateText(state, raw) {
+  return raw ? words(state) + " (" + raw + ")" : words(state);
 }
 
-function detailRow(rows) {
-  const row = el("tr", null, "detail");
-  const td = cell(row, null);
-  td.colSpan = columns;
-  rows.appendChild(row);
-  return td;
+function count(number, noun) {
+  return number + " " + noun + (number === 1 ? "" : "s");
+}
+
+function remembered(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch (error) {
+    return null;
+  }
+}
+
+function remember(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch (error) {
+    return;
+  }
 }
 
 function addSection(parent, title) {
-  parent.appendChild(el("h2", title));
+  parent.appendChild(el("h3", title));
   const list = el("ul");
   parent.appendChild(list);
   return list;
 }
 
-function stateText(state, raw) {
-  return raw ? words(state) + " (" + raw + ")" : words(state);
+function copyButton(command) {
+  const button = el("button", "Copy", "copy");
+  button.type = "button";
+  button.setAttribute("aria-label", "Copy " + command);
+  button.addEventListener("click", () => {
+    if (typeof navigator === "undefined" || !navigator.clipboard) {
+      button.textContent = "Select it";
+      return;
+    }
+    navigator.clipboard.writeText(command).then(
+      () => {
+        button.textContent = "Copied";
+      },
+      () => {
+        button.textContent = "Select it";
+      },
+    );
+  });
+  return button;
 }
 
-function addStage(rows, stage) {
+function addCommand(parent, command, why) {
+  const line = el("div", null, "command");
+  line.appendChild(el("code", command));
+  if (why) {
+    line.appendChild(el("span", why, "why"));
+  }
+  line.appendChild(copyButton(command));
+  parent.appendChild(line);
+}
+
+function addTile(parent, label, value, note, className) {
+  const tile = el("div", null, className ? "tile " + className : "tile");
+  tile.appendChild(el("span", label, "label"));
+  tile.appendChild(el("span", value, "value"));
+  tile.appendChild(el("span", note, "note"));
+  parent.appendChild(tile);
+}
+
+function isLive(stage) {
+  return stage.state === "running" && !stage.remembered;
+}
+
+function drawTiles(view) {
+  const tiles = document.getElementById("tiles");
+  tiles.replaceChildren();
+  tiles.hidden = !view.stages.length;
+  if (!view.stages.length) {
+    return;
+  }
+  const live = view.stages.filter(isLive);
+  const needing = view.stages.filter((stage) => stage.attention.length);
+  const states = {};
+  let sessions = 0;
+  for (const stage of live) {
+    for (const session of stage.sessions.items || []) {
+      sessions += 1;
+      states[session.state] = (states[session.state] || 0) + 1;
+    }
+  }
+  const rank = (state) => (sessionOrder.includes(state) ? sessionOrder.indexOf(state) : sessionOrder.length);
+  const breakdown = Object.keys(states).sort((a, b) => rank(a) - rank(b)).map((state) => states[state] + " " + words(state));
+  const board = view.scoreboard || [];
+  const total = (key) => board.reduce((sum, row) => sum + row[key], 0);
+  addTile(tiles, "Running", live.length, "of " + count(view.stages.length, "stage"));
+  addTile(tiles, "Needs you", needing.length, needing.slice(0, 2).map((stage) => stage.slug + ": " + stage.attention.join(", ")).join("; ") || "nothing waiting", needing.length ? "needs" : "");
+  addTile(tiles, "Sessions", sessions, breakdown.join(" · ") || "none running");
+  addTile(tiles, "Finished runs", total("runs"), total("succeeded") + " succeeded · " + total("failed") + " failed");
+}
+
+function addStage(list, stage) {
   const open = expanded.has(stage.slug);
-  const row = el("tr", null, stage.attention.length ? "stage attention" : "stage");
-  const toggle = el("button", open ? "▾" : "▸");
-  toggle.setAttribute("aria-expanded", open ? "true" : "false");
-  toggle.setAttribute("aria-label", "Details for " + stage.slug);
-  toggle.addEventListener("click", () => {
+  const article = el("article", null, stage.attention.length ? "stage attention" : "stage");
+  const head = el("button", null, "stage-head");
+  head.type = "button";
+  head.setAttribute("aria-expanded", open ? "true" : "false");
+  head.addEventListener("click", () => {
     if (expanded.has(stage.slug)) {
       expanded.delete(stage.slug);
     } else {
@@ -73,22 +151,49 @@ function addStage(rows, stage) {
     }
     render(latest);
   });
-  cell(row, null).appendChild(toggle);
-  const slug = cell(row, stage.slug);
+  const arrow = el("span", open ? "▾" : "▸", "arrow");
+  arrow.setAttribute("aria-hidden", "true");
+  head.appendChild(arrow);
+  head.appendChild(el("span", null, "dot " + stateClass(stage.state)));
+  head.appendChild(el("span", stage.slug, "slug"));
+  head.appendChild(el("span", words(stage.state), stateClass(stage.state)));
   for (const reason of stage.attention) {
-    slug.appendChild(el("span", reason, "badge"));
+    head.appendChild(el("span", reason, "badge"));
   }
-  cell(row, words(stage.state), stateClass(stage.state));
-  const repository = stage.repository ? stage.repository + (stage.base_branch ? "@" + stage.base_branch : "") : "-";
-  cell(row, repository);
-  cell(row, stage.summary.age);
-  cell(row, stage.summary.disk);
-  cell(row, stage.remembered ? stage.summary.sessions + " (last read)" : stage.summary.sessions, stage.remembered ? "muted" : stateClass(stage.sessions.status));
-  cell(row, stage.summary.activity);
-  rows.appendChild(row);
+  head.appendChild(el("span", stage.repository ? stage.repository + (stage.base_branch ? "@" + stage.base_branch : "") : "no task", "repo"));
+  head.appendChild(el("span", null, "spacer"));
+  head.appendChild(el("span", stage.remembered ? stage.summary.sessions + " (last read)" : stage.summary.sessions, "sessions"));
+  const used = parseInt(stage.summary.disk, 10);
+  if (!Number.isNaN(used)) {
+    const disk = el("span", null, "disk");
+    const meter = el("span", null, "meter");
+    const fill = el("span");
+    fill.style.width = Math.max(0, Math.min(100, used)) + "%";
+    meter.appendChild(fill);
+    disk.appendChild(meter);
+    disk.appendChild(el("span", "disk " + stage.summary.disk));
+    head.appendChild(disk);
+  }
+  head.appendChild(el("span", stage.summary.age, "age"));
+  article.appendChild(head);
+
+  const line = el("div", null, "activity-line");
+  line.appendChild(el("span", stage.summary.activity, stage.remembered ? "activity muted" : "activity"));
+  const stepped = (stage.activities || []).find((activity) => activity.steps && activity.steps.length);
+  if (stepped) {
+    for (const step of stepped.steps) {
+      const mark = step.state === "done" ? "✓ " : step.state === "active" ? "● " : "○ ";
+      line.appendChild(el("span", mark + step.name, "step step-" + String(step.state).replace(/[^a-z]/g, "")));
+    }
+  }
+  article.appendChild(line);
+
   if (open) {
-    addDetails(detailRow(rows), stage);
+    const detail = el("div", null, "detail");
+    addDetails(detail, stage);
+    article.appendChild(detail);
   }
+  list.appendChild(article);
 }
 
 function addDetails(parent, stage) {
@@ -123,6 +228,12 @@ function addDetails(parent, stage) {
   }
   if (!stage.read && !stage.activities.length && !stage.unclaimed_sessions.length) {
     parent.appendChild(el("p", "Not read: stage reads only running stages it has a task for.", "muted"));
+  }
+  if (isLive(stage)) {
+    parent.appendChild(el("h3", "In your terminal"));
+    parent.appendChild(el("p", "The hall shows these commands and never runs them.", "muted"));
+    addCommand(parent, "stage shell " + stage.slug, "a login shell in the repository");
+    addCommand(parent, "stage ship " + stage.slug, "review its commit, then push it");
   }
 }
 
@@ -159,12 +270,11 @@ function sessionOf(stage, ref) {
 }
 
 function addAttach(item, stage, ref) {
-  if (!ref || ref.source !== "cao" || stage.state !== "running" || stage.remembered) {
+  if (!ref || ref.source !== "cao" || !isLive(stage)) {
     return;
   }
   const line = el("div", null, "attach");
-  line.appendChild(el("span", "attach from a terminal: ", "muted"));
-  line.appendChild(el("code", "stage attach " + stage.slug + " " + ref.id));
+  addCommand(line, "stage attach " + stage.slug + " " + ref.id, "attach from a terminal; Ctrl-b d detaches, Ctrl-C goes to the agent");
   item.appendChild(line);
 }
 
@@ -184,7 +294,7 @@ function addSession(list, stage, session) {
 
 function addActivity(parent, stage, activity, lastSeen) {
   const heading = activity.provider + " · " + activity.title;
-  parent.appendChild(el("h2", lastSeen ? "Earlier · " + heading : heading));
+  parent.appendChild(el("h3", lastSeen ? "Earlier · " + heading : heading, "activity-title"));
   if (lastSeen) {
     parent.appendChild(el("p", "No longer reported; last seen at " + lastSeen + ". Its states are as they were then.", "muted"));
   }
@@ -204,21 +314,12 @@ function addActivity(parent, stage, activity, lastSeen) {
   if (activity.reason) {
     parent.appendChild(el("p", activity.reason));
   }
-  if (activity.steps && activity.steps.length) {
-    const steps = el("p");
-    activity.steps.forEach((step, index) => {
-      if (index > 0) {
-        steps.appendChild(el("span", " → ", "muted"));
-      }
-      steps.appendChild(el("span", step.name, stateClass(step.state === "active" ? "running" : step.state)));
-    });
-    parent.appendChild(steps);
-  }
   for (const group of activity.groups || []) {
     const list = addSection(parent, group.name);
     for (const member of group.members) {
       const item = el("li");
-      item.appendChild(el("span", member.name));
+      item.appendChild(el("span", null, "dot " + stateClass(member.state)));
+      item.appendChild(el("span", " " + member.name));
       if (member.agent) {
         item.appendChild(el("span", " · " + member.agent, "muted"));
       }
@@ -317,25 +418,22 @@ function drawScoreboard(board) {
     return;
   }
   section.appendChild(el("h2", "Finished runs"));
-  const table = el("table", null, "scoreboard");
-  const head = el("tr");
-  for (const title of ["Repository", "Runs", "Succeeded", "Failed", "Stopped", "Tokens"]) {
-    head.appendChild(el("th", title));
-  }
-  table.appendChild(el("thead")).appendChild(head);
-  const body = el("tbody");
   for (const row of board) {
-    const line = el("tr");
-    line.appendChild(el("td", row.repository));
-    line.appendChild(el("td", row.runs));
-    line.appendChild(el("td", row.succeeded, row.succeeded ? "state-succeeded" : ""));
-    line.appendChild(el("td", row.failed, row.failed ? "state-failed" : ""));
-    line.appendChild(el("td", row.stopped));
-    line.appendChild(el("td", (row.tokens_at_least ? "≥" : "") + Math.round(row.tokens).toLocaleString()));
-    body.appendChild(line);
+    const run = el("div", null, "run");
+    const head = el("div", null, "run-head");
+    head.appendChild(el("code", row.repository));
+    head.appendChild(el("span", (row.tokens_at_least ? "≥" : "") + Math.round(row.tokens).toLocaleString() + " tokens", "muted"));
+    run.appendChild(head);
+    const bar = el("div", null, "bar");
+    for (const [part, value] of [["ok", row.succeeded], ["failed", row.failed]]) {
+      const fill = el("span", null, part);
+      fill.style.width = (row.runs ? (100 * value) / row.runs : 0) + "%";
+      bar.appendChild(fill);
+    }
+    run.appendChild(bar);
+    run.appendChild(el("span", count(row.runs, "run") + " · " + row.succeeded + " succeeded · " + row.failed + " failed · " + row.stopped + " stopped", "muted"));
+    section.appendChild(run);
   }
-  table.appendChild(body);
-  section.appendChild(table);
 }
 
 function showStatus(view) {
@@ -345,13 +443,30 @@ function showStatus(view) {
   status.className = problems.length ? "error" : "";
 }
 
+function addFirstRun(rows) {
+  const first = el("section", null, "first-run");
+  first.appendChild(el("h2", "No stages yet"));
+  first.appendChild(el("p", "A stage is a sandbox where a coding agent works on one repository, with deny-all egress and its credentials held on the host. Start one from a terminal and it appears here by itself.", "muted"));
+  const steps = el("ol");
+  for (const [title, command] of [["Once per machine", "stage setup"], ["Start a stage", "stage up <repo> <slug>"], ["Run your agent or loop as a job", "stage exec --detach <slug> -- <command>"]]) {
+    const step = el("li");
+    step.appendChild(el("span", title));
+    step.appendChild(el("code", command));
+    steps.appendChild(step);
+  }
+  first.appendChild(steps);
+  rows.appendChild(first);
+}
+
 function render(view) {
   if (!view) {
     return;
   }
   latest = view;
   showStatus(view);
+  drawTiles(view);
   drawScoreboard(view.scoreboard || []);
+  document.getElementById("where").textContent = "read-only · " + location.host + " · " + count(view.stages.length, "stage");
   for (const button of document.querySelectorAll("nav button")) {
     button.setAttribute("aria-pressed", button.dataset.view === mode ? "true" : "false");
   }
@@ -362,6 +477,10 @@ function render(view) {
   }
   const rows = document.getElementById("rows");
   rows.replaceChildren();
+  if (!view.stages.length) {
+    addFirstRun(rows);
+    return;
+  }
   const resting = [];
   for (const stage of view.stages) {
     if (stage.state !== "running" && stage.attention.length === 0 && !stage.remembered) {
@@ -371,23 +490,22 @@ function render(view) {
     }
   }
   if (resting.length) {
-    const td = detailRow(rows);
-    const label = (showResting ? "Hide " : "Show ") + resting.length + " not running: " + resting.map((stage) => stage.slug).join(", ");
-    const button = el("button", label);
+    const fold = el("div", null, "resting");
+    fold.appendChild(el("span", resting.length + " not running: " + resting.map((stage) => stage.slug).join(", ")));
+    const button = el("button", showResting ? "Hide" : "Show");
+    button.type = "button";
     button.setAttribute("aria-expanded", showResting ? "true" : "false");
     button.addEventListener("click", () => {
       showResting = !showResting;
       render(latest);
     });
-    td.appendChild(button);
+    fold.appendChild(button);
+    rows.appendChild(fold);
     if (showResting) {
       for (const stage of resting) {
         addStage(rows, stage);
       }
     }
-  }
-  if (!view.stages.length) {
-    detailRow(rows).appendChild(el("p", "No stages.", "muted"));
   }
 }
 
@@ -426,8 +544,6 @@ function readStart() {
   }
 }
 
-const themeKey = "stage-hall-mode";
-
 function currentTheme() {
   return getComputedStyle(document.documentElement).getPropertyValue("--mode").trim() === "light" ? "light" : "dark";
 }
@@ -440,30 +556,35 @@ function showThemeSwitch() {
 }
 
 function readStoredTheme() {
-  let stored = null;
-  try {
-    stored = localStorage.getItem(themeKey);
-  } catch (error) {
-    stored = null;
-  }
+  const stored = remembered(themeKey);
   if (stored === "dark" || stored === "light") {
     document.documentElement.setAttribute("data-theme", stored);
   }
+}
+
+function showGuide(visible) {
+  const toggle = document.getElementById("guide-toggle");
+  document.getElementById("guide").hidden = !visible;
+  toggle.textContent = visible ? "Hide guide" : "Guide";
+  toggle.setAttribute("aria-expanded", visible ? "true" : "false");
 }
 
 document.getElementById("mode").addEventListener("click", () => {
   const next = currentTheme() === "dark" ? "light" : "dark";
   document.documentElement.setAttribute("data-theme", next);
   showThemeSwitch();
-  try {
-    localStorage.setItem(themeKey, next);
-  } catch (error) {
-    return;
-  }
+  remember(themeKey, next);
+});
+
+document.getElementById("guide-toggle").addEventListener("click", () => {
+  const visible = document.getElementById("guide").hidden;
+  showGuide(visible);
+  remember(guideKey, visible ? "shown" : "hidden");
 });
 
 readStoredTheme();
 showThemeSwitch();
+showGuide(remembered(guideKey) !== "hidden");
 readStart();
 for (const button of document.querySelectorAll("nav button")) {
   button.addEventListener("click", () => {

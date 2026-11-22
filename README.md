@@ -188,12 +188,17 @@ Ctrl-C stops it at once, even while sbx is slow to answer, and a second Ctrl-C e
 
 These are from a stage made for the purpose, `draft-demo` on kapellmeister, with kapellmeister's `draft-and-check`
 score played by claude and codex.
-- **What it serves:** a table of stages that expand into their activities, steps, groups and members, and the
-  sessions no activity claims. A session, or a member whose session was read, opens to the last lines of its
-  terminal, shown as text. Stages that need attention come first: a waiting member or session, a `failed` or
-  `blocked` activity, a read or provider error, or a disk at 90% or more. Stages that are not running fold into one
-  line. A stage's detail names sbx's global secrets in a plain line; they apply to every stage, so they do not
-  mark one as needing attention.
+- **What it serves:** four numbers across the top (stages running, stages that need you, sessions by state and
+  finished runs), then one panel per stage, collapsed, with its state, repository, sessions, disk, age and the
+  current activity's steps. A panel opens to its activities, groups and members, and the sessions no activity
+  claims; a session, or a member whose session was read, opens to the last lines of its terminal, shown as text. An
+  open running stage also lists commands to run from your own terminal, such as `stage shell` and `stage ship`,
+  each with a Copy button; the page shows them and never runs them. Stages that need attention come first and are
+  outlined: a waiting member or session, a `failed` or `blocked` activity, a read or provider error, or a disk at
+  90% or more. Stages that are not running fold into one line. A stage's detail names sbx's global secrets in a
+  plain line; they apply to every stage, so they do not mark one as needing attention. Beside the stages are a short
+  guide to the commands, which can be hidden and stays hidden in that browser, and the finished runs by repository.
+  With no stages yet, the page says how to start one.
 - **Getting an agent unstuck:** each CAO session in a running stage shows the command that opens it in your own
   terminal, such as `stage attach fix-login 5e6f7a8b`. The hall only shows the command; it never sends input itself.
   `stage attach` reads the stage once to find that terminal's tmux session and window, the same way the hall does,

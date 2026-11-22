@@ -9,36 +9,56 @@
 <script src="hall.js" defer></script>
 </head>
 <body>
-<header>
-  <h1>stage hall</h1>
-  <p id="status" role="status">Reading the stages…</p>
-  <nav aria-label="Views">
-    <button type="button" data-view="table" aria-pressed="true">Table</button>
-    <button type="button" data-view="graph" aria-pressed="false">Graph</button>
-  </nav>
-  <button type="button" id="mode" aria-label="Switch to light mode">Light</button>
+<div class="page">
+<header class="top">
+  <div class="brand">
+    <svg class="mark" aria-hidden="true" width="34" height="34" viewBox="0 0 34 34" fill="none" stroke-width="1.6" stroke-linecap="round">
+      <rect x="3" y="5" width="28" height="24" rx="4"></rect>
+      <path d="M10 10v14M17 10v14M24 10v14"></path>
+      <path class="faders" d="M7.5 19h5M14.5 13h5M21.5 21h5"></path>
+    </svg>
+    <div>
+      <h1>stage hall</h1>
+      <p id="where" class="muted">read-only</p>
+    </div>
+  </div>
+  <div class="controls">
+    <p id="status" role="status">Reading the stages…</p>
+    <nav aria-label="Views">
+      <button type="button" data-view="table" aria-pressed="true">Table</button>
+      <button type="button" data-view="graph" aria-pressed="false">Graph</button>
+    </nav>
+    <button type="button" id="guide-toggle" aria-controls="guide" aria-expanded="true">Hide guide</button>
+    <button type="button" id="mode" aria-label="Switch to light mode">Light</button>
+  </div>
 </header>
-<main>
-  <section id="scoreboard" hidden aria-label="Finished runs by repository"></section>
-  <section id="graph" hidden aria-label="Graph of stages"></section>
-  <table id="stages">
-    <thead>
-      <tr>
-        <th scope="col"><span class="hidden">Details</span></th>
-        <th scope="col">Stage</th>
-        <th scope="col">State</th>
-        <th scope="col">Repository</th>
-        <th scope="col">Age</th>
-        <th scope="col">Disk</th>
-        <th scope="col">Sessions</th>
-        <th scope="col">Activity</th>
-      </tr>
-    </thead>
-    <tbody id="rows"></tbody>
-  </table>
-</main>
+<section id="tiles" aria-label="Summary"></section>
+<div class="columns">
+  <main>
+    <section id="graph" hidden aria-label="Graph of stages"></section>
+    <div id="stages">
+      <div id="rows"></div>
+    </div>
+  </main>
+  <aside>
+    <section id="guide" class="card" aria-labelledby="guide-title">
+      <h2 id="guide-title">Using stage</h2>
+      <ol class="steps">
+        <li><span>Once per machine</span><code>stage setup</code></li>
+        <li><span>Start a stage</span><code>stage up &lt;repo&gt; &lt;slug&gt;</code></li>
+        <li><span>Run your agent or loop as a job</span><code>stage exec --detach &lt;slug&gt; -- &lt;command&gt;</code></li>
+        <li><span>Answer an agent that waits for you</span><code>stage attach &lt;slug&gt; &lt;terminal&gt;</code></li>
+        <li><span>Ship what it made</span><code>stage ship &lt;slug&gt;</code></li>
+      </ol>
+      <p class="muted">Everything here is read from inside each stage, bounded and escaped. Nothing on this page can send input to an agent.</p>
+    </section>
+    <section id="scoreboard" class="card" hidden aria-label="Finished runs by repository"></section>
+  </aside>
+</div>
 <footer>
-  <p>Read only: this page shows what each stage reports and never sends anything to a stage.</p>
+  <p>Read only: this page shows what each stage reports and never sends anything to a stage. Stop it with Ctrl-C in the terminal that ran <code>stage hall</code>.</p>
+  <p>Colors and mode come from <code>[hall.theme]</code> in your config.toml.</p>
 </footer>
+</div>
 </body>
 </html>

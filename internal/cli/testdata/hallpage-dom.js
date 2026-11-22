@@ -13,6 +13,7 @@ class FakeElement {
     this.attributes = {};
     this.listeners = {};
     this.dataset = {};
+    this.style = {};
     this.hidden = false;
     this.className = "";
     this.ownText = "";
@@ -75,7 +76,12 @@ for (const id of ["status", "scoreboard", "graph", "stages", "rows"]) {
   byID[id] = new FakeElement(id === "rows" ? "tbody" : "section");
 }
 byID.graph.hidden = true;
+for (const id of ["tiles", "guide", "where"]) {
+  byID[id] = new FakeElement("section");
+}
 byID.mode = new FakeElement("button");
+byID["guide-toggle"] = new FakeElement("button");
+const copied = [];
 const root = new FakeElement("html");
 const stored = Object.assign({}, scenario.stored || {});
 const storage = {
@@ -107,7 +113,14 @@ const context = vm.createContext({
     getElementById: (id) => byID[id],
     querySelectorAll: (selector) => (selector === "nav button" ? buttons : []),
   },
-  location: { hash: scenario.hash ? "#" + scenario.hash : "" },
+  location: { hash: scenario.hash ? "#" + scenario.hash : "", host: "127.0.0.1:7420" },
+  navigator: {
+    clipboard: {
+      writeText: async (text) => {
+        copied.push(String(text));
+      },
+    },
+  },
   fetch: async () => ({ ok: true, json: async () => scenario.view }),
   setTimeout: () => {},
   URLSearchParams,
@@ -122,6 +135,12 @@ vm.runInContext(fs.readFileSync(pagePath, "utf8"), context, { filename: pagePath
 setImmediate(() => {
   if (scenario.click === "mode") {
     byID.mode.click();
+  } else if (scenario.click === "guide") {
+    byID["guide-toggle"].click();
+  } else if (scenario.click && scenario.click.startsWith("copy ")) {
+    const wanted = scenario.click.slice("copy ".length);
+    const row = byID.rows.all("div").find((line) => line.className === "command" && line.all("code").some((code) => code.textContent === wanted));
+    row.all("button")[0].click();
   } else if (scenario.click) {
     buttons.find((button) => button.dataset.view === scenario.click).click();
   }
@@ -139,5 +158,12 @@ setImmediate(() => {
     theme: root.getAttribute("data-theme") || "",
     stored: stored,
     mode_label: byID.mode.getAttribute("aria-label") || "",
+    tiles: byID.tiles.children.map((tile) => tile.children.map((part) => part.textContent)),
+    rows_text: byID.rows.textContent,
+    open_details: byID.rows.all("div").filter((part) => part.className === "detail").length,
+    copied: copied,
+    guide_hidden: byID.guide.hidden,
+    guide_label: byID["guide-toggle"].textContent,
+    where: byID.where.textContent,
   }));
 });

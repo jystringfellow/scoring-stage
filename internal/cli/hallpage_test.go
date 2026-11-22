@@ -33,6 +33,94 @@ type pageResult struct {
 	Theme       string            `json:"theme"`
 	Stored      map[string]string `json:"stored"`
 	ModeLabel   string            `json:"mode_label"`
+	Tiles       [][]string        `json:"tiles"`
+	RowsText    string            `json:"rows_text"`
+	OpenDetails int               `json:"open_details"`
+	Copied      []string          `json:"copied"`
+	GuideHidden bool              `json:"guide_hidden"`
+	GuideLabel  string            `json:"guide_label"`
+	Where       string            `json:"where"`
+}
+
+func stoppedStage(slug string) stageRecord {
+	record := pageStage(slug, 0)
+	record.State = "stopped"
+	record.Activities = []activityRecord{}
+	record.Sessions = sessionsRecord{Status: "not_read", Items: []sessionRecord{}}
+	return record
+}
+
+func TestTheSummaryCountsWhatRunsWhatNeedsYouItsSessionsAndFinishedRuns(t *testing.T) {
+	view := pageView(pageStage("fix", 1), stoppedStage("old"))
+	view.Scoreboard = []scoreRow{{Repository: "acme/web", Runs: 6, Succeeded: 5, Failed: 1}, {Repository: "acme/api", Runs: 3, Succeeded: 3}}
+	page := showPage(t, pageScenario{Width: 1280, View: view})
+	want := [][]string{
+		{"Running", "1", "of 2 stages"},
+		{"Needs you", "1", "fix: waiting"},
+		{"Sessions", "3", "2 working · 1 idle"},
+		{"Finished runs", "9", "8 succeeded · 1 failed"},
+	}
+	if len(page.Tiles) != len(want) {
+		t.Fatalf("tiles %q, want %q", page.Tiles, want)
+	}
+	for i := range want {
+		if !slices.Equal(page.Tiles[i], want[i]) {
+			t.Errorf("tile %d is %q, want %q", i, page.Tiles[i], want[i])
+		}
+	}
+	if page.Where != "read-only · 127.0.0.1:7420 · 2 stages" {
+		t.Errorf("header says %q", page.Where)
+	}
+}
+
+func TestStagesStartCollapsedAndOpenToWhatYouCanRunFromYourTerminal(t *testing.T) {
+	page := showPage(t, pageScenario{Width: 1280, View: pageView(pageStage("fix", 0))})
+	if page.OpenDetails != 0 || len(page.Code) != 0 {
+		t.Errorf("collapsed page shows %d details and commands %q", page.OpenDetails, page.Code)
+	}
+	page = showPage(t, pageScenario{Width: 1280, Hash: "open=fix", View: pageView(pageStage("fix", 0))})
+	if page.OpenDetails != 1 {
+		t.Errorf("open details %d, want 1", page.OpenDetails)
+	}
+	for _, want := range []string{"stage attach fix 1a2b3c4d", "stage shell fix", "stage ship fix"} {
+		if !slices.Contains(page.Code, want) {
+			t.Errorf("commands %q lack %q", page.Code, want)
+		}
+	}
+}
+
+func TestACopyButtonCopiesItsCommandAndNothingElse(t *testing.T) {
+	page := showPage(t, pageScenario{Width: 1280, Hash: "open=fix", Click: "copy stage ship fix", View: pageView(pageStage("fix", 0))})
+	if !slices.Equal(page.Copied, []string{"stage ship fix"}) {
+		t.Errorf("copied %q", page.Copied)
+	}
+}
+
+func TestWithNoStagesThePageSaysHowToStartOne(t *testing.T) {
+	page := showPage(t, pageScenario{Width: 1280, View: pageView()})
+	for _, want := range []string{"No stages yet", "stage up <repo> <slug>"} {
+		if !strings.Contains(page.RowsText, want) {
+			t.Errorf("page says %q, want %q", page.RowsText, want)
+		}
+	}
+	if len(page.Tiles) != 0 {
+		t.Errorf("tiles %q with no stages", page.Tiles)
+	}
+}
+
+func TestTheGuideCanBeHiddenAndStaysHiddenInThisBrowser(t *testing.T) {
+	page := showPage(t, pageScenario{Width: 1280, View: pageView(pageStage("fix", 0))})
+	if page.GuideHidden || page.GuideLabel != "Hide guide" {
+		t.Errorf("first visit: hidden %v, label %q", page.GuideHidden, page.GuideLabel)
+	}
+	page = showPage(t, pageScenario{Width: 1280, Click: "guide", View: pageView(pageStage("fix", 0))})
+	if !page.GuideHidden || page.GuideLabel != "Guide" || page.Stored["stage-hall-guide"] != "hidden" {
+		t.Errorf("after hiding: hidden %v, label %q, stored %v", page.GuideHidden, page.GuideLabel, page.Stored)
+	}
+	page = showPage(t, pageScenario{Width: 1280, Stored: map[string]string{"stage-hall-guide": "hidden"}, View: pageView(pageStage("fix", 0))})
+	if !page.GuideHidden {
+		t.Errorf("a hidden guide came back")
+	}
 }
 
 func TestTheModeSwitchFlipsTheThemeAndRemembersItInThisBrowser(t *testing.T) {
@@ -153,9 +241,15 @@ func TestWithNoStageExpandedOrRunningAJobTheGraphSaysHowToPickOne(t *testing.T) 
 
 func TestAnExpandedRunningStageShowsHowToAttachToEachCAOTerminal(t *testing.T) {
 	page := showPage(t, pageScenario{Width: 1280, Hash: "open=fix", View: pageView(pageStage("fix", 0))})
+	var attach []string
+	for _, command := range page.Code {
+		if strings.HasPrefix(command, "stage attach ") {
+			attach = append(attach, command)
+		}
+	}
 	want := []string{"stage attach fix 1a2b3c4d", "stage attach fix 5e6f7a8b"}
-	if !slices.Equal(page.Code, want) {
-		t.Errorf("commands %q, want %q", page.Code, want)
+	if !slices.Equal(attach, want) {
+		t.Errorf("attach commands %q, want %q", attach, want)
 	}
 }
 
