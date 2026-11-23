@@ -282,11 +282,11 @@ func (a *App) updateBook(settings *config.Settings, target bookTarget, to string
 	case team != nil && haveCurrent:
 		a.say("%s: the repository's lock has commit %s; yours has commit %s", key, short(fetched.Commit), short(current.Commit))
 	case to == "" && haveCurrent && current.Commit != fetched.Commit:
-		a.say("%s: tag %s moved: it was commit %s and is now commit %s", key, target.ref.Version, short(current.Commit), short(fetched.Commit))
+		a.say("%s: tag %s moved: it was commit %s and is now commit %s", key, fetched.Tag, short(current.Commit), short(fetched.Commit))
 	case to != "":
 		a.say("%s moves to %s at commit %s", key, nextKey, short(fetched.Commit))
 		if existing, found := mine.Find(nextKey); found && existing.Commit != fetched.Commit {
-			a.say("%s: tag %s moved: it was commit %s and is now commit %s", nextKey, to, short(existing.Commit), short(fetched.Commit))
+			a.say("%s: tag %s moved: it was commit %s and is now commit %s", nextKey, fetched.Tag, short(existing.Commit), short(fetched.Commit))
 		}
 	}
 

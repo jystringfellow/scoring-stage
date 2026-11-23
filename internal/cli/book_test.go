@@ -302,6 +302,48 @@ func TestBookUpdateFromNamesAnUnknownFingerprintScheme(t *testing.T) {
 	}
 }
 
+func TestBookUpdateNamesTheBooksOwnTagWhenThatIsWhatMoved(t *testing.T) {
+	h := setup(t)
+	books := h.withGoBook(t)
+	old := h.lockedCommit(filepath.Join(h.home, "stage.lock"), goBookRef)
+	own := books.publish("backend/go/v1", bookWithToken)
+
+	h.answerAtATerminal("y\n")
+	h.expect(0, "book", "update", "go")
+	h.expectStdout("tag backend/go/v1 moved", old[:12], own[:12])
+	if got := h.lockedCommit(filepath.Join(h.home, "stage.lock"), goBookRef); got != own {
+		t.Errorf("lock holds %s, want the book's own tag at %s", got, own)
+	}
+}
+
+func TestBookUpdateToAVersionOnlyTheBookIsTaggedWith(t *testing.T) {
+	h := setup(t)
+	books := h.withGoBook(t)
+	own := books.publish("backend/go/v2", bookWithFeed)
+	h.answerAtATerminal("y\n")
+	h.expect(0, "book", "update", "go", "--to", "v2")
+	newRef := strings.Replace(goBookRef, "@v1", "@v2", 1)
+	if got := h.lockedCommit(filepath.Join(h.home, "stage.lock"), newRef); got != own {
+		t.Errorf("lock holds %q for %s, want the tag backend/go/v2 at %s", got, newRef, own)
+	}
+}
+
+func TestBookUpdateToReportsTheBooksOwnTagWhenItMovedAPinnedVersion(t *testing.T) {
+	h := setup(t)
+	books := h.withGoBook(t)
+	newRef := strings.Replace(goBookRef, "@v1", "@v2", 1)
+	plain := books.publish("v2", bookWithFeed)
+	h.answerAtATerminal("y\n")
+	h.expect(0, "up", h.remote.Checkout, "second", "--book", newRef)
+	own := books.publish("backend/go/v2", bookWithToken)
+
+	h.expect(0, "book", "update", "go", "--to", "v2")
+	h.expectStdout("tag backend/go/v2 moved", plain[:12], own[:12])
+	if got := h.lockedCommit(filepath.Join(h.home, "stage.lock"), newRef); got != own {
+		t.Errorf("lock holds %q for %s, want %s", got, newRef, own)
+	}
+}
+
 func TestBookUpdateToTheVersionItAlreadyHasIsAPlainUpdate(t *testing.T) {
 	h := setup(t)
 	books := h.withGoBook(t)

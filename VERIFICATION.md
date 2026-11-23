@@ -39,8 +39,8 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
 - Whether `sbx env create --force` prints the plan it approves.
 - Where sbx keeps `credentials.yaml`, beyond `~/.config/sbx/credentials.yaml` on macOS. `stage setup`'s bindings
   audit also looks under `$XDG_CONFIG_HOME` and `%APPDATA%`, inferred from strings in the sbx binary.
-- Fetching a book by tag from github.com, and a moved tag on github.com. Fetching by full commit was checked on
-  2026-11-22.
+- Fetching a book by tag from github.com, both a book's own `<directory>/<version>` tag and the plain fallback, and
+  a moved tag on github.com. Fetching by full commit was checked on 2026-11-22.
 - sbx's kit loader: which files it reads from a kit directory, and whether it matches keys case-insensitively.
   stage checks `.yaml`, `.yml` and `.json` files at any depth except under `files/`, and refuses keys that differ
   from `capabilities`, `extends`, `type`, `config`, `service`, `inject` or `domain` only in case.

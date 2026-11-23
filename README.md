@@ -1161,6 +1161,13 @@ commit. Branches and short commits are refused, so a book never changes without 
 with your own git credentials, as it does a repository for `stage up`, so a private books repository works
 wherever `git fetch` does.
 
+Versions belong to each book, not to the repository. stage looks a tag up first as the book's own tag, its directory
+then the version (`backend/go/v1.2.0` for the reference above), and only then as the plain tag `v1.2.0`. Tag a
+books repository the way Go tags a module in a subdirectory: give each book's release a tag prefixed with its
+directory, so releasing one book does not give every other book a new version. A plain tag is the fallback that
+covers every book without a tag of its own at that version. When neither tag exists, the error names both. The
+version in a reference never contains `/`; the prefix comes only from the directory.
+
 `books` in your config is either the list shown above, which still works unchanged, or a table that gives each book
 a short name:
 
@@ -1349,7 +1356,8 @@ and what has not been run live yet.
   [Configuration and books](#configuration-and-books).
 - **Fetching a book by tag from github.com needs a live check.** Tests fetch books from local repositories standing
   in for GitHub. Fetching from a private github.com repository by full commit was checked on 2026-11-22
-  ([VERIFICATION.md](VERIFICATION.md)); a tag, and a tag moved on github.com, have not been.
+  ([VERIFICATION.md](VERIFICATION.md)); a tag, a book's own `<directory>/<version>` tag, and a tag moved on
+  github.com, have not been.
 - **Any kit can send any bound credential anywhere.** A kit that declares a credential for a service with a global
   sbx binding gets that secret injected on whatever hosts the kit names. That holds for published kits you add to
   your own config and for Docker's agent mixins that stage pins in its agent table, which are trusted by design.

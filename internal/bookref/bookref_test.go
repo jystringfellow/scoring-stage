@@ -289,9 +289,73 @@ func TestABranchIsNotAVersion(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "is a branch") {
 		t.Fatalf("got %v, want a branch refused", err)
 	}
-	_, err = Library{Home: stageHome(t)}.Open(mustParse(t, "github.com/example-org/books//backend/go@v9"), nil)
-	if err == nil || !strings.Contains(err.Error(), "no tag v9") {
-		t.Fatalf("got %v, want a missing tag named", err)
+	testutil.RunGit(t, repo.work, "push", "-q", repo.bare, "main:refs/heads/backend/go/next")
+	_, err = Library{Home: stageHome(t)}.Open(mustParse(t, "github.com/example-org/books//backend/go@next"), nil)
+	if err == nil || !strings.Contains(err.Error(), "backend/go/next is a branch") {
+		t.Fatalf("got %v, want the book's branch refused", err)
+	}
+}
+
+func TestAPrefixedTagForTheBooksDirectoryWinsOverAPlainTagOfTheSameVersion(t *testing.T) {
+	repo := newBooksRepo(t)
+	repo.commit(goBook("whole repository"))
+	repo.tag("v1.2.0")
+	ownTag := repo.commit(goBook("this book"))
+	repo.tag("backend/go/v1.2.0")
+	repo.commit(goBook("later"))
+	home := stageHome(t)
+	ref := mustParse(t, "github.com/example-org/books//backend/go@v1.2.0")
+
+	book, err := Library{Home: home}.Open(ref, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if book.Commit != ownTag || !strings.Contains(readBook(t, book), "this book") {
+		t.Errorf("got commit %s with %q, want the annotated tag backend/go/v1.2.0 at %s", book.Commit, readBook(t, book), ownTag)
+	}
+	fetched, err := Library{Home: home}.Fetch(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fetched.Tag != "backend/go/v1.2.0" || fetched.Commit != ownTag {
+		t.Errorf("fetched tag %q at %s, want backend/go/v1.2.0 at %s", fetched.Tag, fetched.Commit, ownTag)
+	}
+}
+
+func TestAPlainTagCoversABookWithoutItsOwnTagButAnotherBooksTagDoesNot(t *testing.T) {
+	repo := newBooksRepo(t)
+	plain := repo.commit(goBook("whole repository"))
+	repo.tag("v2")
+	repo.commit(goBook("another book's release"))
+	repo.tag("backend/python/v2")
+	repo.tag("backend/v2")
+	repo.tag("go/v2")
+	home := stageHome(t)
+	ref := mustParse(t, "github.com/example-org/books//backend/go@v2")
+
+	book, err := Library{Home: home}.Open(ref, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if book.Commit != plain {
+		t.Errorf("got commit %s, want the plain tag v2 at %s", book.Commit, plain)
+	}
+	fetched, err := Library{Home: home}.Fetch(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fetched.Tag != "v2" {
+		t.Errorf("fetched tag %q, want v2", fetched.Tag)
+	}
+}
+
+func TestAVersionWithNeitherTagNamesBothTagsItTried(t *testing.T) {
+	repo := newBooksRepo(t)
+	repo.commit(goBook("one"))
+	repo.tag("v1")
+	_, err := Library{Home: stageHome(t)}.Open(mustParse(t, "github.com/example-org/books//backend/go@v9"), nil)
+	if err == nil || !strings.Contains(err.Error(), "tag backend/go/v9") || !strings.Contains(err.Error(), "tag v9") {
+		t.Fatalf("got %v, want both tags named", err)
 	}
 }
 
