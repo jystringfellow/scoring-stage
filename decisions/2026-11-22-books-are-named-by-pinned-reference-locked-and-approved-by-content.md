@@ -91,4 +91,6 @@ Evidence: `TestALockedReferenceKeepsItsCommitWhenTheTagMoves`,
 `TestARepositoryMayNameABookByReferenceYouNeverInstalledAndYouAreAsked`, `TestReadingConfigNeverFetchesABook`,
 `TestAPrefixedTagForTheBooksDirectoryWinsOverAPlainTagOfTheSameVersion`,
 `TestAPlainTagCoversABookWithoutItsOwnTagButAnotherBooksTagDoesNot`.
-Fetching by tag from github.com has not been checked live; the README lists it under Limitations.
+Checked live against a private github.com repository: a full commit (2026-11-22) and a book's own lightweight tag
+(2026-11-23). The plain-tag fallback, an annotated tag and a moved tag have not been; the README lists them under
+Limitations.
