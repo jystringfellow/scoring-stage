@@ -39,6 +39,7 @@ type pageResult struct {
 	ModeLabel   string            `json:"mode_label"`
 	Tiles       [][]string        `json:"tiles"`
 	RowsText    string            `json:"rows_text"`
+	Scoreboard  string            `json:"scoreboard_text"`
 	Activities  []string          `json:"activities"`
 	OpenDetails int               `json:"open_details"`
 	Copied      []string          `json:"copied"`
@@ -262,6 +263,15 @@ func TestAnOpenedStageCountsTokensTheWayItsSummaryDoes(t *testing.T) {
 	text := strings.Join(page.Activities, " | ")
 	if !strings.Contains(page.RowsText, "· ≥412k tokens") || strings.Contains(page.RowsText, "412000") {
 		t.Errorf("page says %q (activities %q), want ≥412k tokens in the summary and the detail alike", page.RowsText, text)
+	}
+}
+
+func TestFinishedRunsCountTokensTheWayTheStagesDo(t *testing.T) {
+	view := pageView()
+	view.Scoreboard = []scoreRow{{Repository: "acme/web", Runs: 4, Succeeded: 4, Tokens: 3480000, TokensAtLeast: true}}
+	page := showPage(t, pageScenario{View: view})
+	if !strings.Contains(page.Scoreboard, "≥3.5M tokens") || strings.Contains(page.Scoreboard, "3,480,000") {
+		t.Errorf("finished runs say %q, want ≥3.5M tokens", page.Scoreboard)
 	}
 }
 
