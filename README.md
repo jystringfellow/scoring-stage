@@ -616,7 +616,7 @@ the person instead. `ship` never
 pushes or records a ship: review its result and run the returned `stage ship ...` command to confirm and push.
 It refuses protected paths outright and enforces the same branch namespace as the command line.
 
-Setup, init, broker control, tokens, GitHub login, saved agent logins and a host shell are deliberately absent:
+Setup, init, broker control, tokens, GitHub login, saved agent logins, book updates and locks, and a host shell are deliberately absent:
 tools do not give an agent those credential and host administration choices. `exec` runs only inside the sandbox.
 `down` always keeps takes; choosing `--discard-takes` remains a command-line decision.
 
@@ -1177,13 +1177,29 @@ another book's name, and two books with the same name are an error wherever they
   that commit and refuse content that does not match. `stage up` adds entries and never changes one, so a tag moved
   upstream does not change your book. A repository can commit `.scoring-stage/stage.lock` in the same format. For a
   reference it holds and yours does not, stage fetches the repository's commit without resolving the tag, checks it
-  and copies the entry to yours. Where the two disagree, the run stops and names both; remove the entry from your
-  lock to take the repository's.
+  and copies the entry to yours. Where the two disagree, the run stops, names both, and says which command settles
+  it.
 - **Cache.** Only the book's directory is kept, read-only, in `~/.scoring-stage/books/<fingerprint>/`; nothing else
   from the repository stays on your machine. A book with a symbolic link or a submodule, a file over 1 MiB, more
   than 8 MiB or more than 1,000 files is refused. With the book cached, `stage up` needs no network for it, and
   checks the cached files against the fingerprint each time. Reading your config, as `stage list`, `stage hall`
   and `stage mcp` do, never fetches.
+- **Commands.** `update` and `lock` run only in a terminal, and callers through `stage mcp` cannot use them.
+  - `stage book list` shows each locked book with its commit, whether it is cached and its short names, the
+    references in your config not fetched yet, and cached books your lock does not name.
+  - `stage book prune` lists, then removes, cached books your lock does not name and any partial fetch.
+  - `stage book update [NAME|REF]...` is the only command that changes an entry in your lock. With no names it
+    covers every reference in your config. It fetches the tag again, says plainly when the tag moved (with the old
+    and new commit), shows what changed in what the book does, and asks. Only then does it write the lock entry and
+    the approval together. If nothing changed it says so and asks nothing; a decline or a failure partway changes
+    nothing.
+  - `--to VERSION` moves one reference to another tag or commit, and changes that one quoted value in your
+    `config.toml`, leaving the rest of the file as it was. If the value is not there exactly once, for example
+    because only a repository names it, nothing changes and stage prints the reference to put in by hand.
+  - `--from REPO` takes the entry from that clone's `.scoring-stage/stage.lock`.
+  - `stage book lock REPO` makes a repository's `.scoring-stage/stage.lock` match yours for every reference its
+    config names, on disk in that clone; review it with `git diff` and commit it. `REPO` must be the top level of a
+    git checkout, and a reference you have not locked is fetched and approved first.
 - **Approval.** Every book fetched by reference is approved by content before it applies, whoever named it: your
   config, `--book`, or a repository naming a book you never installed. The prompt lists what the book does, as it
   does for a repository's books, and one approval covers that content everywhere. stage fetches every reference in
@@ -1318,8 +1334,9 @@ and what has not been run live yet.
   the result on a host the book controls. Approve a fetched book only after reading what it does, and turn on books
   from a directory only from protected repositories whose changes are reviewed; see the known gap under
   [Configuration and books](#configuration-and-books).
-- **Fetching books from github.com needs a live check.** Tests fetch books from local repositories standing in for
-  GitHub. Fetching a private books repository from github.com by tag and by full commit has not been checked live.
+- **Fetching a book by tag from github.com needs a live check.** Tests fetch books from local repositories standing
+  in for GitHub. Fetching from a private github.com repository by full commit was checked on 2026-11-22
+  ([VERIFICATION.md](VERIFICATION.md)); a tag, and a tag moved on github.com, have not been.
 - **Any kit can send any bound credential anywhere.** A kit that declares a credential for a service with a global
   sbx binding gets that secret injected on whatever hosts the kit names. That holds for published kits you add to
   your own config and for Docker's agent mixins that stage pins in its agent table, which are trusted by design.

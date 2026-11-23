@@ -21,6 +21,13 @@ by content, whoever named it. A book from a local directory keeps that earlier b
   and records it in the user's lock, which is the point of a team lock; where the two disagree, the run stops,
   names both and says how to settle it. `stage up` writes nothing inside a repository: it works from a scratch
   clone, and the user's working copy may be on another branch.
+- **Changing a lock.** `stage book update` is the only command that changes an entry in the user's lock. It fetches,
+  says plainly when a tag moved, shows what changed in terms of what the book does, asks, and only then writes the
+  lock entry, the approval and (for `--to`) the one quoted value in the user's config together; a decline or a
+  failure partway leaves all three as they were. `--from REPO` takes a repository's entry, which settles locks that
+  disagree one way. `stage book lock REPO` settles them the other way: it makes a clone's committed lock match the
+  user's for the references its config names, on disk, for the user to review and commit. stage never rewrites a
+  repository's config. Both run only in a terminal, and callers through `stage mcp` cannot use them.
 - **Fingerprint.** Computed from the fetched git tree: each path, whether it is executable, and its content,
   prefixed by a scheme name (`book-tree/1`). The same value is the lock's `sha256`, the cache key and the approval
   fingerprint. Symbolic links and submodules are refused rather than hashed. The scheme is recorded in each lock

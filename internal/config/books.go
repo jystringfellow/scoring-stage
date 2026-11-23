@@ -261,3 +261,26 @@ func repoKitsRefused(settings *Settings, repo *RepoConfig) error {
 	return errorf("%s: the repository's kits and books are refused by %s (repo_kits = %q); ask for books with --book",
 		repo.Path, settings.Managed.where(), RepoKitsDeny)
 }
+
+type BookReference struct {
+	Alias string
+	Ref   bookref.Ref
+}
+
+func (s *Settings) BookReferences() []BookReference {
+	var references []BookReference
+	for _, entry := range s.bookRefs {
+		references = append(references, BookReference{Alias: entry.alias, Ref: entry.ref})
+	}
+	return references
+}
+
+func DescribeBook(agents Agents, dir string) (string, []string, error) {
+	book, err := LoadBook(agents, dir)
+	if err != nil {
+		return "", nil, err
+	}
+	return book.Name, summarizeBook(agents, *book), nil
+}
+
+func TrustPath(home string) string { return trustFile(home) }

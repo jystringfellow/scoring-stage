@@ -174,7 +174,8 @@ func TestLocksThatDisagreeStopTheRunAndSayHowToSettleIt(t *testing.T) {
 	h.expect(1, "up", h.remote.Checkout, "fix")
 	h.expectStderr(filepath.Join(h.home, "stage.lock"))
 	h.expectStderr(".scoring-stage/stage.lock")
-	h.expectStderr("remove the entry from")
+	h.expectStderr("stage book update " + goBookRef + " --from <repo>")
+	h.expectStderr("stage book lock <repo>")
 	if _, err := os.Stat(filepath.Join(h.task("fix"), "sbxenv.yaml")); err == nil {
 		t.Fatal("wrote an env file while the locks disagreed")
 	}

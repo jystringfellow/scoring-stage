@@ -900,3 +900,29 @@ func TestBindingDomainsWithGlobCharactersOtherThanAStarAreTreatedAsReachingGitHu
 		}
 	}
 }
+
+func TestARepositorysConfigAndLockAreNeverReadThroughASymbolicLink(t *testing.T) {
+	outside := t.TempDir()
+	testutil.WriteFile(t, filepath.Join(outside, "config.toml"), "books = [\"x\"]\n")
+	testutil.WriteFile(t, filepath.Join(outside, "stage.lock"), "")
+	for name, plant := range map[string]func(repo string){
+		"config": func(repo string) {
+			os.MkdirAll(filepath.Join(repo, ".scoring-stage"), 0o755)
+			os.Symlink(filepath.Join(outside, "config.toml"), filepath.Join(repo, ".scoring-stage", "config.toml"))
+		},
+		"lock": func(repo string) {
+			testutil.WriteFile(t, filepath.Join(repo, ".scoring-stage", "config.toml"), "")
+			os.Symlink(filepath.Join(outside, "stage.lock"), filepath.Join(repo, ".scoring-stage", "stage.lock"))
+		},
+		"directory": func(repo string) {
+			os.Symlink(outside, filepath.Join(repo, ".scoring-stage"))
+		},
+	} {
+		repo := t.TempDir()
+		plant(repo)
+		_, err := LoadRepoConfig(repo)
+		if err == nil || !strings.Contains(err.Error(), "symbolic link") {
+			t.Errorf("%s: got %v, want a link refused", name, err)
+		}
+	}
+}

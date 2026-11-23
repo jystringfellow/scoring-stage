@@ -54,8 +54,8 @@ func (l Library) Open(ref Ref, team *Lock) (Book, error) {
 		theirs, haveTheirs = team.Find(key)
 	}
 	if haveOwn && haveTheirs && own != theirs {
-		return Book{}, errorf("%s is locked to %s in %s and to %s in %s; to use the repository's, remove the entry from %s",
-			key, own.describe(), mine.Path, theirs.describe(), team.Path, mine.Path)
+		return Book{}, errorf("%s is locked to %s in %s and to %s in %s; to use the repository's, run `stage book update %s --from <repo>`; to give the repository yours, run `stage book lock <repo>` and commit it",
+			key, own.describe(), mine.Path, theirs.describe(), team.Path, key)
 	}
 	entry, locked := own, haveOwn
 	if !haveOwn && haveTheirs {
@@ -118,6 +118,80 @@ func (l Library) Cached(ref Ref) (Book, bool) {
 		return Book{}, false
 	}
 	return Book{Ref: ref, Dir: filepath.Join(l.CacheRoot(), entry.SHA256), Commit: entry.Commit, Fingerprint: entry.SHA256}, true
+}
+
+type Fetched struct {
+	Ref         Ref
+	Commit      string
+	Fingerprint string
+	files       []file
+}
+
+func (f Fetched) Entry() Entry {
+	return Entry{Ref: f.Ref.String(), Commit: f.Commit, SHA256: f.Fingerprint, Scheme: Scheme}
+}
+
+func (l Library) Fetch(ref Ref) (Fetched, error) {
+	files, commit, err := fetchVersion(ref)
+	if err != nil {
+		return Fetched{}, err
+	}
+	return Fetched{Ref: ref, Commit: commit, Fingerprint: fingerprint(files), files: files}, nil
+}
+
+func (l Library) FetchAt(ref Ref, commit string) (Fetched, error) {
+	files, err := fetchCommit(ref, commit)
+	if err != nil {
+		return Fetched{}, err
+	}
+	return Fetched{Ref: ref, Commit: commit, Fingerprint: fingerprint(files), files: files}, nil
+}
+
+func (l Library) Keep(fetched Fetched) (Book, error) {
+	if err := l.store(fetched.Ref, fetched.Fingerprint, fetched.files); err != nil {
+		return Book{}, err
+	}
+	return Book{Ref: fetched.Ref, Dir: filepath.Join(l.CacheRoot(), fetched.Fingerprint), Commit: fetched.Commit, Fingerprint: fetched.Fingerprint}, nil
+}
+
+func (l Library) Unlocked() ([]string, error) {
+	mine, err := ReadLock(l.LockPath())
+	if err != nil {
+		return nil, err
+	}
+	named := map[string]bool{}
+	for _, entry := range mine.Entries {
+		named[entry.SHA256] = true
+	}
+	entries, err := os.ReadDir(l.CacheRoot())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var unlocked []string
+	for _, entry := range entries {
+		if !named[entry.Name()] {
+			unlocked = append(unlocked, filepath.Join(l.CacheRoot(), entry.Name()))
+		}
+	}
+	return unlocked, nil
+}
+
+func (l Library) Remove(path string) error {
+	if filepath.Dir(path) != l.CacheRoot() {
+		return errorf("%s is not in the book cache %s", path, l.CacheRoot())
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return os.Remove(path)
+	}
+	unseal(path)
+	return os.RemoveAll(path)
 }
 
 func fingerprint(files []file) string {
@@ -214,6 +288,7 @@ func fetchInto(dir string, ref Ref, commit string) ([]file, error) {
 	prefix := ref.Path + "/"
 	var files []file
 	total := 0
+	spelled := map[string]string{}
 	for _, record := range bytes.Split(listing, []byte{0}) {
 		if len(record) == 0 {
 			continue
@@ -236,6 +311,15 @@ func fetchInto(dir string, ref Ref, commit string) ([]file, error) {
 		}
 		if err := checkRelative(relative); err != nil {
 			return nil, errorf("%s: %s %v", ref, shown, err)
+		}
+		parts := strings.Split(relative, "/")
+		for i := range parts {
+			spelling := strings.Join(parts[:i+1], "/")
+			lower := strings.ToLower(spelling)
+			if other, seen := spelled[lower]; seen && other != spelling {
+				return nil, errorf("%s: %s and %s differ only by case, which some filesystems cannot hold apart", ref, strconv.QuoteToASCII(other), strconv.QuoteToASCII(spelling))
+			}
+			spelled[lower] = spelling
 		}
 		size, err := strconv.Atoi(fields[3])
 		if err != nil {
@@ -346,6 +430,13 @@ func (l Library) store(ref Ref, sum string, files []file) error {
 		if err := os.WriteFile(path, f.content, mode); err != nil {
 			return err
 		}
+	}
+	written, err := readTree(building)
+	if err != nil {
+		return err
+	}
+	if fingerprint(written) != sum {
+		return errorf("%s: the files written to %s do not match what was fetched; nothing was changed", ref, building)
 	}
 	if err := sealBelow(building); err != nil {
 		return err

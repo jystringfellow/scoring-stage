@@ -274,7 +274,7 @@ func TestLocksThatDisagreeAreRefusedNamingBothAndHowToSettleIt(t *testing.T) {
 	if err == nil {
 		t.Fatal("disagreeing locks were accepted")
 	}
-	for _, want := range []string{filepath.Join(home, "stage.lock"), filepath.Join(teamHome, "stage.lock"), ref.String(), "remove the entry from " + filepath.Join(home, "stage.lock")} {
+	for _, want := range []string{filepath.Join(home, "stage.lock"), filepath.Join(teamHome, "stage.lock"), ref.String(), "stage book update " + ref.String() + " --from"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not name %q", err, want)
 		}
@@ -450,4 +450,33 @@ func stageHome(t *testing.T) string {
 	home := t.TempDir()
 	t.Cleanup(func() { makeWritable(t, home) })
 	return home
+}
+
+func TestALockThatIsNotARegularFileIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	target := testutil.WriteFile(t, filepath.Join(dir, "elsewhere"), "")
+	os.Symlink(target, filepath.Join(dir, "stage.lock"))
+	if _, err := ReadLock(filepath.Join(dir, "stage.lock")); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestPathsThatDifferOnlyByCaseAreRefusedBeforeAnythingIsCached(t *testing.T) {
+	repo := newBooksRepo(t)
+	repo.commit(goBook("one"))
+	for _, path := range []string{"backend/go/kits/A.yaml", "backend/go/kits/a.yaml", "backend/go/Bin/x", "backend/go/bin/y"} {
+		blob := testutil.RunGit(t, repo.work, "hash-object", "-w", "--stdin")
+		testutil.RunGit(t, repo.work, "update-index", "--add", "--cacheinfo", "100644,"+blob+","+path)
+	}
+	testutil.RunGit(t, repo.work, "commit", "-q", "-m", "cases")
+	testutil.RunGit(t, repo.work, "push", "-q", repo.bare, "main")
+	repo.tag("cases")
+	home := stageHome(t)
+	_, err := Library{Home: home}.Open(mustParse(t, "github.com/example-org/books//backend/go@cases"), nil)
+	if err == nil || !strings.Contains(err.Error(), "differ only by case") {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "books")); err == nil {
+		t.Error("cached a book whose paths collide")
+	}
 }

@@ -38,10 +38,17 @@ var (
 
 func ReadLock(path string) (*Lock, error) {
 	lock := &Lock{Path: path}
-	content, err := os.ReadFile(path)
+	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return lock, nil
 	}
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errorf("%s is not a regular file; a lock cannot be a link or a directory", path)
+	}
+	content, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -130,6 +137,29 @@ func (l *Lock) render() []byte {
 }
 
 func addToLock(path string, entry Entry) error {
+	return UpdateLock(path, func(lock *Lock) error {
+		if existing, found := lock.Find(entry.Ref); found {
+			if existing != entry {
+				return errorf("%s: %s was locked to %s while this run fetched %s; run again", path, entry.Ref, existing.describe(), entry.describe())
+			}
+			return nil
+		}
+		lock.Entries = append(lock.Entries, entry)
+		return nil
+	})
+}
+
+func (l *Lock) Set(entry Entry) {
+	for i := range l.Entries {
+		if l.Entries[i].Ref == entry.Ref {
+			l.Entries[i] = entry
+			return
+		}
+	}
+	l.Entries = append(l.Entries, entry)
+}
+
+func UpdateLock(path string, change func(*Lock) error) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -146,13 +176,17 @@ func addToLock(path string, entry Entry) error {
 	if err != nil {
 		return err
 	}
-	if existing, found := lock.Find(entry.Ref); found {
-		if existing != entry {
-			return errorf("%s: %s was locked to %s while this run fetched %s; run again", path, entry.Ref, existing.describe(), entry.describe())
-		}
+	before := string(lock.render())
+	if err := change(lock); err != nil {
+		return err
+	}
+	if string(lock.render()) == before {
 		return nil
 	}
-	lock.Entries = append(lock.Entries, entry)
+	return WriteLock(path, lock)
+}
+
+func WriteLock(path string, lock *Lock) error {
 	temporary, err := os.CreateTemp(filepath.Dir(path), ".stage.lock-*")
 	if err != nil {
 		return err
