@@ -159,6 +159,16 @@ func (l *Lock) Set(entry Entry) {
 	l.Entries = append(l.Entries, entry)
 }
 
+func (l *Lock) Remove(ref string) {
+	var kept []Entry
+	for _, entry := range l.Entries {
+		if entry.Ref != ref {
+			kept = append(kept, entry)
+		}
+	}
+	l.Entries = kept
+}
+
 func UpdateLock(path string, change func(*Lock) error) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err

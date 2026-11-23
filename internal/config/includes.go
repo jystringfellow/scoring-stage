@@ -159,8 +159,19 @@ type IncludedBook struct {
 	Details     []string
 }
 
-func (s *Settings) FetchWithIncludes(refs []bookref.Ref) ([]IncludedBook, error) {
-	loader := bookLoader{settings: s, library: bookref.Library{Home: s.Home}}
+func (s *Settings) FetchWithIncludes(refs []bookref.Ref, team *bookref.Lock) ([]IncludedBook, error) {
+	library := bookref.Library{Home: s.Home}
+	mine, err := bookref.ReadLock(library.LockPath())
+	if err != nil {
+		return nil, err
+	}
+	onlyTheirs := &bookref.Lock{Path: team.Path}
+	for _, entry := range team.Entries {
+		if _, yours := mine.Find(entry.Ref); !yours {
+			onlyTheirs.Entries = append(onlyTheirs.Entries, entry)
+		}
+	}
+	loader := bookLoader{settings: s, library: library, team: onlyTheirs}
 	var roots []Book
 	for _, ref := range refs {
 		book, err := loader.open(ref, "")

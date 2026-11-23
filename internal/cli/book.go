@@ -255,6 +255,10 @@ func (a *App) updateBook(settings *config.Settings, target bookTarget, to string
 		if !found {
 			return errorf("%s has no entry for %s; nothing was changed", team.Path, key)
 		}
+		if entry.Scheme != bookref.Scheme {
+			return errorf("%s is locked in %s with fingerprint scheme %s, which this stage does not read (it reads %s); nothing was changed",
+				key, team.Path, config.Printable(entry.Scheme), bookref.Scheme)
+		}
 		if fetched, err = library.FetchAt(target.ref, entry.Commit); err != nil {
 			return err
 		}
@@ -278,6 +282,9 @@ func (a *App) updateBook(settings *config.Settings, target bookTarget, to string
 		a.say("%s: tag %s moved: it was commit %s and is now commit %s", key, target.ref.Version, short(current.Commit), short(fetched.Commit))
 	case to != "":
 		a.say("%s moves to %s at commit %s", key, nextKey, short(fetched.Commit))
+		if existing, found := mine.Find(nextKey); found && existing.Commit != fetched.Commit {
+			a.say("%s: tag %s moved: it was commit %s and is now commit %s", nextKey, to, short(existing.Commit), short(fetched.Commit))
+		}
 	}
 
 	book, err := library.Keep(fetched)
@@ -325,6 +332,9 @@ func (a *App) updateBook(settings *config.Settings, target bookTarget, to string
 		fileWrite{library.LockPath(), func() error {
 			return bookref.UpdateLock(library.LockPath(), func(lock *bookref.Lock) error {
 				lock.Set(fetched.Entry())
+				if to != "" {
+					lock.Remove(key)
+				}
 				return nil
 			})
 		}},
@@ -422,7 +432,7 @@ func (a *App) bookLock(args []string, home string) error {
 	if err != nil {
 		return err
 	}
-	books, err := settings.FetchWithIncludes(repo.BookReferences())
+	books, err := settings.FetchWithIncludes(repo.BookReferences(), repo.Lock())
 	if err != nil {
 		return err
 	}

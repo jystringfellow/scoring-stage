@@ -1203,12 +1203,14 @@ another book's name, and two books with the same name are an error wherever they
     the approval together. If nothing changed it says so and asks nothing; a decline or a failure partway changes
     nothing.
   - `--to VERSION` moves one reference to another tag or commit, and changes that one quoted value in your
-    `config.toml`, leaving the rest of the file as it was. If the value is not there exactly once, for example
+    `config.toml`, leaving the rest of the file as it was, and drops the old reference's lock entry in the same
+    write. If the value is not there exactly once, for example
     because only a repository names it, nothing changes and stage prints the reference to put in by hand.
   - `--from REPO` takes the entry from that clone's `.scoring-stage/stage.lock`.
   - `stage book lock REPO` makes a repository's `.scoring-stage/stage.lock` match yours for every reference its
     config names, on disk in that clone; review it with `git diff` and commit it. `REPO` must be the top level of a
-    git checkout, and a reference you have not locked is fetched and approved first.
+    git checkout. An entry only the repository holds is kept and copied to your lock; an entry is replaced only
+    when yours exists and differs. A reference neither lock holds is fetched and approved first.
 - **Approval.** Every book fetched by reference is approved by content before it applies, whoever named it: your
   config, `--book`, or a repository naming a book you never installed. The prompt lists what the book does, as it
   does for a repository's books, and one approval covers that content everywhere. stage fetches every reference in
