@@ -321,6 +321,9 @@ func summarizeBook(agents Agents, book Book) []string {
 		details = append(details, fmt.Sprintf("credential %s sent to %s", service, strings.Join(domains, ", ")))
 	}
 	details = append(details, takeDetails(book.takes)...)
+	for _, entry := range book.includes {
+		details = append(details, "includes book "+entry+" (asked about on its own)")
+	}
 	for _, entry := range book.kits {
 		kit, err := parseKit(entry, book.Path, "book "+book.Name)
 		if err != nil {

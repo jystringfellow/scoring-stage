@@ -15,6 +15,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/jystringfellow/scoring-stage/internal/bookref"
 	"github.com/jystringfellow/scoring-stage/internal/kits"
 )
 
@@ -38,7 +39,7 @@ func domains(kind string, hosts ...string) map[string]any {
 
 var (
 	userKeys      = []string{"books", "base", "agents", "agent", "copy_logins", "github", "kits", "aws", "secrets", "bindings", "ship", "takes", "gear", "hall"}
-	bookKeys      = []string{"name", "description", "base", "agents", "kits", "aws", "secrets", "bindings", "repos", "takes"}
+	bookKeys      = []string{"name", "description", "base", "agents", "kits", "aws", "secrets", "bindings", "repos", "takes", "includes"}
 	repoMatchKeys = []string{"match", "agents", "kits", "aws"}
 	awsKeys       = []string{"profiles", "region", "default_profile"}
 	shipKeys      = []string{"branch_prefix", "warn_missing_trailer", "pr_body", "pr_footer", "protected_paths"}
@@ -113,6 +114,9 @@ type Book struct {
 	Ref         string
 	Alias       string
 	fingerprint string
+	commit      string
+	origin      bookref.Ref
+	includes    []string
 	agents      []any
 	kits        []any
 	aws         aws
@@ -428,6 +432,9 @@ func LoadBook(agents Agents, path string) (*Book, error) {
 		return nil, err
 	}
 	if book.bindings, err = optionalTable(data, "bindings", manifest); err != nil {
+		return nil, err
+	}
+	if book.includes, err = decodeIncludes(data, manifest); err != nil {
 		return nil, err
 	}
 	if book.takes, err = decodeTakes(data, manifest); err != nil {

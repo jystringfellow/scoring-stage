@@ -951,6 +951,7 @@ A book is a directory with a `book.toml`:
 name = "backend"
 agents = ["claude"]                                       # agents this book's work needs
 kits = ["./kits/go"]                                      # local kits only, starting with ./ or ../
+includes = ["../observability"]                           # other books that apply whenever this one does; see Books by reference
 
 [aws]
 profiles = ["dev", "staging"]
@@ -1184,6 +1185,14 @@ another book's name, and two books with the same name are an error wherever they
   than 8 MiB or more than 1,000 files is refused. With the book cached, `stage up` needs no network for it, and
   checks the cached files against the fingerprint each time. Reading your config, as `stage list`, `stage hall`
   and `stage mcp` do, never fetches.
+- **Includes.** A book's `includes` lists other books that apply whenever it does: references, or `./` and `../`
+  paths. In a fetched book a relative path names a book in the same repository at the same commit, and is locked
+  as that commit (`github.com/example-org/books//backend/observability@<commit>`); it cannot leave the repository.
+  In a book from a directory it names a directory. Each included book is approved on its own, and counts as the
+  repository's when only a repository's book reaches it. Includes that form a cycle are an error. A book reached
+  twice at one version applies once; at two versions it is an error naming both include paths. The usual rule
+  holds across includes: two books that set the same secret, binding, region or default profile differently are
+  an error. `stage book lock` also locks what the repository's books include.
 - **Commands.** `update` and `lock` run only in a terminal, and callers through `stage mcp` cannot use them.
   - `stage book list` shows each locked book with its commit, whether it is cached and its short names, the
     references in your config not fetched yet, and cached books your lock does not name.

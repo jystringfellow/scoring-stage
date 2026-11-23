@@ -50,6 +50,11 @@ by content, whoever named it. A book from a local directory keeps that earlier b
   shows what it does and asks, so cloning a repository never runs its book's host commands unreviewed. Without a
   terminal the run stops. `stage mcp` callers and anything inside a sandbox still cannot record an approval, and
   managed settings' `repo_kits = "deny"` refuses references a repository names.
+- **Includes.** A book's `includes` apply whenever it does. A relative include in a fetched book is a book in the
+  same repository at the same commit, named and locked by that commit, so a book and what it includes move together;
+  it cannot leave the repository. Cycles are an error. A book reached twice at one version applies once; at two
+  versions it is an error naming both include paths, rather than stage choosing one. Each included book is approved
+  on its own fingerprint, and the existing conflict rule holds across includes.
 - **Trust levels.** Each book is `local` (a directory) or `pinned` (fetched, locked, approved), and both always
   ask. `trusted` (fetched, locked and signed by a publisher that managed settings name) is reserved: it may later
   let a book apply without a prompt, or let managed settings name books every sandbox gets. Neither may be built
