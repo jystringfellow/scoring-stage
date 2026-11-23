@@ -8,6 +8,11 @@ import (
 	"github.com/jystringfellow/scoring-stage/internal/bookref"
 )
 
+const (
+	MaxIncludeDepth  = 8
+	MaxIncludedBooks = 50
+)
+
 func decodeIncludes(data map[string]any, manifest string) ([]string, error) {
 	entries, err := optionalStrings(data, "includes", manifest)
 	if err != nil {
@@ -105,6 +110,13 @@ func expandIncludes(roots []Book, repoOnlyRoot func(Book) bool, include func(Boo
 		active = append(active, book)
 		onPath[id] = true
 		for _, entry := range book.includes {
+			next := strings.Join(append(chain, entry), " → ")
+			if len(chain) >= MaxIncludeDepth {
+				return errorf("an include chain is longer than %d books: %s; nothing was fetched past it", MaxIncludeDepth, next)
+			}
+			if len(active) >= MaxIncludedBooks {
+				return errorf("includes reach more than %d books: %s; nothing was fetched past it", MaxIncludedBooks, next)
+			}
 			child, err := include(book, entry)
 			if err != nil {
 				return err

@@ -1192,7 +1192,9 @@ another book's name, and two books with the same name are an error wherever they
   repository's when only a repository's book reaches it. Includes that form a cycle are an error. A book reached
   twice at one version applies once; at two versions it is an error naming both include paths. The usual rule
   holds across includes: two books that set the same secret, binding, region or default profile differently are
-  an error. `stage book lock` also locks what the repository's books include.
+  an error. An include chain is at most 8 books long, and includes reach at most 50 books in one run; past either
+  limit stage stops before fetching more and names the chain. `stage book lock` also locks what the repository's
+  books include.
 - **Commands.** `update` and `lock` run only in a terminal, and callers through `stage mcp` cannot use them.
   - `stage book list` shows each locked book with its commit, whether it is cached and its short names, the
     references in your config not fetched yet, and cached books your lock does not name.

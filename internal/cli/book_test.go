@@ -301,3 +301,19 @@ func TestBookUpdateFromNamesAnUnknownFingerprintScheme(t *testing.T) {
 		t.Errorf("reported as a mismatch: %s", h.stderr.String())
 	}
 }
+
+func TestBookUpdateToTheVersionItAlreadyHasIsAPlainUpdate(t *testing.T) {
+	h := setup(t)
+	books := h.withGoBook(t)
+	h.answerAtATerminal("")
+	h.expect(0, "book", "update", "go", "--to", "v1")
+	h.expectStdout("unchanged")
+
+	moved := books.publish("v1", bookWithToken)
+	h.answerAtATerminal("y\n")
+	h.expect(0, "book", "update", "go", "--to", "v1")
+	h.expectStdout("tag v1 moved")
+	if got := h.lockedCommit(filepath.Join(h.home, "stage.lock"), goBookRef); got != moved {
+		t.Errorf("lock holds %q, want the entry kept at %s", got, moved)
+	}
+}

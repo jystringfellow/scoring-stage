@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/jystringfellow/scoring-stage/internal/config"
 	"github.com/jystringfellow/scoring-stage/internal/testutil"
 )
 
@@ -171,5 +173,42 @@ func TestIncludedBooksThatSetTheSameSecretDifferentlyAreAnError(t *testing.T) {
 	h.expectStderr("feed")
 	if h.anyCall("env create") {
 		t.Fatal("created a sandbox with conflicting secrets")
+	}
+}
+
+func TestAnIncludeChainLongerThanTheLimitIsRefusedNamingIt(t *testing.T) {
+	h := setup(t)
+	files := map[string]string{}
+	for i := 0; i <= config.MaxIncludeDepth; i++ {
+		includes := ""
+		if i < config.MaxIncludeDepth {
+			includes = fmt.Sprintf(`"../b%d"`, i+1)
+		}
+		files[fmt.Sprintf("chain/b%d/book.toml", i)] = bookToml(fmt.Sprintf("b%d", i), includes, "")
+	}
+	h.booksRemote().publishFiles("v1", files)
+	h.answerAtATerminal("y\n")
+	h.expect(1, "up", h.remote.Checkout, "fix", "--book", "github.com/example-org/books//chain/b0@v1")
+	h.expectStderr(fmt.Sprintf("longer than %d books", config.MaxIncludeDepth))
+	h.expectStderr("github.com/example-org/books//chain/b0@v1 → ")
+}
+
+func TestASandboxReachesAtMostTheLimitOfBooksThroughIncludes(t *testing.T) {
+	h := setup(t)
+	files := map[string]string{}
+	var includes []string
+	for i := 0; i < config.MaxIncludedBooks; i++ {
+		includes = append(includes, fmt.Sprintf(`"../leaf%d"`, i))
+		files[fmt.Sprintf("wide/leaf%d/book.toml", i)] = bookToml(fmt.Sprintf("leaf%d", i), "", "")
+	}
+	files["wide/root/book.toml"] = bookToml("root", strings.Join(includes, ", "), "")
+	h.booksRemote().publishFiles("v1", files)
+	h.answerAtATerminal("y\n")
+	h.expect(1, "up", h.remote.Checkout, "fix", "--book", "github.com/example-org/books//wide/root@v1")
+	h.expectStderr(fmt.Sprintf("more than %d books", config.MaxIncludedBooks))
+	h.expectStderr("github.com/example-org/books//wide/root@v1 → ")
+	lock := testutil.ReadFile(t, filepath.Join(h.home, "stage.lock"))
+	if got := strings.Count(lock, "[[book]]"); got > config.MaxIncludedBooks {
+		t.Errorf("fetched %d books, more than the limit", got)
 	}
 }
