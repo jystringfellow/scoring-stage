@@ -255,6 +255,10 @@ func (a *App) updateBook(settings *config.Settings, target bookTarget, to string
 		if !found {
 			return errorf("%s has no entry for %s; nothing was changed", team.Path, key)
 		}
+		if entry.Scheme != bookref.Scheme {
+			return errorf("%s is locked in %s with fingerprint scheme %s, which this stage does not read (it reads %s); nothing was changed",
+				key, team.Path, config.Printable(entry.Scheme), bookref.Scheme)
+		}
 		if fetched, err = library.FetchAt(target.ref, entry.Commit); err != nil {
 			return err
 		}
@@ -278,6 +282,9 @@ func (a *App) updateBook(settings *config.Settings, target bookTarget, to string
 		a.say("%s: tag %s moved: it was commit %s and is now commit %s", key, target.ref.Version, short(current.Commit), short(fetched.Commit))
 	case to != "":
 		a.say("%s moves to %s at commit %s", key, nextKey, short(fetched.Commit))
+		if existing, found := mine.Find(nextKey); found && existing.Commit != fetched.Commit {
+			a.say("%s: tag %s moved: it was commit %s and is now commit %s", nextKey, to, short(existing.Commit), short(fetched.Commit))
+		}
 	}
 
 	book, err := library.Keep(fetched)
@@ -325,6 +332,9 @@ func (a *App) updateBook(settings *config.Settings, target bookTarget, to string
 		fileWrite{library.LockPath(), func() error {
 			return bookref.UpdateLock(library.LockPath(), func(lock *bookref.Lock) error {
 				lock.Set(fetched.Entry())
+				if to != "" {
+					lock.Remove(key)
+				}
 				return nil
 			})
 		}},
@@ -422,26 +432,32 @@ func (a *App) bookLock(args []string, home string) error {
 	if err != nil {
 		return err
 	}
-	library := bookref.Library{Home: settings.Home}
-	team := repo.Lock()
-	changed := false
-	for _, ref := range repo.BookReferences() {
-		key := ref.String()
-		mine, err := bookref.ReadLock(library.LockPath())
-		if err != nil {
+	books, err := settings.FetchWithIncludes(repo.BookReferences(), repo.Lock())
+	if err != nil {
+		return err
+	}
+	var approvals []config.Approval
+	for _, book := range books {
+		approvals = append(approvals, config.Approval{Label: "book " + book.Name + " (" + book.Ref.String() + ")", Fingerprint: book.Fingerprint, Details: book.Details})
+	}
+	missing, err := config.Unapproved(settings.Home, approvals)
+	if err != nil {
+		return err
+	}
+	if len(missing) > 0 {
+		printApprovals(a.Stderr, missing)
+		if !a.confirm("Approve these books, and lock them for the repository?") {
+			return errorf("not approved; the repository's lock was not written")
+		}
+		if err := config.Approve(settings.Home, missing); err != nil {
 			return err
 		}
-		entry, locked := mine.Find(key)
-		if !locked {
-			book, err := library.Open(ref, nil)
-			if err != nil {
-				return err
-			}
-			if err := a.approveFetchedBook(settings, book); err != nil {
-				return err
-			}
-			entry = bookref.Entry{Ref: key, Commit: book.Commit, SHA256: book.Fingerprint, Scheme: bookref.Scheme}
-		}
+	}
+	team := repo.Lock()
+	changed := false
+	for _, book := range books {
+		key := book.Ref.String()
+		entry := bookref.Entry{Ref: key, Commit: book.Commit, SHA256: book.Fingerprint, Scheme: bookref.Scheme}
 		old, had := team.Find(key)
 		switch {
 		case !had:
@@ -466,21 +482,4 @@ func (a *App) bookLock(args []string, home string) error {
 	}
 	a.say("wrote %s; review it with git diff and commit it", config.Printable(team.Path))
 	return nil
-}
-
-func (a *App) approveFetchedBook(settings *config.Settings, book bookref.Book) error {
-	name, details, err := config.DescribeBook(settings.Agents, book.Dir)
-	if err != nil {
-		return err
-	}
-	approval := config.Approval{Label: "book " + name + " (" + book.Ref.String() + ")", Fingerprint: book.Fingerprint, Details: details}
-	missing, err := config.Unapproved(settings.Home, []config.Approval{approval})
-	if err != nil || len(missing) == 0 {
-		return err
-	}
-	printApprovals(a.Stderr, missing)
-	if !a.confirm("Approve this book, and lock it for the repository?") {
-		return errorf("not approved; the repository's lock was not written")
-	}
-	return config.Approve(settings.Home, missing)
 }

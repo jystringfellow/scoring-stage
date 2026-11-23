@@ -926,3 +926,18 @@ func TestARepositorysConfigAndLockAreNeverReadThroughASymbolicLink(t *testing.T)
 		}
 	}
 }
+
+func TestABooksIncludesAreReferencesOrRelativePaths(t *testing.T) {
+	for entry, want := range map[string]string{
+		"/srv/books/go": "must be a book reference or a ./ or ../ path",
+		"~/books/go":    "must be a book reference or a ./ or ../ path",
+		"go":            "must be a book reference or a ./ or ../ path",
+		"github.com/example-org/books//go@abc1234": "full 40-character commit",
+	} {
+		_, err := LoadBook(BuiltinAgents(), book(t, t.TempDir(), "org", "includes = [\""+entry+"\"]\n"))
+		expectError(t, err, want)
+	}
+	if _, err := LoadBook(BuiltinAgents(), book(t, t.TempDir(), "org", "includes = [\"../common\", \"github.com/example-org/books//go@v1\"]\n")); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -118,19 +118,8 @@ func activeBooks(settings *Settings, selection Selection) (active, repoOnly []Bo
 	if selection.Repo != nil {
 		team = selection.Repo.lock
 	}
-	library := bookref.Library{Home: settings.Home}
-	open := func(ref bookref.Ref, alias string) (Book, error) {
-		fetched, err := library.Open(ref, team)
-		if err != nil {
-			return Book{}, err
-		}
-		book, err := LoadBook(settings.Agents, fetched.Dir)
-		if err != nil {
-			return Book{}, errorf("%s: %v", ref, err)
-		}
-		book.Ref, book.Alias, book.fingerprint = ref.String(), alias, fetched.Fingerprint
-		return *book, nil
-	}
+	loader := bookLoader{settings: settings, library: bookref.Library{Home: settings.Home}, team: team}
+	open := loader.open
 	var available []Book
 	for _, book := range settings.Books {
 		if book.Ref == "" {
@@ -225,6 +214,7 @@ func activeBooks(settings *Settings, selection Selection) (active, repoOnly []Bo
 		}
 	}
 
+	var roots []Book
 	seen := map[string]Book{}
 	add := func(book Book) error {
 		if other, taken := seen[book.Name]; taken {
@@ -234,7 +224,7 @@ func activeBooks(settings *Settings, selection Selection) (active, repoOnly []Bo
 			return errorf("books %s and %s are both named %s", other.place(), book.place(), book.Name)
 		}
 		seen[book.Name] = book
-		active = append(active, book)
+		roots = append(roots, book)
 		return nil
 	}
 	for _, book := range available {
@@ -249,12 +239,9 @@ func activeBooks(settings *Settings, selection Selection) (active, repoOnly []Bo
 			return nil, nil, err
 		}
 	}
-	for _, book := range active {
-		if byRepo[book.Path] && !byCommandLine[book.Path] && !byRule[book.Path] {
-			repoOnly = append(repoOnly, book)
-		}
-	}
-	return active, repoOnly, nil
+	return expandIncludes(roots, func(book Book) bool {
+		return byRepo[book.Path] && !byCommandLine[book.Path] && !byRule[book.Path]
+	}, loader.include)
 }
 
 func repoKitsRefused(settings *Settings, repo *RepoConfig) error {

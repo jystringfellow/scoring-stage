@@ -245,3 +245,59 @@ func TestBookLockChangesAnEntryThatDiffersFromYours(t *testing.T) {
 		t.Errorf("repository lock not made to match yours:\n%s", written)
 	}
 }
+
+func TestBookLockKeepsAnEntryOnlyTheRepositoryHolds(t *testing.T) {
+	h := setup(t)
+	books := h.booksRemote()
+	pinned := books.publish("v1", bookWithFeed)
+	h.answerAtATerminal("y\n")
+	h.expect(0, "up", h.remote.Checkout, "first", "--book", goBookRef)
+	team := testutil.ReadFile(t, filepath.Join(h.home, "stage.lock"))
+	os.Remove(filepath.Join(h.home, "stage.lock"))
+	books.publish("v1", bookWithToken)
+	dir := filepath.Join(h.remote.Checkout, ".scoring-stage")
+	testutil.WriteFile(t, filepath.Join(dir, "config.toml"), "books = [\""+goBookRef+"\"]\n")
+	testutil.WriteFile(t, filepath.Join(dir, "stage.lock"), team)
+
+	h.expect(0, "book", "lock", h.remote.Checkout)
+	h.expectStdout("unchanged")
+	if got := testutil.ReadFile(t, filepath.Join(dir, "stage.lock")); got != team {
+		t.Errorf("the repository's pin was replaced:\n%s", got)
+	}
+	if got := h.lockedCommit(filepath.Join(h.home, "stage.lock"), goBookRef); got != pinned {
+		t.Errorf("your lock holds %q, want the repository's %s", got, pinned)
+	}
+}
+
+func TestBookUpdateToDropsTheOldEntryAndSaysWhenTheNewTagMoved(t *testing.T) {
+	h := setup(t)
+	books := h.withGoBook(t)
+	newRef := strings.Replace(goBookRef, "@v1", "@v2", 1)
+	first := books.publish("v2", bookWithFeed)
+	h.answerAtATerminal("y\n")
+	h.expect(0, "up", h.remote.Checkout, "second", "--book", newRef)
+	moved := books.publish("v2", bookWithToken)
+
+	h.expect(0, "book", "update", "go", "--to", "v2")
+	h.expectStdout("tag v2 moved", first[:12], moved[:12])
+	lock := testutil.ReadFile(t, filepath.Join(h.home, "stage.lock"))
+	if strings.Contains(lock, "ref = \""+goBookRef+"\"") {
+		t.Errorf("the old reference is still locked:\n%s", lock)
+	}
+	if got := h.lockedCommit(filepath.Join(h.home, "stage.lock"), newRef); got != moved {
+		t.Errorf("lock holds %q for %s, want %s", got, newRef, moved)
+	}
+}
+
+func TestBookUpdateFromNamesAnUnknownFingerprintScheme(t *testing.T) {
+	h := setup(t)
+	h.withGoBook(t)
+	team := strings.Replace(testutil.ReadFile(t, filepath.Join(h.home, "stage.lock")), "book-tree/1", "book-tree/9", 1)
+	testutil.WriteFile(t, filepath.Join(h.remote.Checkout, ".scoring-stage", "stage.lock"), team)
+	h.answerAtATerminal("y\n")
+	h.expect(1, "book", "update", goBookRef, "--from", h.remote.Checkout)
+	h.expectStderr("book-tree/9")
+	if strings.Contains(h.stderr.String(), "does not match") {
+		t.Errorf("reported as a mismatch: %s", h.stderr.String())
+	}
+}
