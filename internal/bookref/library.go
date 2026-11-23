@@ -62,7 +62,7 @@ func (l Library) Open(ref Ref, team *Lock) (Book, error) {
 		entry, locked = theirs, true
 	}
 	if !locked {
-		files, commit, err := fetchVersion(ref)
+		files, _, commit, err := fetchVersion(ref)
 		if err != nil {
 			return Book{}, err
 		}
@@ -122,6 +122,7 @@ func (l Library) Cached(ref Ref) (Book, bool) {
 
 type Fetched struct {
 	Ref         Ref
+	Tag         string
 	Commit      string
 	Fingerprint string
 	files       []file
@@ -132,11 +133,11 @@ func (f Fetched) Entry() Entry {
 }
 
 func (l Library) Fetch(ref Ref) (Fetched, error) {
-	files, commit, err := fetchVersion(ref)
+	files, tag, commit, err := fetchVersion(ref)
 	if err != nil {
 		return Fetched{}, err
 	}
-	return Fetched{Ref: ref, Commit: commit, Fingerprint: fingerprint(files), files: files}, nil
+	return Fetched{Ref: ref, Tag: tag, Commit: commit, Fingerprint: fingerprint(files), files: files}, nil
 }
 
 func (l Library) FetchAt(ref Ref, commit string) (Fetched, error) {
@@ -229,15 +230,15 @@ func withScratch(ref Ref, run func(dir string) error) error {
 	return nil
 }
 
-func fetchVersion(ref Ref) (files []file, commit string, err error) {
+func fetchVersion(ref Ref) (files []file, tag, commit string, err error) {
 	err = withScratch(ref, func(dir string) error {
-		if commit, err = resolve(dir, ref); err != nil {
+		if tag, commit, err = resolve(dir, ref); err != nil {
 			return err
 		}
 		files, err = fetchInto(dir, ref, commit)
 		return err
 	})
-	return files, commit, err
+	return files, tag, commit, err
 }
 
 func fetchCommit(ref Ref, commit string) (files []file, err error) {
@@ -248,14 +249,24 @@ func fetchCommit(ref Ref, commit string) (files []file, err error) {
 	return files, err
 }
 
-func resolve(dir string, ref Ref) (string, error) {
-	if fullCommit.MatchString(ref.Version) {
-		return ref.Version, nil
+func (r Ref) candidateTags() []string {
+	if fullCommit.MatchString(r.Version) {
+		return nil
 	}
-	tag, branch := "refs/tags/"+ref.Version, "refs/heads/"+ref.Version
-	listing, err := source.GitBytes(dir, "ls-remote", ref.URL(), tag, tag+"^{}", branch)
+	return []string{r.Path + "/" + r.Version, r.Version}
+}
+
+func resolve(dir string, ref Ref) (tag, commit string, err error) {
+	if fullCommit.MatchString(ref.Version) {
+		return "", ref.Version, nil
+	}
+	var patterns []string
+	for _, name := range ref.candidateTags() {
+		patterns = append(patterns, "refs/tags/"+name, "refs/tags/"+name+"^{}", "refs/heads/"+name)
+	}
+	listing, err := source.GitBytes(dir, append([]string{"ls-remote", ref.URL()}, patterns...)...)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	found := map[string]string{}
 	for _, line := range strings.Split(string(listing), "\n") {
@@ -263,15 +274,20 @@ func resolve(dir string, ref Ref) (string, error) {
 			found[name] = commit
 		}
 	}
-	for _, name := range []string{tag + "^{}", tag} {
-		if commit := found[name]; fullCommit.MatchString(commit) {
-			return commit, nil
+	for _, name := range ref.candidateTags() {
+		for _, listed := range []string{"refs/tags/" + name + "^{}", "refs/tags/" + name} {
+			if commit := found[listed]; fullCommit.MatchString(commit) {
+				return name, commit, nil
+			}
 		}
 	}
-	if found[branch] != "" {
-		return "", errorf("%s: %s is a branch on %s; a version is a tag or a full commit, so the book cannot change without you choosing it", ref, ref.Version, ref.repository())
+	for _, name := range ref.candidateTags() {
+		if found["refs/heads/"+name] != "" {
+			return "", "", errorf("%s: %s is a branch on %s; a version is a tag or a full commit, so the book cannot change without you choosing it", ref, name, ref.repository())
+		}
 	}
-	return "", errorf("%s: %s has no tag %s; nothing was changed", ref, ref.repository(), ref.Version)
+	tags := ref.candidateTags()
+	return "", "", errorf("%s: %s has neither tag %s nor tag %s; nothing was changed", ref, ref.repository(), tags[0], tags[1])
 }
 
 func fetchInto(dir string, ref Ref, commit string) ([]file, error) {

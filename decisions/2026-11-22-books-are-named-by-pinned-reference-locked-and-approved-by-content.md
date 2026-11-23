@@ -10,6 +10,14 @@ by content, whoever named it. A book from a local directory keeps that earlier b
   or a full 40-character commit. A short commit, a name that exists only as a branch, and "latest" are refused, so
   a book that can run host commands never changes without the user choosing it. Only github.com at first; another
   source (an OCI registry) can be added as its own form without changing the rest.
+- **Versions are per book.** A books repository holds many books, and a tag on the whole repository would give every
+  book a new version whenever one changed. A tag version is resolved first as the book's own tag,
+  `refs/tags/<directory>/<version>` (`backend/go/v1.2.0`), then as the plain `refs/tags/<version>`, the convention
+  Go uses for a module in a subdirectory. A books repository tags each book's release with its directory as prefix;
+  a plain tag is the fallback that covers every book without its own tag at that version. The version in a
+  reference keeps its pattern, without `/`, so the prefix comes only from the directory. The lock is unchanged: it
+  pins the commit, so a book's own tag added later changes a locked reference only through `stage book update`,
+  which names the tag it resolved. A missing version names both tags tried.
 - **Short names.** `books` in the user's config is either today's list or a `[books]` table whose values are a
   reference or a local directory; each key is the short name a repository or `--book` uses. A key that is another
   book's name is an error, and so are two books with the same name. A directory is never locked.
@@ -67,6 +75,8 @@ managed settings.
 
 Rejected:
 
+- **Only whole-repository tags.** Every book would appear to change whenever any one did, and `stage book update`
+  would ask about books that had not changed.
 - **Branches or "latest" as versions.** A book can run host commands; it must not change without the user choosing
   it.
 - **Cloning the whole books repository into the cache.** It keeps files nobody approved on the machine.
@@ -78,5 +88,7 @@ Rejected:
 Evidence: `TestALockedReferenceKeepsItsCommitWhenTheTagMoves`,
 `TestATeamLockPinsTheCommitWithoutResolvingTheTagAndIsCopiedToYours`,
 `TestABookYouTurnOnYourselfByReferenceIsApprovedToo`,
-`TestARepositoryMayNameABookByReferenceYouNeverInstalledAndYouAreAsked`, `TestReadingConfigNeverFetchesABook`.
-Fetching from github.com itself has not been checked live; the README lists it under Limitations.
+`TestARepositoryMayNameABookByReferenceYouNeverInstalledAndYouAreAsked`, `TestReadingConfigNeverFetchesABook`,
+`TestAPrefixedTagForTheBooksDirectoryWinsOverAPlainTagOfTheSameVersion`,
+`TestAPlainTagCoversABookWithoutItsOwnTagButAnotherBooksTagDoesNot`.
+Fetching by tag from github.com has not been checked live; the README lists it under Limitations.
