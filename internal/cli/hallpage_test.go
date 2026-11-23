@@ -39,6 +39,7 @@ type pageResult struct {
 	ModeLabel   string            `json:"mode_label"`
 	Tiles       [][]string        `json:"tiles"`
 	RowsText    string            `json:"rows_text"`
+	Activities  []string          `json:"activities"`
 	OpenDetails int               `json:"open_details"`
 	Copied      []string          `json:"copied"`
 	GuideHidden bool              `json:"guide_hidden"`
@@ -237,8 +238,30 @@ func TestEachStageOpensItsOwnGraphInADialog(t *testing.T) {
 	if slices.Contains(page.Dialog.Labels, "docs") {
 		t.Errorf("fix's graph draws another stage: %q", page.Dialog.Labels)
 	}
-	if !strings.Contains(page.Dialog.Link, "#graph=fix") {
-		t.Errorf("link %q", page.Dialog.Link)
+	if page.Dialog.Link != "#graph=fix" {
+		t.Errorf("link %q, want only the part that names the stage, so the token stays out of screen shares", page.Dialog.Link)
+	}
+}
+
+func TestAStageWithNoActivitySaysSoInsteadOfShowingADash(t *testing.T) {
+	quiet := pageStage("docs", 0)
+	quiet.Activities = []activityRecord{}
+	page := showPage(t, pageScenario{Clicks: []string{"graph docs"}, View: pageView(quiet)})
+	if !slices.Equal(page.Activities, []string{"No activity reported"}) {
+		t.Errorf("activity line %q", page.Activities)
+	}
+	if page.Dialog.Facts != "live" {
+		t.Errorf("dialog facts %q, want no dash", page.Dialog.Facts)
+	}
+}
+
+func TestAnOpenedStageCountsTokensTheWayItsSummaryDoes(t *testing.T) {
+	record := pageStage("fix", 0)
+	record.Activities[0].Counters = &activityCounters{Tokens: &counter{Value: 412000, AtLeast: true}}
+	page := showPage(t, pageScenario{Hash: "open=fix", View: pageView(record)})
+	text := strings.Join(page.Activities, " | ")
+	if !strings.Contains(page.RowsText, "· ≥412k tokens") || strings.Contains(page.RowsText, "412000") {
+		t.Errorf("page says %q (activities %q), want ≥412k tokens in the summary and the detail alike", page.RowsText, text)
 	}
 }
 

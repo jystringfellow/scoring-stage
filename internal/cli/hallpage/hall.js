@@ -40,6 +40,26 @@ function count(number, noun) {
   return number + " " + noun + (number === 1 ? "" : "s");
 }
 
+function shortCount(value) {
+  if (value >= 1e12) {
+    return ">999G";
+  }
+  if (value >= 1e9) {
+    return (value / 1e9).toFixed(1) + "G";
+  }
+  if (value >= 1e6) {
+    return (value / 1e6).toFixed(1) + "M";
+  }
+  if (value >= 1e3) {
+    return (value / 1e3).toFixed(0) + "k";
+  }
+  return Number(value).toFixed(0);
+}
+
+function activityText(stage) {
+  return stage.summary.activity === "-" ? "" : stage.summary.activity;
+}
+
 function remembered(key) {
   try {
     return localStorage.getItem(key);
@@ -174,7 +194,8 @@ function addStage(list, stage) {
   article.appendChild(head);
 
   const line = el("div", null, "activity-line");
-  line.appendChild(el("span", stage.summary.activity, stage.remembered ? "activity muted" : "activity"));
+  const activity = activityText(stage);
+  line.appendChild(el("span", activity || "No activity reported", activity && !stage.remembered ? "activity" : "activity muted"));
   const stepped = (stage.activities || []).find((activity) => activity.steps && activity.steps.length);
   if (stepped) {
     for (const step of stepped.steps) {
@@ -309,7 +330,7 @@ function addActivity(parent, stage, activity, lastSeen) {
   }
   const tokens = activity.counters && activity.counters.tokens;
   if (tokens) {
-    facts.appendChild(el("span", " · " + (tokens.at_least ? "≥" : "") + tokens.value + " tokens"));
+    facts.appendChild(el("span", " · " + (tokens.at_least ? "≥" : "") + shortCount(tokens.value) + " tokens"));
   }
   if (activity.updated_at) {
     facts.appendChild(el("span", " · updated " + activity.updated_at, "muted"));
@@ -445,7 +466,7 @@ function drawDialog() {
   const body = document.getElementById("graph-body");
   const stage = latest.stages.find((candidate) => candidate.slug === graphSlug);
   document.getElementById("graph-title").textContent = graphSlug;
-  document.getElementById("graph-link").textContent = (location.origin || "") + location.pathname + "#graph=" + graphSlug;
+  document.getElementById("graph-link").textContent = "#graph=" + graphSlug;
   body.replaceChildren();
   if (!stage) {
     document.getElementById("graph-facts").textContent = "";
@@ -454,7 +475,7 @@ function drawDialog() {
   }
   const repository = stage.repository ? stage.repository + (stage.base_branch ? "@" + stage.base_branch : "") : "";
   const freshness = isLive(stage) ? "live" : stage.remembered ? "last read " + stage.remembered + ", not live" : words(stage.state);
-  document.getElementById("graph-facts").textContent = [repository, stage.summary.activity, freshness].filter(Boolean).join(" · ");
+  document.getElementById("graph-facts").textContent = [repository, activityText(stage), freshness].filter(Boolean).join(" · ");
   const nodes = new Map(stage.graph.nodes.map((node) => [node.id, node]));
   const picked = pickedNode(stage);
   const tree = el("div", null, "tree");
