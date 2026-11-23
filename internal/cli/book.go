@@ -225,6 +225,9 @@ func (a *App) updateBook(settings *config.Settings, target bookTarget, to string
 	configPath := filepath.Join(settings.Home, "config.toml")
 	key := target.ref.String()
 	next := target.ref
+	if to == target.ref.Version {
+		to = ""
+	}
 	if to != "" {
 		moved, err := bookref.Parse(strings.TrimSuffix(key, "@"+target.ref.Version) + "@" + to)
 		if err != nil {
@@ -332,7 +335,7 @@ func (a *App) updateBook(settings *config.Settings, target bookTarget, to string
 		fileWrite{library.LockPath(), func() error {
 			return bookref.UpdateLock(library.LockPath(), func(lock *bookref.Lock) error {
 				lock.Set(fetched.Entry())
-				if to != "" {
+				if nextKey != key {
 					lock.Remove(key)
 				}
 				return nil

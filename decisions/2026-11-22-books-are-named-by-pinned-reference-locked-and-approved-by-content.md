@@ -54,7 +54,9 @@ by content, whoever named it. A book from a local directory keeps that earlier b
   same repository at the same commit, named and locked by that commit, so a book and what it includes move together;
   it cannot leave the repository. Cycles are an error. A book reached twice at one version applies once; at two
   versions it is an error naming both include paths, rather than stage choosing one. Each included book is approved
-  on its own fingerprint, and the existing conflict rule holds across includes.
+  on its own fingerprint, and the existing conflict rule holds across includes. Every include is a fetch made before
+  the approval prompt, so includes are bounded: a chain of at most 8 books, and at most 50 books in one run; past
+  either limit stage stops before fetching more and names the chain.
 - **Trust levels.** Each book is `local` (a directory) or `pinned` (fetched, locked, approved), and both always
   ask. `trusted` (fetched, locked and signed by a publisher that managed settings name) is reserved: it may later
   let a book apply without a prompt, or let managed settings name books every sandbox gets. Neither may be built
