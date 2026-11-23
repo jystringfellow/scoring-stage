@@ -983,28 +983,8 @@ An installed book applies to a sandbox when the repository's config names it, wh
 of its `[[repos]]` entries matches the repository; the `[[repos]]` rules are for repositories you cannot add a
 config to. `--book ./dir` also uses a book that is not installed.
 
-The `book.toml` above shows every kind of entry; its feed, profiles and `[[repos]]` kit are placeholders.
-[`examples/books/go`](examples/books/go) is a complete book you can run: one local kit that installs a Go toolchain
-and allows the hosts `apt` and the Go module proxy need. Try it with
-`stage up <repo> <slug> --book ./examples/books/go`, or copy it as the start of your own. It passes stage's checks
-on a book; its install steps follow a kit that runs in a sandbox, but this copy has not been run in one.
-
-[`examples/books/python`](examples/books/python) installs uv from PyPI and Python 3.12, without a compiler or
-credentials. It grants `pypi.org` and `files.pythonhosted.org` at install and runtime, plus install-only GET
-access to `github.com:443` under `/astral-sh/python-build-standalone/releases/download/**` and
-`release-assets.githubusercontent.com:443` for Python builds. Try
-`stage up <repo> <slug> --book ./examples/books/python`, or copy it as the start of your own book. Like the Go
-book, it passes stage's checks but has not been run in a sandbox.
-
-The Python kit's `python` argument defaults to `3.12` and accepts `major.minor` or `major.minor.patch`.
-To choose another version, copy the book and replace its `kits` entry in `book.toml`, for example:
-
-```toml
-kits = [{source = "./kits/python", args = {python = "3.11"}}]
-```
-
-Python builds can be downloaded only during installation; change the argument and recreate the sandbox when
-another version is needed. The book's grants add to those of the other selected kits.
+The `book.toml` above shows every kind of entry; its feed, profiles and `[[repos]]` kit are placeholders. For
+complete books a repository can use as they are, or copy as the start of your own, see [Library](#library).
 
 A book's `name` matches `^[a-z0-9][a-z0-9._-]*$`, and its `description` has no control characters. A book cannot
 set `base`. It cannot set a secret or binding for a reserved service: any service an agent binds (`anthropic`,
@@ -1249,9 +1229,54 @@ A kit that a book adds for its own service declares a `credential@1` entry for t
 injected on; the book's `secrets` entry supplies the value for each sandbox, and its `bindings` entry authorises the
 service.
 
+### Library
+
+This repository's [`books/`](books) directory is a small library of books that any repository can use by
+reference: nobody clones a books repository and nobody defines a short name.
+
+| Book | Installs | Network at install | Network at runtime |
+|------|----------|--------------------|--------------------|
+| [`books/go`](books/go) | Go 1.27.3 from go.dev, and `gcc` and `libc6-dev` from Debian so `go test -race` runs | `deb.debian.org`, `security.debian.org`, `dhi.io`, `go.dev`, `dl.google.com`, `proxy.golang.org`, `sum.golang.org` | `proxy.golang.org`, `sum.golang.org` |
+| [`books/python`](books/python) | uv from PyPI in a venv, and Python 3.12 through uv; no compiler | `pypi.org`, `files.pythonhosted.org`, and GET only to `github.com:443` under `/astral-sh/python-build-standalone/releases/download/**` and to `release-assets.githubusercontent.com:443` | `pypi.org`, `files.pythonhosted.org` |
+
+Neither book sets a secret, a binding or an AWS profile, and neither needs a credential. Their grants add to those
+of the sandbox's other kits.
+
+To use one, name it in the repository's `.scoring-stage/config.toml`:
+
+```toml
+books = ["github.com/jystringfellow/scoring-stage//books/go@v0.0.1-rc.6"]
+```
+
+Then run `stage book lock .` from the top of the checkout, which fetches the book, asks you to approve it and
+writes `.scoring-stage/stage.lock`, and commit both files. Everyone who works on the repository then gets the
+same commit of the book, and is asked to approve it on their first `stage up`.
+
+The version is one of this repository's release tags. A release tag covers every book through the plain-tag
+fallback (see [Books by reference](#books-by-reference)), so `//books/go@v0.0.1-rc.6` will resolve to that
+release once the tag exists. The library is in release tags made after it was added; `v0.0.1-rc.5` and earlier
+have no `books/` directory. If one book later needs to move on its own, it can get its own `books/go/<version>`
+tag, which stage tries before the plain tag. There are no built-in short names and no default list: a repository
+names the full reference, and a book applies only where it is named.
+
+Each kit takes its version as an argument: `go` defaults to `1.27.3` and `python` to `3.12`, and both accept
+`major.minor` or `major.minor.patch`. A book named by reference uses its defaults. For another version, copy the
+book into your own books repository and replace its `kits` entry in `book.toml`, for example:
+
+```toml
+kits = [{source = "./kits/python", args = {python = "3.11"}}]
+```
+
+Python builds can be downloaded only during installation; change the argument and recreate the sandbox when
+another version is needed.
+
+What has been run: the Python book ran in a sandbox, given by path, on 2026-11-13. The Go book has not been run in
+a sandbox as a book. Its kit is the one this repository's own `.scoring-stage/config.toml` names. Neither has
+been used by reference in a sandbox; [VERIFICATION.md](VERIFICATION.md) lists what is still to run.
+
 ### Writing a kit
 
-[`examples/books/go/kits/go/go.yaml`](examples/books/go/kits/go/go.yaml) is a small kit to start from. Two things
+[`books/go/kits/go/go.yaml`](books/go/kits/go/go.yaml) is a small kit to start from. Two things
 about the sandbox have caught kits in use; both come from one kit's notes and have not been checked again for
 this README:
 
@@ -1263,9 +1288,10 @@ this README:
   second start does not fail. The kit has to install `tmux`. Like everything else in the sandbox, the server stops
   when the sandbox does, and the `startup` command runs again on the next start.
 
-The [Python example kit](examples/books/python/kits/python/python.yaml) installs uv from PyPI in a venv and
-uses it to install the selected Python version. This example has not been checked against the 16 KB-page
-warning above; verify it on the host before relying on it.
+The [Python book's kit](books/python/kits/python/python.yaml) installs uv from PyPI in a venv and uses it to
+install the selected Python version. It ran in a sandbox on macOS on 2026-11-13
+([VERIFICATION.md](VERIFICATION.md)); it has not been checked against the 16 KB-page warning above on any other
+host.
 
 ## Managed settings
 

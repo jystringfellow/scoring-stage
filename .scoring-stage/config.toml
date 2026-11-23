@@ -1,2 +1,2 @@
 agents = ["agy", "claude", "codex", "copilot"]
-kits = ["./examples/books/go/kits/go"]
+kits = ["./books/go/kits/go"]

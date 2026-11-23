@@ -1,6 +1,6 @@
 # The repository's own sandbox reuses the example Go kit
 
-`.scoring-stage/config.toml` names the four agents and one kit, `./examples/books/go/kits/go`, so a sandbox for
+`.scoring-stage/config.toml` names the four agents and one kit, `./books/go/kits/go`, so a sandbox for
 this repository needs no book given by path and the example kit is exercised by every such sandbox. It names no
 book: stage stays usable alone, and a person who wants another tool in the sandbox adds its book with `--book`.
 `scripts/verify` is the check an agent ensemble runs: module verification, gofmt, vet and the whole suite. A first
