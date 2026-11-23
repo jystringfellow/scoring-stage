@@ -508,7 +508,7 @@ function drawScoreboard(board) {
     const run = el("div", null, "run");
     const head = el("div", null, "run-head");
     head.appendChild(el("code", row.repository));
-    head.appendChild(el("span", (row.tokens_at_least ? "≥" : "") + Math.round(row.tokens).toLocaleString() + " tokens", "muted"));
+    head.appendChild(el("span", (row.tokens_at_least ? "≥" : "") + shortCount(row.tokens) + " tokens", "muted"));
     run.appendChild(head);
     const bar = el("div", null, "bar");
     for (const [part, value] of [["ok", row.succeeded], ["failed", row.failed]]) {

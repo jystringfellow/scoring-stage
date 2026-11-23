@@ -176,6 +176,7 @@ setImmediate(() => {
     mode_label: byID.mode.getAttribute("aria-label") || "",
     tiles: byID.tiles.children.map((tile) => tile.children.map((part) => part.textContent)),
     rows_text: byID.rows.textContent,
+    scoreboard_text: byID.scoreboard.textContent,
     activities: byID.rows.all("span").filter((span) => span.className.split(" ")[0] === "activity").map((span) => span.textContent),
     open_details: byID.rows.all("div").filter((part) => part.className === "detail").length,
     copied: copied,
