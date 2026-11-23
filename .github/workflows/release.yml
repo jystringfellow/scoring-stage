@@ -53,10 +53,24 @@ jobs:
           done
           (cd dist && sha256sum *.tar.gz > SHA256SUMS)
           cat dist/SHA256SUMS
+      - name: Render Homebrew formula
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir formula
+          packaging/homebrew/render "$VERSION" dist/SHA256SUMS packaging/homebrew/scoring-stage.rb.tmpl > formula/scoring-stage.rb
+          cat formula/scoring-stage.rb
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist
           path: dist/
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: homebrew-formula
+          path: formula/
           if-no-files-found: error
           retention-days: 1
 
@@ -89,3 +103,38 @@ jobs:
             flags+=(--prerelease)
           fi
           gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes "${flags[@]}" dist/*
+
+  homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: homebrew-formula
+          path: formula
+      - name: Publish the formula to the tap
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: credential.https://github.com.helper
+          GIT_CONFIG_VALUE_0: '!f() { test "$1" = get && echo username=x-access-token && echo "password=$HOMEBREW_TAP_TOKEN"; }; f'
+        run: |
+          set -euo pipefail
+          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "HOMEBREW_TAP_TOKEN is not set; skipping the Homebrew tap."
+            exit 0
+          fi
+          git clone --quiet --depth 1 https://github.com/jystringfellow/homebrew-tap.git tap
+          mkdir -p tap/Formula
+          cp formula/scoring-stage.rb tap/Formula/scoring-stage.rb
+          cd tap
+          git add Formula/scoring-stage.rb
+          if git diff --cached --quiet; then
+            echo "Formula/scoring-stage.rb is unchanged; nothing to push."
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit --quiet -m "scoring-stage $TAG"
+          git push origin "HEAD:refs/heads/$(git symbolic-ref --short HEAD)"
