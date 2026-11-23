@@ -10,39 +10,117 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jystringfellow/scoring-stage/internal/bookref"
 	"github.com/jystringfellow/scoring-stage/internal/testutil"
 	"gopkg.in/yaml.v3"
 )
 
-func TestEveryExampleBookLoadsAndComposesWithoutBindingsSecretsOrCredentials(t *testing.T) {
-	root := Resolve("../../examples/books")
+const libraryRepository = "github.com/jystringfellow/scoring-stage"
+
+func libraryRemote(t *testing.T, root string) {
+	t.Helper()
+	for key, value := range map[string]string{
+		"GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "test@example.com",
+		"GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "test@example.com",
+	} {
+		t.Setenv(key, value)
+	}
+	scratch := t.TempDir()
+	bare, work := filepath.Join(scratch, "library.git"), filepath.Join(scratch, "work")
+	testutil.RunGit(t, scratch, "init", "-q", "--bare", "-b", "main", bare)
+	testutil.RunGit(t, scratch, "init", "-q", "-b", "main", work)
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(work, "books", relative)
+		info, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
+			link, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			return os.Symlink(link, target)
+		case info.IsDir():
+			return os.MkdirAll(target, 0o755)
+		default:
+			content, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			return os.WriteFile(target, content, info.Mode().Perm())
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.RunGit(t, work, "add", "-A")
+	testutil.RunGit(t, work, "commit", "-q", "-m", "library")
+	testutil.RunGit(t, work, "tag", "v1")
+	testutil.RunGit(t, work, "push", "-q", bare, "main", "refs/tags/v1")
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "url.file://"+bare+".insteadOf")
+	t.Setenv("GIT_CONFIG_VALUE_0", "https://"+libraryRepository+".git")
+}
+
+func TestEveryLibraryBookIsFetchedByReferenceAndComposesWithoutBindingsSecretsOrCredentials(t *testing.T) {
+	root := Resolve("../../books")
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		t.Fatal(err)
 	}
+	libraryRemote(t, root)
 	for _, entry := range entries {
 		if !entry.IsDir() {
+			t.Errorf("books/%s is not a book's directory", entry.Name())
 			continue
 		}
 		t.Run(entry.Name(), func(t *testing.T) {
-			path := filepath.Join(root, entry.Name())
+			reference := libraryRepository + "//books/" + entry.Name() + "@v1"
+			ref, err := bookref.Parse(reference)
+			if err != nil {
+				t.Fatal(err)
+			}
 			home := t.TempDir()
-			testutil.WriteFile(t, filepath.Join(home, "config.toml"), fmt.Sprintf("books = [%q]\n", path))
+			t.Cleanup(func() {
+				filepath.WalkDir(home, func(path string, entry os.DirEntry, err error) error {
+					if err == nil && entry.IsDir() {
+						os.Chmod(path, 0o755)
+					}
+					return nil
+				})
+			})
+			testutil.WriteFile(t, filepath.Join(home, "config.toml"), fmt.Sprintf("books = [%q]\n", reference))
+			fetched, err := load(t, home).FetchWithIncludes([]bookref.Ref{ref}, &bookref.Lock{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(fetched) != 1 || fetched[0].Name != entry.Name() {
+				t.Fatalf("fetched %+v, want only the book %s", fetched, entry.Name())
+			}
 			settings := load(t, home)
 			baseline := composeWith(t, settings, Selection{})
-			composition := composeWith(t, settings, Selection{Books: []string{path}})
+			composition := composeWith(t, settings, Selection{Books: []string{entry.Name()}})
 			if !reflect.DeepEqual(composition.Books, []string{entry.Name()}) || len(settings.Books) != 1 {
 				t.Fatalf("books = %v; installed = %v", composition.Books, settings.Books)
 			}
 			if !reflect.DeepEqual(composition.Secrets, baseline.Secrets) || !reflect.DeepEqual(composition.Bindings, baseline.Bindings) {
-				t.Fatal("example book adds secrets or bindings")
+				t.Fatal("library book adds secrets or bindings")
 			}
 			book := settings.Books[0]
 			if book.Description == "" || len(book.kits) == 0 {
-				t.Fatal("example book needs a description and kits")
+				t.Fatal("library book needs a description and kits")
 			}
-			for _, entry := range book.kits {
-				kit, err := parseKit(entry, path, "example book")
+			for _, kitEntry := range book.kits {
+				kit, err := parseKit(kitEntry, book.Path, "library book")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -68,7 +146,7 @@ func TestEveryExampleBookLoadsAndComposesWithoutBindingsSecretsOrCredentials(t *
 func pythonExampleBook(t *testing.T) *Book {
 	t.Helper()
 	settings := load(t, t.TempDir())
-	book, err := LoadBook(settings.Agents, Resolve("../../examples/books/python"))
+	book, err := LoadBook(settings.Agents, Resolve("../../books/python"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +166,7 @@ type pythonExampleSpec struct {
 
 func pythonExampleKit(t *testing.T) pythonExampleSpec {
 	t.Helper()
-	content := testutil.ReadFile(t, "../../examples/books/python/kits/python/python.yaml")
+	content := testutil.ReadFile(t, "../../books/python/kits/python/python.yaml")
 	var spec pythonExampleSpec
 	if err := yaml.Unmarshal([]byte(content), &spec); err != nil {
 		t.Fatal(err)
