@@ -105,6 +105,10 @@ commands:
   github login|token                log in to your GitHub App ([github] mode = "app"); print a fresh token
   init [<repo>] [options]           draft and check a repository config and kits, or print --guide
   approve <repo> [--base B]         review what a repository's config asks for and record your approval, in a terminal
+  book list|prune                   list fetched books and what names them; remove those your lock does not name
+  book update [NAME|REF]... [--to VERSION] [--from REPO]
+                                    fetch a book again, show what changed and ask; the only change to your lock
+  book lock <repo>                  write the repository's .scoring-stage/stage.lock from yours, for you to commit
   up <repo> <slug> [options]        create a sandbox for a repository
   shell <slug>                      open a login shell in the repository
   login <slug>                      save the sandbox's copyable agent logins (copy_logins) for future sandboxes
@@ -139,7 +143,7 @@ func (a *App) Main(args []string) int {
 		"github": a.cmdGitHub,
 		"token":  a.cmdToken,
 		"put":    a.cmdPut, "job": a.cmdJob, "mcp": a.cmdMCP,
-		"approve": a.cmdApprove,
+		"approve": a.cmdApprove, "book": a.cmdBook,
 	}
 	name := args[0]
 	if name == "-h" || name == "--help" || name == "help" {

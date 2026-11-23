@@ -39,6 +39,8 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
 - Whether `sbx env create --force` prints the plan it approves.
 - Where sbx keeps `credentials.yaml`, beyond `~/.config/sbx/credentials.yaml` on macOS. `stage setup`'s bindings
   audit also looks under `$XDG_CONFIG_HOME` and `%APPDATA%`, inferred from strings in the sbx binary.
+- Fetching a book by tag from github.com, and a moved tag on github.com. Fetching by full commit was checked on
+  2026-11-22.
 - sbx's kit loader: which files it reads from a kit directory, and whether it matches keys case-insensitively.
   stage checks `.yaml`, `.yml` and `.json` files at any depth except under `files/`, and refuses keys that differ
   from `capabilities`, `extends`, `type`, `config`, `service`, `inject` or `domain` only in case.
@@ -591,3 +593,19 @@ Checked while capturing:
   "not running" line. That line is cropped from the pictures.
 - **`sbx ls --json` once printed a character after its JSON,** and the hall showed "cannot read sbx ls --json" for
   one refresh while it kept its last view. The next listings were clean.
+
+## 2026-11-22: a book fetched by full commit from a private github.com repository
+
+- **sbx:** not used; the check is of stage's fetch, cache and lock, which run on the host.
+- **stage:** the head of the change that added books by reference (3b0f403).
+- **Credentials:** real: the host's own git credentials for github.com, which a private repository needs. A temporary
+  `STAGE_HOME` held the lock and cache; no secret was set and no sandbox was created.
+- **Restoration:** the temporary `STAGE_HOME` was removed. Nothing outside it was written.
+
+Observed:
+
+- A book in a private books repository, named by a full commit, was fetched, cached read-only under
+  `books/<fingerprint>/`, recorded in `stage.lock`, and opened again from the cache.
+- A version that names only a branch was refused as a branch, and a directory missing at that commit was refused
+  naming the directory.
+- Not checked: a tag, because that repository had none.

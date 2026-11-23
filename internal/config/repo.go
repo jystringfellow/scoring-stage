@@ -1,6 +1,8 @@
 package config
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -35,8 +37,8 @@ type RepoConfig struct {
 
 func LoadRepoConfig(repoDir string) (*RepoConfig, error) {
 	path := filepath.Join(repoDir, RepoConfigPath)
-	if _, err := os.Stat(path); err != nil {
-		return nil, nil
+	if found, err := repoFile(repoDir, RepoConfigPath); err != nil || !found {
+		return nil, err
 	}
 	data, err := readTOML(path)
 	if err != nil {
@@ -88,8 +90,41 @@ func LoadRepoConfig(repoDir string) (*RepoConfig, error) {
 			return nil, errorf("%s: books are named, not located: %s; name an installed book or give a reference such as github.com/example-org/books//backend/go@v1.2.0", path, Printable(name))
 		}
 	}
+	if _, err := repoFile(repoDir, RepoLockPath); err != nil {
+		return nil, err
+	}
 	if repo.lock, err = bookref.ReadLock(filepath.Join(repoDir, RepoLockPath)); err != nil {
 		return nil, err
 	}
 	return repo, nil
 }
+
+func repoFile(repoDir, relative string) (bool, error) {
+	path := repoDir
+	for _, part := range strings.Split(relative, "/") {
+		path = filepath.Join(path, part)
+		info, err := os.Lstat(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			return false, errorf("%s is a symbolic link; stage does not follow a repository's links", path)
+		}
+	}
+	return true, nil
+}
+
+func (r *RepoConfig) BookReferences() []bookref.Ref {
+	var references []bookref.Ref
+	for _, entry := range r.books {
+		if ref, err := bookref.Parse(entry); err == nil && bookref.IsRef(entry) {
+			references = append(references, ref)
+		}
+	}
+	return references
+}
+
+func (r *RepoConfig) Lock() *bookref.Lock { return r.lock }
