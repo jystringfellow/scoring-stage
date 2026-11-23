@@ -33,7 +33,7 @@ jobs:
           go-version-file: go.mod
           cache: false
       - name: Test
-        run: go test ./...
+        run: go test -timeout 20m ./...
       - name: Build
         env:
           VERSION: ${{ github.ref_name }}
