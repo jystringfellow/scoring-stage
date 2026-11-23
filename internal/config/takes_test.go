@@ -100,7 +100,7 @@ func TestApprovingTakesInOneRepositoryApprovesThemInNoOther(t *testing.T) {
 
 func pendingTakes(t *testing.T, home, repository string, takes ...string) []Approval {
 	t.Helper()
-	approvals, err := RepoApprovals(&Composition{RepoTakes: takes}, repository)
+	approvals, err := Approvals(&Composition{RepoTakes: takes}, repository)
 	if err != nil {
 		t.Fatal(err)
 	}

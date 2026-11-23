@@ -911,14 +911,14 @@ tested with stage.
 
 Configuration has two levels: yours in `~/.scoring-stage/config.toml`, which applies to every sandbox you create
 and may set everything below, and a repository's in its `.scoring-stage/config.toml`, which travels with the code and may
-only ask for agents, installed books, its own kits and takes. [Gear](#gear) is yours alone: neither a repository
+only ask for agents, installed books, books by reference, its own kits and takes. [Gear](#gear) is yours alone: neither a repository
 nor a book may list it.
 
 `~/.scoring-stage/config.toml` (all keys optional):
 
 ```toml
 agents = ["claude", "codex"]                       # the agents you use; names or kit references
-books = ["~/Code/my-org-books/backend"]            # installed books, relative to ~/.scoring-stage; each applies only when asked for
+books = ["~/Code/my-org-books/backend"]            # installed books: directories relative to ~/.scoring-stage, or references; see Books by reference
 base = "docker.io/sbx/shell:1.1.0"                 # the workload kit
 kits = ["./kits/personal"]                         # extra kits, relative to ~/.scoring-stage
 takes = ["~/.tool/runs"]                           # sandbox paths kept on your machine; see Takes
@@ -1117,12 +1117,13 @@ Run these commands from a checkout of stage. `stage` must be on PATH on the host
 the guide itself needs no skill.
 
 A repository is not trusted with anything that acts on the host. It can add agents by name, installed books by
-name, its own kits and [takes](#takes), but it cannot set secrets, bindings, AWS profiles, GitHub access, [gear](#gear) or the base. A book it asks
-for that you have not installed is an error. A repository's kit is a `./` path inside the repository, with no
+name, [books by reference](#books-by-reference), its own kits and [takes](#takes), but it cannot set secrets, bindings, AWS profiles, GitHub access, [gear](#gear) or the base. A book it asks
+for by a name you have not installed is an error. A repository's kit is a `./` path inside the repository, with no
 symbolic links; published kits are refused.
 
 Kits and books can widen a sandbox's network access, send credentials and run commands, so `stage up` uses the
-kits a repository adds, and the installed books it turns on, only after you approve them. It lists each one with
+kits a repository adds, the installed books it turns on, and every book fetched by reference, only after you
+approve them. It lists each one with
 what it does (network rules, credentials, host commands, AWS profiles) and asks. Without a terminal, pass
 `--approve-repo-config` after reviewing them. An approval covers that exact content (a local kit's files, a published
 kit's digest and arguments, a book's files) and is kept in `~/.scoring-stage/trusted-kits`, one JSON object per
@@ -1139,10 +1140,56 @@ can write it, set `STAGE_HOME` to a directory of its own, answer the question th
 `--approve-repo-config` to `stage up`. An interrupt at the question removes the copy of the repository it was
 reviewing.
 
-Known gap: a book you turn on yourself, with `--book` or a `[[repos]]` rule, is not reviewed. Its host commands
-(such as `secrets` commands) run as code on your host, with whatever the book's files say after your last
-`git pull`. Until books you turn on are approved by content, only turn on books from repositories whose main branch
-is protected and reviewed.
+Known gap: a book you turn on yourself from a directory, with `--book` or a `[[repos]]` rule, is not reviewed. Its
+host commands (such as `secrets` commands) run as code on your host, with whatever the book's files say after your
+last `git pull`. Name books [by reference](#books-by-reference) instead: every fetched book is approved by content,
+whoever named it. Turn on books from a directory only from repositories whose main branch is protected and reviewed.
+
+### Books by reference
+
+A book can be named by reference instead of by directory, wherever a book is named: `books` in your config, a
+repository's `books`, and `--book`.
+
+```text
+github.com/example-org/books//backend/go@v1.2.0
+github.com/example-org/books//backend/go@<a full 40-character commit>
+```
+
+Before `//` is a GitHub repository, after it the book's directory in that repository, and after `@` a tag or a full
+commit. Branches and short commits are refused, so a book never changes without you choosing it. stage fetches
+with your own git credentials, as it does a repository for `stage up`, so a private books repository works
+wherever `git fetch` does.
+
+`books` in your config is either the list shown above, which still works unchanged, or a table that gives each book
+a short name:
+
+```toml
+[books]
+go = "github.com/example-org/books//backend/go@v1.2.0"
+mine = "~/Code/my-books/mine"                      # a directory works here too, and is never locked
+```
+
+A repository's config can then ask for `books = ["go"]`, or give a full reference itself. A short name cannot be
+another book's name, and two books with the same name are an error wherever they come from.
+
+- **Lock.** The first time a reference is used, stage resolves its tag and records the reference, the commit, a
+  fingerprint of the book's files and the fingerprint's scheme in `~/.scoring-stage/stage.lock`. Later runs fetch
+  that commit and refuse content that does not match. `stage up` adds entries and never changes one, so a tag moved
+  upstream does not change your book. A repository can commit `.scoring-stage/stage.lock` in the same format. For a
+  reference it holds and yours does not, stage fetches the repository's commit without resolving the tag, checks it
+  and copies the entry to yours. Where the two disagree, the run stops and names both; remove the entry from your
+  lock to take the repository's.
+- **Cache.** Only the book's directory is kept, read-only, in `~/.scoring-stage/books/<fingerprint>/`; nothing else
+  from the repository stays on your machine. A book with a symbolic link or a submodule, a file over 1 MiB, more
+  than 8 MiB or more than 1,000 files is refused. With the book cached, `stage up` needs no network for it, and
+  checks the cached files against the fingerprint each time. Reading your config, as `stage list`, `stage hall`
+  and `stage mcp` do, never fetches.
+- **Approval.** Every book fetched by reference is approved by content before it applies, whoever named it: your
+  config, `--book`, or a repository naming a book you never installed. The prompt lists what the book does, as it
+  does for a repository's books, and one approval covers that content everywhere. stage fetches every reference in
+  your config so it can read their `[[repos]]` rules, but asks only about the books that apply. Without a terminal
+  the run stops; `--approve-repo-config` approves everything listed, and callers through `stage mcp` cannot approve.
+  Managed settings' `repo_kits = "deny"` refuses references a repository names.
 
 Books and both configs are decoded strictly: an unknown key is an error. Two books that set the same
 region, AWS default profile, secret or binding differently are an error rather than a silent winner. Your config
@@ -1268,8 +1315,11 @@ and what has not been run live yet.
 - **Books run code on your host.** A book's secret commands run on your machine as you, before the sandbox exists.
   The checks on books stop them from rebinding stage's credentials (agent, sbx built-in, GitHub and broker) and catch
   mistakes. They cannot stop a book whose secret runs a command such as `gh auth token` and whose own kit injects
-  the result on a host the book controls. Turn on only books from protected repositories whose changes are
-  reviewed; see the known gap under [Configuration and books](#configuration-and-books).
+  the result on a host the book controls. Approve a fetched book only after reading what it does, and turn on books
+  from a directory only from protected repositories whose changes are reviewed; see the known gap under
+  [Configuration and books](#configuration-and-books).
+- **Fetching books from github.com needs a live check.** Tests fetch books from local repositories standing in for
+  GitHub. Fetching a private books repository from github.com by tag and by full commit has not been checked live.
 - **Any kit can send any bound credential anywhere.** A kit that declares a credential for a service with a global
   sbx binding gets that secret injected on whatever hosts the kit names. That holds for published kits you add to
   your own config and for Docker's agent mixins that stage pins in its agent table, which are trusted by design.

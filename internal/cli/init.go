@@ -179,9 +179,9 @@ func validateInitNames(settings *config.Settings, agents, books []string) error 
 			return errorf("unknown agent %s (known agents: %s)", config.Printable(name), strings.Join(known, ", "))
 		}
 	}
-	var installed, descriptions []string
+	installed := settings.BookNames()
+	var descriptions []string
 	for _, book := range settings.Books {
-		installed = append(installed, book.Name)
 		descriptions = append(descriptions, book.Name+" - "+book.Description)
 	}
 	if len(descriptions) == 0 {
@@ -313,7 +313,7 @@ func (a *App) checkInit(settings *config.Settings, repo, staged string) (*config
 	if err != nil {
 		return fail(err)
 	}
-	approvals, err := config.RepoApprovals(composition, repository)
+	approvals, err := config.Approvals(composition, repository)
 	if err != nil {
 		return fail(err)
 	}

@@ -485,7 +485,7 @@ func TestInitDryRunRecognizesApprovalOfAnExistingKitWithoutChangingItsModes(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	approvals, err := config.RepoApprovals(composition, "example")
+	approvals, err := config.Approvals(composition, "example")
 	if err != nil {
 		t.Fatal(err)
 	}

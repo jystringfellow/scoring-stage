@@ -248,11 +248,7 @@ func (s *mcpServer) up(raw json.RawMessage) (map[string]any, error) {
 		args = append(args, "--agent="+agent)
 	}
 	for _, book := range p.Books {
-		installed := false
-		for _, b := range settings.Books {
-			installed = installed || b.Name == book
-		}
-		if !installed {
+		if !slices.Contains(settings.BookNames(), book) {
 			return nil, errorf("book must be an installed name: %s", book)
 		}
 		args = append(args, "--book="+book)

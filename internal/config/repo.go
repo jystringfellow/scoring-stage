@@ -5,9 +5,14 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/jystringfellow/scoring-stage/internal/bookref"
 )
 
-const RepoConfigPath = ".scoring-stage/config.toml"
+const (
+	RepoConfigPath = ".scoring-stage/config.toml"
+	RepoLockPath   = ".scoring-stage/" + bookref.LockName
+)
 
 var (
 	repoKeys     = []string{"agents", "books", "kits", "takes"}
@@ -15,8 +20,9 @@ var (
 )
 
 // RepoConfig is what a repository asks for. A repository is not trusted with
-// anything that acts on the host, so it may name agents, installed books and
-// kits, but not secrets, bindings, AWS profiles or book locations.
+// anything that acts on the host, so it may name agents, installed books,
+// books by reference and kits, but not secrets, bindings, AWS profiles or
+// book directories.
 type RepoConfig struct {
 	Path   string
 	dir    string
@@ -24,6 +30,7 @@ type RepoConfig struct {
 	books  []string
 	kits   []any
 	takes  []string
+	lock   *bookref.Lock
 }
 
 func LoadRepoConfig(repoDir string) (*RepoConfig, error) {
@@ -71,9 +78,18 @@ func LoadRepoConfig(repoDir string) (*RepoConfig, error) {
 		return nil, err
 	}
 	for _, name := range repo.books {
-		if !looksLikeName(strings.ReplaceAll(name, ".", "")) {
-			return nil, errorf("%s: books are named, not located: %s; install it by adding its directory to books in ~/.scoring-stage/config.toml", path, name)
+		if bookref.IsRef(name) {
+			if _, err := bookref.Parse(name); err != nil {
+				return nil, errorf("%s: %v", path, err)
+			}
+			continue
 		}
+		if !looksLikeName(strings.ReplaceAll(name, ".", "")) {
+			return nil, errorf("%s: books are named, not located: %s; name an installed book or give a reference such as github.com/example-org/books//backend/go@v1.2.0", path, Printable(name))
+		}
+	}
+	if repo.lock, err = bookref.ReadLock(filepath.Join(repoDir, RepoLockPath)); err != nil {
+		return nil, err
 	}
 	return repo, nil
 }
