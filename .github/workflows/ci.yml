@@ -37,4 +37,20 @@ jobs:
       - name: go vet
         run: go vet ./...
       - name: go test
-        run: go test ./...
+        run: go test -timeout 20m ./...
+      - name: Homebrew formula renders
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          tag=v0.0.0-ci
+          i=0
+          for target in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64; do
+            i=$((i + 1))
+            printf '%064x  stage_%s_%s.tar.gz\n' "$i" "$tag" "$target"
+          done > "$RUNNER_TEMP/SHA256SUMS"
+          packaging/homebrew/render "$tag" "$RUNNER_TEMP/SHA256SUMS" packaging/homebrew/scoring-stage.rb.tmpl > "$RUNNER_TEMP/scoring-stage.rb"
+          ruby -c "$RUNNER_TEMP/scoring-stage.rb"
+          while read -r sum archive; do
+            grep -A1 -F "/$archive\"" "$RUNNER_TEMP/scoring-stage.rb" | grep -qF "sha256 \"$sum\"" \
+              || { echo "$archive is not followed by its sha256"; exit 1; }
+          done < "$RUNNER_TEMP/SHA256SUMS"

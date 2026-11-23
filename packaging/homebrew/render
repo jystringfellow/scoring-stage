@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ $# -eq 3 ]] || { echo "usage: render TAG SHA256SUMS TEMPLATE" >&2; exit 2; }
+
+tag="$1"
+sums="$2"
+template="$3"
+
+[[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "render: bad tag: $tag" >&2; exit 1; }
+
+formula="$(cat "$template")"
+formula="${formula//\{\{VERSION\}\}/${tag#v}}"
+for target in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64; do
+  archive="stage_${tag}_${target}.tar.gz"
+  sum="$(awk -v archive="$archive" '{ name = $2; sub(/^\*/, "", name) } name == archive { print $1 }' "$sums")"
+  [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || { echo "render: no single sha256 for $archive in $sums" >&2; exit 1; }
+  placeholder="$(tr '[:lower:]' '[:upper:]' <<<"$target")_SHA256"
+  formula="${formula//\{\{${placeholder}\}\}/$sum}"
+done
+if grep -q '{{' <<<"$formula"; then
+  echo "render: placeholders left in $template:" >&2
+  grep -o '{{[^}]*}}' <<<"$formula" | sort -u >&2
+  exit 1
+fi
+printf '%s\n' "$formula"

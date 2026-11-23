@@ -33,6 +33,15 @@ mode and `stage ship --pr`) and the `aws` CLI (the AWS broker). Building `stage`
 `stage` is a single binary: the core kits are embedded in it and extracted to `~/.scoring-stage/kits/<content
 hash>/` the first time `stage up` needs them. On Windows, install and run the Linux binary inside WSL.
 
+**With Homebrew** (macOS and Linux):
+
+```sh
+brew install jystringfellow/tap/scoring-stage
+```
+
+The formula installs `stage` from the release archives below and checks each against its sha256. sbx, the Docker
+Sandboxes command stage drives, is installed separately; `stage setup` checks this machine.
+
 **From a release.** [Releases](https://github.com/jystringfellow/scoring-stage/releases) carry a tar.gz for
 `darwin_amd64`, `darwin_arm64`, `linux_amd64` and `linux_arm64`, each holding `stage`, `LICENSE` and `README.md`,
 plus a `SHA256SUMS` file. Download with curl rather than a browser, so macOS does not quarantine the binary:
@@ -1507,6 +1516,16 @@ commit that is not on `main`. A build job with read-only permissions then runs t
 with the tag as `stage version` and writes `SHA256SUMS`. A separate release job attests the archives and creates
 the GitHub release with generated notes. A tag with a hyphen, such as `v0.1.0-rc.1`, makes a prerelease. See
 [VERIFICATION.md](VERIFICATION.md) for its runs.
+
+The build job also renders the Homebrew formula from `packaging/homebrew/scoring-stage.rb.tmpl` and the
+`SHA256SUMS` it wrote, and fails if a placeholder is left; CI renders it with dummy values on every change. After
+the release, a `homebrew` job commits the formula to `Formula/scoring-stage.rb` in
+[jystringfellow/homebrew-tap](https://github.com/jystringfellow/homebrew-tap) as "scoring-stage <tag>", only if it
+changed. It uses the repository secret `HOMEBREW_TAP_TOKEN`: a fine-grained token whose only repository is the tap,
+with Contents read and write and nothing else. The job has no permissions of its own on this repository, and the
+token reaches git only through a credential helper in its environment, never on a command line. Without the secret
+the job says it is skipping the tap and succeeds. A prerelease tag publishes the formula too, so the tap follows
+the newest tag.
 
 The tag and `main` checks catch mistakes, not a malicious writer: a tag push runs `release.yml` as it exists at
 the tagged commit, so anyone who can push a tag can also change the checks. The real controls are branch
