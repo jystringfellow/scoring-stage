@@ -1354,10 +1354,10 @@ and what has not been run live yet.
   the result on a host the book controls. Approve a fetched book only after reading what it does, and turn on books
   from a directory only from protected repositories whose changes are reviewed; see the known gap under
   [Configuration and books](#configuration-and-books).
-- **Fetching a book by tag from github.com needs a live check.** Tests fetch books from local repositories standing
-  in for GitHub. Fetching from a private github.com repository by full commit was checked on 2026-11-22
-  ([VERIFICATION.md](VERIFICATION.md)); a tag, a book's own `<directory>/<version>` tag, and a tag moved on
-  github.com, have not been.
+- **Some ways of fetching a book from github.com need a live check.** Tests fetch books from local repositories
+  standing in for GitHub. Fetching from a private github.com repository was checked by full commit on 2026-11-22
+  and by a book's own lightweight `<directory>/<version>` tag on 2026-11-23 ([VERIFICATION.md](VERIFICATION.md));
+  the plain-tag fallback, an annotated tag, and a tag moved on github.com have not been.
 - **Any kit can send any bound credential anywhere.** A kit that declares a credential for a service with a global
   sbx binding gets that secret injected on whatever hosts the kit names. That holds for published kits you add to
   your own config and for Docker's agent mixins that stage pins in its agent table, which are trusted by design.

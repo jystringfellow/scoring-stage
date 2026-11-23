@@ -39,8 +39,9 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
 - Whether `sbx env create --force` prints the plan it approves.
 - Where sbx keeps `credentials.yaml`, beyond `~/.config/sbx/credentials.yaml` on macOS. `stage setup`'s bindings
   audit also looks under `$XDG_CONFIG_HOME` and `%APPDATA%`, inferred from strings in the sbx binary.
-- Fetching a book by tag from github.com, both a book's own `<directory>/<version>` tag and the plain fallback, and
-  a moved tag on github.com. Fetching by full commit was checked on 2026-11-22.
+- Fetching a book from github.com by a plain tag (the fallback when a book has no tag of its own), by an annotated
+  tag, and after a tag moved on github.com. A book's own lightweight `<directory>/<version>` tag was checked on
+  2026-11-23, and a full commit on 2026-11-22.
 - sbx's kit loader: which files it reads from a kit directory, and whether it matches keys case-insensitively.
   stage checks `.yaml`, `.yml` and `.json` files at any depth except under `files/`, and refuses keys that differ
   from `capabilities`, `extends`, `type`, `config`, `service`, `inject` or `domain` only in case.
@@ -609,3 +610,22 @@ Observed:
 - A version that names only a branch was refused as a branch, and a directory missing at that commit was refused
   naming the directory.
 - Not checked: a tag, because that repository had none.
+
+## 2026-11-23: books fetched by their own tags from a private github.com repository
+
+- **sbx:** not used; the check is of stage's tag resolution, fetch, cache and lock, which run on the host.
+- **stage:** main at 4f4c5e5, which resolves a book's own `<directory>/<version>` tag before the plain tag. The
+  check was a throwaway test in `internal/bookref`, removed afterwards.
+- **Credentials:** real: the host's own git credentials for github.com, which a private repository needs. A temporary
+  `STAGE_HOME` held the lock and cache; no secret was set and no sandbox was created.
+- **Restoration:** the temporary `STAGE_HOME` and the throwaway test were removed. Nothing outside them was written.
+
+Observed:
+
+- Two books in a private books repository, each named as `//<directory>@v0.1.0`, each with its own lightweight
+  `<directory>/v0.1.0` tag and no plain `v0.1.0` tag. Both resolved to the book's own tag (`Fetched.Tag` was
+  `<directory>/v0.1.0`), were fetched, cached, recorded in `stage.lock`, and opened again from the cache at the same
+  commit.
+- A version with neither tag was refused: `has neither tag <directory>/v9.9.9 nor tag v9.9.9; nothing was
+  changed`.
+- Not checked: the plain-tag fallback, an annotated tag, and a tag moved on github.com.
