@@ -17,8 +17,9 @@ the host, compute a secret, or choose which sandbox gets which grant. Those are 
 | sbx version floor and the global deny-all check | `stage` |
 | GitHub access for the sandbox (`[github] mode`: a fine-grained token per owner, a GitHub App token refreshed on the host, the gh login, or none) | `stage`, as the `github` secret from a host command; sbx cannot pick a token per owner or refresh one |
 | Logins the proxy cannot hold (agy) | `stage`'s opt-in `copy_logins`; see below |
+| Fetching, locking and caching books named by reference (`github.com/owner/repo//dir@version`) | `stage`, with the host's git and the user's credentials, behind `internal/bookref`; sbx has no notion of a book |
 | Which agents, books and kits a sandbox gets, and what a book or repository may set (local kits only, no reserved services) | `stage`; sbx has no notion of who may ask for what |
-| Approval of a repository's kits and books | `stage`'s trust store, by content fingerprint. Callers through `stage mcp` and anything inside a sandbox cannot record an approval: only `stage up` and `stage approve` on the command line write the store. That is a limit on those callers, not on the file, which is plain JSON in the user's home directory: a process with a host shell can write it, point `STAGE_HOME` at another one, answer the prompt through a pseudo-terminal or pass `--approve-repo-config` |
+| Approval of a repository's kits and books, and of every book fetched by reference | `stage`'s trust store, by content fingerprint. Callers through `stage mcp` and anything inside a sandbox cannot record an approval: only `stage up` and `stage approve` on the command line write the store. That is a limit on those callers, not on the file, which is plain JSON in the user's home directory: a process with a host shell can write it, point `STAGE_HOME` at another one, answer the prompt through a pseudo-terminal or pass `--approve-repo-config` |
 | Organisation policy (agents, GitHub modes, AWS profiles, repository kits, `copy_logins`, gear, the global policy override) | `stage`'s managed settings |
 | Keeping files from a sandbox before it is removed (takes) | `stage`: sbx has no copy-out, so stage streams a tar through `sbx exec` and writes only files and directories under `~/.scoring-stage/takes/` |
 | The user's own files in every sandbox (gear) | `stage`, from the user's config only: sbx has no copy-in for an existing sandbox and a kit cannot read the host, so stage streams a tar through `sbx exec -i` after `sbx env create`, as it does a saved login |
@@ -47,9 +48,10 @@ Configuration is split between the user's directory (`~/.scoring-stage/`) and th
 (`.scoring-stage/`): the user's config is trusted with anything that acts on the host, and the repository's travels
 with the code so a clone says which agents and kits its work needs. (The split follows kapellmeister's.) The
 repository's config is input from whoever can commit to it, so it may only ask for agents by name, things the user has already
-installed (books, by name), and its own kits. Kits and books can widen egress, send credentials and run host
+installed (books, by name), books by pinned reference, and its own kits. Kits and books can widen egress, send credentials and run host
 commands, so a repository's kits must be link-free `./` directories in the repository, and its kits and the books
-it turns on are used only after the user approves each one by content: a local kit's or book's files. Books and
+it turns on are used only after the user approves each one by content: a local kit's or book's files. Every book
+fetched by reference is approved the same way, whoever named it. Books and
 repository configs cannot name published kits, because a kit decides where a credential is injected and a published
 kit cannot be inspected; their local kits are checked for the credentials they declare. Secrets run commands on the host, bindings
 and AWS profiles hand out credentials, and a book location would let a repository supply its own host commands, so

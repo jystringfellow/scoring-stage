@@ -628,7 +628,7 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 		return 0, err
 	}
 	config.AddStageBindings(auditExpected, composition.Bindings, "this sandbox")
-	if err := a.checkRepoApprovals(settings.Home, composition, github, *approveRepoConfig, *plan); err != nil {
+	if err := a.checkApprovals(settings.Home, composition, github, *approveRepoConfig, *plan); err != nil {
 		return 0, err
 	}
 	for _, warning := range composition.Warnings {
@@ -706,7 +706,7 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	return 0, nil
 }
 
-func (a *App) checkRepoApprovals(home string, composition *config.Composition, github string, approve, plan bool) error {
+func (a *App) checkApprovals(home string, composition *config.Composition, github string, approve, plan bool) error {
 	var cleared bool
 	var err error
 	if !a.approvalReadOnly {
@@ -718,7 +718,7 @@ func (a *App) checkRepoApprovals(home string, composition *config.Composition, g
 	if cleared {
 		a.warn("stage now stores approvals as JSON; earlier approvals were cleared, and you'll be asked again")
 	}
-	approvals, err := config.RepoApprovals(composition, github)
+	approvals, err := config.Approvals(composition, github)
 	if err != nil {
 		return err
 	}
@@ -750,9 +750,28 @@ func (e *approvalNeeded) Error() string {
 }
 
 func printApprovals(w io.Writer, missing []config.Approval) {
-	fmt.Fprintf(w, "stage: the repository's %s asks for kits, books or takes you have not approved. They can widen the\n"+
-		"  sandbox's network access, send credentials, run commands or copy files out of the sandbox. Review them before approving:\n", config.RepoConfigPath)
+	var fromRepository, fetched []config.Approval
 	for _, approval := range missing {
+		if approval.FromRepository {
+			fromRepository = append(fromRepository, approval)
+		} else {
+			fetched = append(fetched, approval)
+		}
+	}
+	if len(fromRepository) > 0 {
+		fmt.Fprintf(w, "stage: the repository's %s asks for kits, books or takes you have not approved. They can widen the\n"+
+			"  sandbox's network access, send credentials, run commands or copy files out of the sandbox. Review them before approving:\n", config.RepoConfigPath)
+		listApprovals(w, fromRepository)
+	}
+	if len(fetched) > 0 {
+		fmt.Fprintf(w, "stage: these books are fetched by reference and you have not approved them. A book can widen the sandbox's\n"+
+			"  network access, send credentials and run commands on this machine. Review them before approving:\n")
+		listApprovals(w, fetched)
+	}
+}
+
+func listApprovals(w io.Writer, approvals []config.Approval) {
+	for _, approval := range approvals {
 		fmt.Fprintf(w, "  - %s\n", config.Printable(approval.Label))
 		for _, detail := range approval.Details {
 			fmt.Fprintf(w, "      %s\n", config.Printable(detail))

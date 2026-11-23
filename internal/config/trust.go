@@ -16,25 +16,27 @@ import (
 	"syscall"
 )
 
-// Approval is something a repository asked for that widens its sandbox: one
-// of its kits, or an installed book it turned on.
+// Approval is something that widens a sandbox and needs the user's consent:
+// a kit or takes the repository asked for, an installed book it turned on, or
+// any book fetched by reference.
 type Approval struct {
-	Label       string
-	Fingerprint string
-	Details     []string
+	Label          string
+	Fingerprint    string
+	Details        []string
+	FromRepository bool
 }
 
 func trustFile(home string) string { return filepath.Join(home, "trusted-kits") }
 
-// RepoApprovals lists what the repository's config asked for that needs the user's approval.
-func RepoApprovals(composition *Composition, repository string) ([]Approval, error) {
+// Approvals lists what this sandbox would get that needs the user's approval.
+func Approvals(composition *Composition, repository string) ([]Approval, error) {
 	var approvals []Approval
 	for _, kit := range composition.RepoKits {
 		fingerprint, err := KitFingerprint(kit)
 		if err != nil {
 			return nil, err
 		}
-		approval := Approval{Label: "kit " + kit.Source, Fingerprint: fingerprint}
+		approval := Approval{Label: "kit " + kit.Source, Fingerprint: fingerprint, FromRepository: true}
 		if kit.IsLocal() {
 			approval.Details = SummarizeKit(kit.Source)
 		} else {
@@ -42,15 +44,23 @@ func RepoApprovals(composition *Composition, repository string) ([]Approval, err
 		}
 		approvals = append(approvals, approval)
 	}
+	fromRepository := map[string]bool{}
 	for _, book := range composition.RepoBooks {
+		fromRepository[book.Path] = true
+		if book.Ref != "" {
+			continue
+		}
 		fingerprint, err := hashTree("book\x00"+book.Name, book.Path, true)
 		if err != nil {
 			return nil, err
 		}
-		approvals = append(approvals, Approval{Label: "book " + book.Name + " (" + book.Path + ")", Fingerprint: fingerprint, Details: summarizeBook(composition.agents, book)})
+		approvals = append(approvals, Approval{Label: "book " + book.Name + " (" + book.Path + ")", Fingerprint: fingerprint, Details: summarizeBook(composition.agents, book), FromRepository: true})
+	}
+	for _, book := range composition.FetchedBooks {
+		approvals = append(approvals, Approval{Label: "book " + book.Name + " (" + book.Ref + ")", Fingerprint: book.fingerprint, Details: summarizeBook(composition.agents, book), FromRepository: fromRepository[book.Path]})
 	}
 	if len(composition.RepoTakes) > 0 {
-		approvals = append(approvals, Approval{Label: "takes for " + repository, Fingerprint: takesFingerprint(repository, composition.RepoTakes), Details: takeDetails(composition.RepoTakes)})
+		approvals = append(approvals, Approval{Label: "takes for " + repository, Fingerprint: takesFingerprint(repository, composition.RepoTakes), Details: takeDetails(composition.RepoTakes), FromRepository: true})
 	}
 	for _, approval := range approvals {
 		if HasControl(approval.Label) {

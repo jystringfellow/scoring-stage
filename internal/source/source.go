@@ -43,6 +43,24 @@ var hardened = []string{
 	"-c", "maintenance.auto=false",
 }
 
+func GitBytes(repo string, args ...string) ([]byte, error) {
+	command := exec.Command("git", append(append(append([]string{}, hardened...), "-C", repo), args...)...)
+	var stdout, stderr bytes.Buffer
+	command.Stdout, command.Stderr = &stdout, &stderr
+	if err := command.Run(); err != nil {
+		return nil, gitFailure(repo, args, stderr.String())
+	}
+	return stdout.Bytes(), nil
+}
+
+func gitFailure(repo string, args []string, stderr string) error {
+	message := fmt.Sprintf("git %s failed in %s", strings.Join(args[:min(2, len(args))], " "), repo)
+	if detail := sbx.LastLine(stderr); detail != "" {
+		message += ": " + detail
+	}
+	return &Error{message}
+}
+
 func git(capture bool, stdin io.Reader, repo string, args []string) (string, error) {
 	command := exec.Command("git", append(append(append([]string{}, hardened...), "-C", repo), args...)...)
 	command.Stdin = stdin
@@ -53,11 +71,7 @@ func git(capture bool, stdin io.Reader, repo string, args []string) (string, err
 		command.Stdout, command.Stderr = os.Stdout, os.Stderr
 	}
 	if err := command.Run(); err != nil {
-		message := fmt.Sprintf("git %s failed in %s", strings.Join(args[:min(2, len(args))], " "), repo)
-		if detail := sbx.LastLine(stderr.String()); detail != "" {
-			message += ": " + detail
-		}
-		return "", &Error{message}
+		return "", gitFailure(repo, args, stderr.String())
 	}
 	return strings.TrimSpace(stdout.String()), nil
 }

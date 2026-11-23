@@ -81,6 +81,7 @@ type Composition struct {
 	Books             []string
 	RepoKits          []Kit
 	RepoBooks         []Book
+	FetchedBooks      []Book
 	Takes             []string
 	RepoTakes         []string
 	Warnings          []string
@@ -109,6 +110,9 @@ type Book struct {
 	Name        string
 	Description string
 	Path        string
+	Ref         string
+	Alias       string
+	fingerprint string
 	agents      []any
 	kits        []any
 	aws         aws
@@ -123,6 +127,7 @@ type Settings struct {
 	Managed    *Managed
 	Agents     Agents
 	Books      []Book
+	bookRefs   []bookEntry
 	base       any
 	agents     []any
 	kits       []any
@@ -347,21 +352,8 @@ func LoadSettings(home string) (*Settings, error) {
 	if settings.Hall, err = decodeHall(data["hall"], path); err != nil {
 		return nil, err
 	}
-	bookPaths, err := optionalStrings(data, "books", path)
-	if err != nil {
+	if err := settings.decodeBooks(data["books"], path); err != nil {
 		return nil, err
-	}
-	installed := map[string]string{}
-	for _, bookPath := range bookPaths {
-		book, err := LoadBook(settings.Agents, bookDirectory(home, bookPath))
-		if err != nil {
-			return nil, err
-		}
-		if other, taken := installed[book.Name]; taken {
-			return nil, errorf("%s: books %s and %s are both named %s", path, other, book.Path, book.Name)
-		}
-		installed[book.Name] = book.Path
-		settings.Books = append(settings.Books, *book)
 	}
 	return settings, nil
 }
@@ -587,7 +579,7 @@ type Selection struct {
 
 func Compose(settings *Settings, selection Selection) (*Composition, error) {
 	agents := settings.Agents
-	active, err := activeBooks(settings, selection)
+	active, repoOnly, err := activeBooks(settings, selection)
 	if err != nil {
 		return nil, err
 	}
@@ -843,7 +835,7 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 		Secrets:           secrets,
 		Bindings:          bindings,
 		RepoKits:          repoKits,
-		RepoBooks:         booksOnlyTheRepoAskedFor(active, selection),
+		RepoBooks:         repoOnly,
 		Warnings:          warnings,
 		agents:            agents,
 	}
@@ -867,8 +859,7 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 			selection.Repo.Path, settings.Managed.where(), RepoKitsDeny)
 	}
 	if settings.Managed.RepoKitsDenied() && (len(composition.RepoKits) > 0 || len(composition.RepoBooks) > 0) {
-		return nil, errorf("%s: the repository's kits and books are refused by %s (repo_kits = %q); ask for books with --book",
-			selection.Repo.Path, settings.Managed.where(), RepoKitsDeny)
+		return nil, repoKitsRefused(settings, selection.Repo)
 	}
 	if base != nil {
 		composition.Base = *base
@@ -878,6 +869,9 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 	}
 	for _, book := range active {
 		composition.Books = append(composition.Books, book.Name)
+		if book.Ref != "" {
+			composition.FetchedBooks = append(composition.FetchedBooks, book)
+		}
 	}
 	for _, kit := range composition.AllKits() {
 		if kit.IsLocal() {
@@ -891,69 +885,6 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 		}
 	}
 	return composition, nil
-}
-
-// activeBooks returns the installed books this sandbox asked for, by --book,
-// by the repository's config or by a [[repos]] match, followed by books given
-// as a directory on the command line.
-func activeBooks(settings *Settings, selection Selection) ([]Book, error) {
-	installed := map[string]bool{}
-	var names []string
-	for _, book := range settings.Books {
-		installed[book.Name] = true
-		names = append(names, book.Name)
-	}
-	installedList := strings.Join(names, ", ")
-	if installedList == "" {
-		installedList = "none"
-	}
-	wanted := map[string]bool{}
-	var adhoc []Book
-	for _, ref := range selection.Books {
-		if looksLikeName(strings.ReplaceAll(ref, ".", "")) && !strings.HasPrefix(ref, ".") {
-			if !installed[ref] {
-				return nil, errorf("--book %s: no installed book has that name (installed: %s); pass the book's directory or add it to books in config.toml", ref, installedList)
-			}
-			wanted[ref] = true
-			continue
-		}
-		book, err := LoadBook(settings.Agents, ExpandUser(ref))
-		if err != nil {
-			return nil, err
-		}
-		adhoc = append(adhoc, *book)
-	}
-	if repo := selection.Repo; repo != nil {
-		for _, name := range repo.books {
-			if !installed[name] {
-				return nil, errorf("%s asks for book %s, which is not installed (installed: %s); add its directory to books in ~/.scoring-stage/config.toml", repo.Path, name, installedList)
-			}
-			wanted[name] = true
-		}
-	}
-	var active []Book
-	seen := map[string]string{}
-	for _, book := range settings.Books {
-		matched := false
-		for _, r := range book.repos {
-			matched = matched || matchesAny(selection.RepoNames, r.patterns)
-		}
-		if wanted[book.Name] || matched {
-			active = append(active, book)
-			seen[book.Name] = book.Path
-		}
-	}
-	for _, book := range adhoc {
-		if path, taken := seen[book.Name]; taken {
-			if path == book.Path {
-				continue
-			}
-			return nil, errorf("--book %s is named %s, like the installed book at %s", book.Path, book.Name, path)
-		}
-		active = append(active, book)
-		seen[book.Name] = book.Path
-	}
-	return active, nil
 }
 
 func kitSource(entry any) string {
@@ -983,28 +914,6 @@ func refuseLinks(dir, owner string) error {
 		}
 		return nil
 	})
-}
-
-// booksOnlyTheRepoAskedFor returns the active books that are on only because
-// the repository's config named them, rather than --book or a [[repos]] rule.
-func booksOnlyTheRepoAskedFor(active []Book, selection Selection) []Book {
-	if selection.Repo == nil {
-		return nil
-	}
-	var books []Book
-	for _, book := range active {
-		if !contains(selection.Repo.books, book.Name) || contains(selection.Books, book.Name) || contains(selection.Books, book.Path) {
-			continue
-		}
-		matched := false
-		for _, r := range book.repos {
-			matched = matched || matchesAny(selection.RepoNames, r.patterns)
-		}
-		if !matched {
-			books = append(books, book)
-		}
-	}
-	return books
 }
 
 func (a Agents) parse(entry any, dir, owner string) (Kit, error) {

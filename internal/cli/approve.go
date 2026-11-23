@@ -75,7 +75,7 @@ func (a *App) cmdApprove(args []string, home string) (int, error) {
 	if cleared {
 		a.warn("stage now stores approvals as JSON; earlier approvals were cleared, and you'll be asked again")
 	}
-	approvals, err := config.RepoApprovals(composition, github)
+	approvals, err := config.Approvals(composition, github)
 	if err != nil {
 		return 0, err
 	}

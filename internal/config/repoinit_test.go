@@ -71,7 +71,7 @@ func TestAScaffoldedKitIsAcceptedByTheRepositoryKitChecksAndGrantsNothing(t *tes
 	if !reflect.DeepEqual(summary, []string{"no capabilities found; read the kit's files before approving"}) {
 		t.Fatalf("summary = %v", summary)
 	}
-	approvals, err := RepoApprovals(composition, "example")
+	approvals, err := Approvals(composition, "example")
 	if err != nil || len(approvals) != 1 {
 		t.Fatalf("approvals = %v, %v", approvals, err)
 	}
