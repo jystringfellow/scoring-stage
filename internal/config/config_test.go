@@ -132,10 +132,10 @@ func TestCopilotSecretComesFromGhAndGitHubFromTheOwnersToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := composition.Secrets["copilot"]; !reflect.DeepEqual(got, map[string]any{"command": "/opt/homebrew/bin/gh auth token"}) {
+	if got := composition.Secrets["copilot"]; !reflect.DeepEqual(got, map[string]any{"command": "/opt/homebrew/bin/gh auth token", "refresh": "30m"}) {
 		t.Errorf("copilot = %v", got)
 	}
-	if got := composition.Secrets["github"]; !reflect.DeepEqual(got, map[string]any{"command": "/bin/cat " + token}) {
+	if got := composition.Secrets["github"]; !reflect.DeepEqual(got, map[string]any{"command": "/bin/cat " + token, "refresh": "30m"}) {
 		t.Errorf("github = %v", got)
 	}
 	if composition.Bindings["github"] == nil {
@@ -166,7 +166,7 @@ func TestGhModeSendsTheGhLoginAsTheGitHubSecret(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
 	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "[github]\nmode = \"gh\"\n")
 	composition := composeWith(t, load(t, home), Selection{Gh: "/usr/bin/gh", GitHubOwner: "acme"})
-	if got := composition.Secrets["github"]; !reflect.DeepEqual(got, map[string]any{"command": "/usr/bin/gh auth token"}) {
+	if got := composition.Secrets["github"]; !reflect.DeepEqual(got, map[string]any{"command": "/usr/bin/gh auth token", "refresh": "30m"}) {
 		t.Errorf("github = %v", got)
 	}
 }

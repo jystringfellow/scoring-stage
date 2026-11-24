@@ -497,3 +497,16 @@ func TestGhInAnAgentsSecretIsSubstitutedShellQuotedAndItsAbsenceIsReported(t *te
 		t.Errorf("warned although the user supplies the secret: %v", composition.Warnings)
 	}
 }
+
+func TestAnAgentRepeatingTheCopilotSecretWithoutRefreshIsTheSameSecretAndKeepsTheRefresh(t *testing.T) {
+	home := homeWith(t, "[agent.example]\nkit = \"docker.io/org/kit:1\"\n[agent.example.secrets.copilot]\ncommand = \"{gh} auth token\"\n")
+	for _, chosen := range [][]string{{"copilot", "example"}, {"example", "copilot"}} {
+		composition := composeWith(t, load(t, home), Selection{Agents: chosen, Gh: "/usr/bin/gh"})
+		if got := composition.Secrets["copilot"]; !reflect.DeepEqual(got, map[string]any{"command": "/usr/bin/gh auth token", "refresh": HostLoginSecretRefresh}) {
+			t.Errorf("%v: copilot = %v", chosen, got)
+		}
+	}
+	other := homeWith(t, "[agent.example]\nkit = \"docker.io/org/kit:1\"\n[agent.example.secrets.copilot]\ncommand = \"{gh} auth token\"\nrefresh = \"1h\"\n")
+	_, err := Compose(load(t, other), Selection{Agents: []string{"copilot", "example"}, Gh: "/usr/bin/gh"})
+	expectError(t, err, "agent example sets secret copilot differently from agent copilot")
+}

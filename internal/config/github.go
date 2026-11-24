@@ -229,9 +229,9 @@ func (s *Settings) gitHubCredential(selection Selection, secrets, bindings map[s
 	}
 	switch s.GitHubMode() {
 	case GitHubFineGrained:
-		secrets[GitHubService] = map[string]any{"command": "/bin/cat " + ShellQuote(s.GitHubTokenFile(selection.GitHubOwner))}
+		secrets[GitHubService] = map[string]any{"command": "/bin/cat " + ShellQuote(s.GitHubTokenFile(selection.GitHubOwner)), "refresh": HostLoginSecretRefresh}
 	case GitHubGh:
-		secrets[GitHubService] = map[string]any{"command": ShellQuote(selection.Gh) + " auth token"}
+		secrets[GitHubService] = map[string]any{"command": ShellQuote(selection.Gh) + " auth token", "refresh": HostLoginSecretRefresh}
 	case GitHubApp:
 		secret, err := s.gitHubAppSecret()
 		if err != nil {

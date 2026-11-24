@@ -15,6 +15,7 @@ const (
 	GitHubApp = "app"
 
 	GitHubAppSecretRefresh = "30m"
+	HostLoginSecretRefresh = "30m"
 )
 
 var (

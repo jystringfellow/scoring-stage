@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path"
@@ -789,6 +790,7 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 
 	agentBinding, agentSecretOwner := map[string]string{}, map[string]string{}
 	agentBindings, agentSecrets := map[string]any{}, map[string]any{}
+	fromAgent := map[string]bool{}
 	var warnings []string
 	for _, name := range agentNames {
 		spec := agents.specs[name]
@@ -812,8 +814,16 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 				continue
 			}
 			if other, taken := agentSecretOwner[service]; taken {
-				if !reflect.DeepEqual(agentSecrets[service], spec.secrets[service]) {
+				if !sameAgentSecret(agentSecrets[service], spec.secrets[service]) {
 					return nil, errorf("agent %s sets secret %s differently from agent %s", name, service, other)
+				}
+				if !hasRefresh(agentSecrets[service]) && hasRefresh(spec.secrets[service]) {
+					agentSecrets[service] = spec.secrets[service]
+					if fromAgent[service] {
+						if secret, usable := agentSecret(spec.secrets[service], selection.Gh); usable {
+							secrets[service] = secret
+						}
+					}
 				}
 				continue
 			}
@@ -822,7 +832,7 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 				continue
 			}
 			if secret, usable := agentSecret(spec.secrets[service], selection.Gh); usable {
-				secrets[service] = secret
+				secrets[service], fromAgent[service] = secret, true
 			} else {
 				warnings = append(warnings, fmt.Sprintf("agent %s's secret %s needs the gh CLI, which was not found, so the sandbox has no %s secret", name, service, service))
 			}
@@ -1294,4 +1304,27 @@ func SaveAgents(home string, names []string) error {
 		return err
 	}
 	return os.WriteFile(path, append([]byte(line), existing...), 0o600)
+}
+
+func hasRefresh(secret any) bool {
+	table, _ := secret.(map[string]any)
+	_, set := table["refresh"]
+	return set
+}
+
+func sameAgentSecret(a, b any) bool {
+	first, firstTable := a.(map[string]any)
+	second, secondTable := b.(map[string]any)
+	if !firstTable || !secondTable {
+		return reflect.DeepEqual(a, b)
+	}
+	if hasRefresh(first) && hasRefresh(second) && !reflect.DeepEqual(first["refresh"], second["refresh"]) {
+		return false
+	}
+	without := func(table map[string]any) map[string]any {
+		copied := maps.Clone(table)
+		delete(copied, "refresh")
+		return copied
+	}
+	return reflect.DeepEqual(without(first), without(second))
 }
