@@ -75,7 +75,10 @@ by content, whoever named it. A book from a local directory keeps that earlier b
   with two values is an error naming both places, the rule secrets and bindings already follow, and a plain naming
   adds nothing, so a shared book can leave an argument for each repository to set. The approval fingerprint joins
   the content fingerprint and the arguments, so arguments are approved with the book and listed in the prompt with
-  where each came from; a book named plainly keeps its fingerprint, approvals and lock entry. The lock records only
+  where each came from; a book named plainly keeps its fingerprint, approvals and lock entry. Arguments a repository
+  sets are asked about whoever else turned the book on, and `repo_kits = "deny"` refuses them. A book's own value
+  for an argument is a default its callers may replace within the kit's pattern; an author who means it as a limit
+  narrows the pattern. The lock records only
   content, which arguments do not change.
 - **Trust levels.** Each book is `local` (a directory) or `pinned` (fetched, locked, approved), and both always
   ask. `trusted` (fetched, locked and signed by a publisher that managed settings name) is reserved: it may later
@@ -111,7 +114,9 @@ Evidence: `TestALockedReferenceKeepsItsCommitWhenTheTagMoves`,
 `TestAPlainTagCoversABookWithoutItsOwnTagButAnotherBooksTagDoesNot`,
 `TestBookArgumentsMustBeArgumentsTheKitDeclaresWithAPatternTheWholeValueMatches`,
 `TestArgumentsForOneBookFromTwoPlacesMergeAndOneArgumentGivenTwoValuesIsAnErrorNamingBoth`,
-`TestARepositorysArgumentsForABookByReferenceAreApprovedThenReachTheEnvFileAndTheLockKeepsThePlainReference`.
+`TestARepositorysArgumentsForABookByReferenceAreApprovedThenReachTheEnvFileAndTheLockKeepsThePlainReference`,
+`TestARepositorysArgumentsNeedApprovalEvenForABookYouAlsoTurnedOn`,
+`TestRepoKitsDenyRefusesARepositorysArgumentsForABookYouAlsoTurnedOn`.
 Checked live against a private github.com repository: a full commit (2026-11-22) and a book's own lightweight tag
 (2026-11-23). The plain-tag fallback, an annotated tag and a moved tag have not been; the README lists them under
 Limitations.

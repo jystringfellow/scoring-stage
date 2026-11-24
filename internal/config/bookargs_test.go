@@ -232,3 +232,47 @@ func TestARepositoryInitAsksForABookTheConfigNamesWithArguments(t *testing.T) {
 		t.Errorf("missing = %v", missing)
 	}
 }
+
+func argsBookTurnedOnTwoWays(t *testing.T) (*Settings, map[string]Selection) {
+	t.Helper()
+	dir := t.TempDir()
+	path := argsBook(t, dir)
+	testutil.WriteFile(t, filepath.Join(path, "book.toml"), "name = \"tool\"\nkits = [\"./kits/tool\"]\n[[repos]]\nmatch = [\"example-org/service\"]\n")
+	home := filepath.Join(dir, "home")
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), fmt.Sprintf("books = [%q]\n", path))
+	repo := repoNaming(t, `[{source = "tool", args = {tool = {channel = "11.0"}}}]`)
+	return load(t, home), map[string]Selection{
+		"--book":     {Books: []string{"tool"}, Repo: repo},
+		"repos rule": {RepoNames: []string{"example-org/service"}, Repo: repo},
+	}
+}
+
+func TestARepositorysArgumentsNeedApprovalEvenForABookYouAlsoTurnedOn(t *testing.T) {
+	settings, selections := argsBookTurnedOnTwoWays(t)
+	for how, selection := range selections {
+		composition := composeWith(t, settings, selection)
+		if got := kitArgs(t, composition, "tool"); !reflect.DeepEqual(got, map[string]any{"channel": "11.0"}) {
+			t.Fatalf("%s: tool kit args = %v", how, got)
+		}
+		approval := bookApproval(t, composition, "tool")
+		if !approval.FromRepository || !strings.Contains(strings.Join(approval.Details, "\n"), "argument tool.channel = 11.0 (from "+selection.Repo.Path+")") {
+			t.Errorf("%s: approval does not ask about the repository's argument: %+v", how, approval)
+		}
+	}
+}
+
+func TestRepoKitsDenyRefusesARepositorysArgumentsForABookYouAlsoTurnedOn(t *testing.T) {
+	managedFiles(t, "repo_kits = \"deny\"\n")
+	settings, selections := argsBookTurnedOnTwoWays(t)
+	for how, selection := range selections {
+		_, err := Compose(settings, selection)
+		if err == nil || !strings.Contains(err.Error(), "refused by") {
+			t.Errorf("%s: error %v, want the repository's arguments refused", how, err)
+		}
+		plain := selection
+		plain.Repo = repoNaming(t, `["tool"]`)
+		if _, err := Compose(settings, plain); err != nil {
+			t.Errorf("%s: a plain naming of a book you turned on is refused: %v", how, err)
+		}
+	}
+}

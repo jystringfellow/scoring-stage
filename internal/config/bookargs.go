@@ -265,6 +265,15 @@ func checkKitArgs(dir, name string, values map[string]string, owner string) erro
 	return nil
 }
 
+func (b Book) hasArgsFrom(place string) bool {
+	for _, where := range b.argPlaces {
+		if where == place {
+			return true
+		}
+	}
+	return false
+}
+
 func (b Book) argDetails() []string {
 	var details []string
 	for _, kit := range slices.Sorted(maps.Keys(b.args)) {

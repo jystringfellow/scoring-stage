@@ -1202,13 +1202,18 @@ another book's name, and two books with the same name are an error wherever they
   - The kit must declare the argument with a `pattern`, and the whole value must match it. An unknown kit or
     argument, an argument without a pattern, or a value that does not match is an error before stage asks for
     approval or creates a sandbox.
-  - A value overrides the book's own value for that argument; the kit's default applies to the rest.
+  - A book's own value for an argument, set in its `kits` entry, is a default that whoever names the book can
+    replace within the kit's pattern; the kit's default applies to the rest. A book author who means a value as a
+    limit narrows the kit's pattern instead.
   - The same book named in two places gets the arguments of both, and a plain naming adds none. One argument given
     two values is an error naming both places.
   - `--book` takes no arguments.
   - The approval covers the book together with its arguments, and the prompt lists each argument with where it came
     from, so a change to one asks again. `stage book update` and `stage book lock` approve the book without
     arguments, so the first `stage up` with them asks once more.
+  - Arguments a repository sets are always asked about, even for a book you turned on yourself with `--book` or a
+    `[[repos]]` rule, and managed settings' `repo_kits = "deny"` refuses them. Arguments from your own config, or
+    from includes in your own directory book, are not asked about, as the rest of your config is not.
   - The lock is unchanged: it records the reference and the book's content, which arguments do not change. A book
     named plainly behaves as before, and its earlier approvals and lock entries still hold.
 - **Commands.** `update` and `lock` run only in a terminal, and callers through `stage mcp` cannot use them.

@@ -45,7 +45,10 @@ func Approvals(composition *Composition, repository string) ([]Approval, error) 
 		approvals = append(approvals, approval)
 	}
 	fromRepository := map[string]bool{}
-	for _, book := range composition.RepoBooks {
+	for _, book := range append(append([]Book{}, composition.RepoBooks...), composition.repoArgued...) {
+		if fromRepository[book.Path] {
+			continue
+		}
 		fromRepository[book.Path] = true
 		if book.Ref != "" {
 			continue
