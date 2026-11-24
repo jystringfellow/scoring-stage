@@ -81,6 +81,17 @@ if [ "${FAKE_SBX_NOISE:-}" = 1 ]; then
   case "$1 $2" in "env create"|"env rm") echo child-noise; cat > /dev/null ;; esac
 fi
 if [ "$1" = exec ]; then
+  if [ -s "$FAKE_SBX_STATE/stopped" ]; then
+    cp "$FAKE_SBX_STATE/stopped" "$FAKE_SBX_STATE/stopped.was"
+    while read -r name; do
+      case " $* " in *" $name "*)
+        grep -vx "$name" "$FAKE_SBX_STATE/stopped" > "$FAKE_SBX_STATE/stopped.next"
+        mv "$FAKE_SBX_STATE/stopped.next" "$FAKE_SBX_STATE/stopped"
+        printf '%s\n' "$name" >> "$FAKE_SBX_SANDBOXES"
+        if [ -f "$FAKE_SBX_STATE/start.$name" ]; then sh "$FAKE_SBX_STATE/start.$name" || exit 1; fi ;;
+      esac
+    done < "$FAKE_SBX_STATE/stopped.was"
+  fi
   case " $* " in
     *"tar -cf -"*) if [ -f "$FAKE_SBX_STATE/takes.hang" ]; then sleep 30; fi; if [ -f "$FAKE_SBX_STATE/takes.fail" ]; then cat "$FAKE_SBX_STATE/takes.fail" >&2; exit 1; fi; [ -f "$FAKE_SBX_STATE/takes.tar" ] && cat "$FAKE_SBX_STATE/takes.tar" ;;
     *" -i "*" sh -s "*) if [ ! -f "$FAKE_SBX_STATE/exec.run" ]; then cat > /dev/null; exit 0; fi
@@ -328,6 +339,10 @@ func (f *FakeSbx) SetSandboxes(lines string) {
 
 func (f *FakeSbx) SetStopped(lines string) {
 	WriteFile(f.t, filepath.Join(f.State, "stopped"), lines)
+}
+
+func (f *FakeSbx) RunOnStart(sandbox, script string) {
+	WriteFile(f.t, filepath.Join(f.State, "start."+sandbox), script)
 }
 
 func (f *FakeSbx) SetListing(json string) {

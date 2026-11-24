@@ -1042,6 +1042,8 @@ func (a *App) cmdShip(args []string, home string) (int, error) {
 	return 0, nil
 }
 
+const sandboxStartTimeout = 3 * time.Minute
+
 type shipPlan struct {
 	task        *Task
 	shipping    config.ShipSettings
@@ -1062,12 +1064,21 @@ func (a *App) prepareShip(home, slug, ref, branchFlag string) (*shipPlan, error)
 	if err := checkGitConfig(task); err != nil {
 		return nil, err
 	}
-	if task.GitConfig == "" {
-		a.warn("task %s was created before stage recorded its git config; it cannot check that the scratch clone's config is unchanged", slug)
-	}
 	remote := "sandbox-" + task.Sandbox
 	if _, err := source.Git(repo, "remote", "get-url", remote); err != nil {
-		return nil, errorf("no %s remote in %s; is %s running?", remote, repo, task.Sandbox)
+		a.say("starting %s to fetch from it", task.Sandbox)
+		if _, err := sbx.FeedWithin(sandboxStartTimeout, strings.NewReader(""), "exec", "-u", "agent", task.Sandbox, "true"); err != nil {
+			return nil, errorf("could not start %s to fetch from it: %v", task.Sandbox, err)
+		}
+		if err := checkGitConfig(task); err != nil {
+			return nil, err
+		}
+		if _, err := source.Git(repo, "remote", "get-url", remote); err != nil {
+			return nil, errorf("no %s remote in %s after starting %s; check that sbx ls lists it", remote, repo, task.Sandbox)
+		}
+	}
+	if task.GitConfig == "" {
+		a.warn("task %s was created before stage recorded its git config; it cannot check that the scratch clone's config is unchanged", slug)
 	}
 	if _, err := source.Git(repo, "fetch", "--quiet", remote, ref); err != nil {
 		return nil, err
