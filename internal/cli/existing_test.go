@@ -57,7 +57,7 @@ func TestSecretsRefreshSetsEachSecretAgainForTheLiveSandboxFromItsEnvFile(t *tes
 			t.Errorf("set a secret sbx secret set does not take: %q", call)
 		}
 	}
-	h.expectStdout("copilot", "github")
+	h.expectStdout("copilot: set again for stage-fix; sbx runs its command on the sandbox's next request that needs it", "github: set again")
 	h.expectStderr("feed")
 	h.expectStderr("stage down fix")
 }

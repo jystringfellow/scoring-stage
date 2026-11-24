@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -282,10 +283,13 @@ func SummarizeKit(dir string) []string {
 	if len(details) == 0 {
 		details = append(details, "no capabilities found; read the kit's files before approving")
 	}
-	for i, detail := range details {
-		details[i] = Printable(detail)
+	var distinct []string
+	for _, detail := range details {
+		if detail = Printable(detail); !slices.Contains(distinct, detail) {
+			distinct = append(distinct, detail)
+		}
 	}
-	return details
+	return distinct
 }
 
 func describeCapability(kind string, config map[string]any) []string {

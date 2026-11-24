@@ -63,7 +63,7 @@ func (a *App) cmdSecrets(args []string, home string) (int, error) {
 		if _, err := sbx.FeedWithin(secretSetTimeout, strings.NewReader(""), argv...); err != nil {
 			return 0, errorf("could not set %s for %s: %v", service, task.Sandbox, err)
 		}
-		a.say("%s: sbx ran its command again and %s uses the new value from its next request", service, task.Sandbox)
+		a.say("%s: set again for %s; sbx runs its command on the sandbox's next request that needs it", service, task.Sandbox)
 	}
 	if len(left) > 0 {
 		a.warn("%s cannot be set again with sbx secret set; to give %s new values for them, run `stage down %s` and `stage up`",

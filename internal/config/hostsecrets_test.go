@@ -21,3 +21,18 @@ func TestSecretsReadFromYourHostLoginsAskSbxToResolveThemAgainEvery30Minutes(t *
 		}
 	}
 }
+
+func TestAKitSummaryNamesACapabilityOnceWhenTheKitDeclaresItTwice(t *testing.T) {
+	dir := t.TempDir()
+	testutil.WriteFile(t, filepath.Join(dir, "kit.yaml"), "capabilities:\n  - type: com.docker.sandbox/agent-context@1\n    config: {}\n  - type: com.docker.sandbox/agent-context@2\n    config: {}\n")
+	details := SummarizeKit(dir)
+	count := 0
+	for _, detail := range details {
+		if detail == "agent-context" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("summary %q names agent-context %d times", details, count)
+	}
+}

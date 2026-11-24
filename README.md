@@ -158,8 +158,11 @@ your gear, reaches the next sandbox and not this one. The message says what you 
 - `stage secrets refresh <slug>` gives a running sandbox a changed login. For each secret in the sandbox's env file
   that is one of sbx's own services (such as `copilot`, `github`, `anthropic` or `openai`), it runs
   `sbx secret set <service> --sandbox stage-<slug> --command <its command> [--refresh <its interval>] --force`.
-  sbx runs the command on your machine and the sandbox uses the new value from its next request, keeping its
-  files. A secret for another service, such as a book's own, cannot be set this way, and the command names it.
+  sbx checks the command once as it stores it, then runs it on your machine on the sandbox's next request that
+  needs the secret; the sandbox keeps its files. The check is not proof that the new value was fetched; the next
+  request is. The `sbx secret set` call was checked live by hand for `copilot` on a running sandbox, without
+  `--refresh`; this command itself, passing `--refresh`, other services and a stopped sandbox are unverified. A
+  secret for another service, such as a book's own, cannot be set this way, and the command names it.
 - `stage take <slug>`, then `stage down <slug>` and `stage up`, gives a new sandbox everything as it is now. The
   new sandbox starts from your repository; only the paths your takes list are kept.
 
