@@ -1236,11 +1236,12 @@ reference: nobody clones a books repository and nobody defines a short name.
 
 | Book | Installs | Network at install | Network at runtime |
 |------|----------|--------------------|--------------------|
+| [`books/dotnet`](books/dotnet) | The .NET SDK (channel 10.0) and any extra shared runtimes with `dotnet-install.sh`, and ICU and time zone data from Debian | `deb.debian.org`, `dhi.io`, `builds.dotnet.microsoft.com`, `ci.dot.net` | `api.nuget.org` and `*.nuget.org`, and on port 80 the certificate revocation hosts `dotnet restore` checks: `crl3.digicert.com`, `crl4.digicert.com`, `ocsp.digicert.com`, `crl.sectigo.com`, `s.symcb.com`, `s.symcd.com`, `ts-crl.ws.symantec.com`, `ts-ocsp.ws.symantec.com`, `www.microsoft.com` |
 | [`books/go`](books/go) | Go 1.27.3 from go.dev, and `gcc` and `libc6-dev` from Debian so `go test -race` runs | `deb.debian.org`, `security.debian.org`, `dhi.io`, `go.dev`, `dl.google.com`, `proxy.golang.org`, `sum.golang.org` | `proxy.golang.org`, `sum.golang.org` |
 | [`books/python`](books/python) | uv from PyPI in a venv, and Python 3.12 through uv; no compiler | `pypi.org`, `files.pythonhosted.org`, and GET only to `github.com:443` under `/astral-sh/python-build-standalone/releases/download/**` and to `release-assets.githubusercontent.com:443` | `pypi.org`, `files.pythonhosted.org` |
 
-Neither book sets a secret, a binding or an AWS profile, and neither needs a credential. Their grants add to those
-of the sandbox's other kits.
+None of the books sets a secret, a binding or an AWS profile, and none needs a credential. Their grants add to
+those of the sandbox's other kits.
 
 To use one, name it in the repository's `.scoring-stage/config.toml`:
 
@@ -1252,6 +1253,21 @@ Then run `stage book lock .` from the top of the checkout, which fetches the boo
 writes `.scoring-stage/stage.lock`, and commit both files. Everyone who works on the repository then gets the
 same commit of the book, and is asked to approve it on their first `stage up`.
 
+A book of your own can include a library book and add only what is yours, such as a private package feed:
+
+```toml
+name = "dotnet-private"
+includes = ["github.com/jystringfellow/scoring-stage//books/dotnet@<version>"]
+kits = ["./kits/feed"]                             # the feed's egress and credential@1
+```
+
+`<version>` is a release tag made after the .NET book was added, or a version with its own `books/dotnet/<version>`
+tag.
+
+The included book is fetched, locked and approved on its own, as [Includes](#books-by-reference) describes, and
+its kit applies alongside yours. The .NET kit's guidance tells the agent that NuGet packages come from nuget.org and
+any other feed a book in the sandbox allows.
+
 The version is one of this repository's release tags. A release tag covers every book through the plain-tag
 fallback (see [Books by reference](#books-by-reference)), so `//books/go@v0.0.1-rc.6` will resolve to that
 release once the tag exists. The library is in release tags made after it was added; `v0.0.1-rc.5` and earlier
@@ -1260,8 +1276,10 @@ tag, which stage tries before the plain tag. There are no built-in short names a
 names the full reference, and a book applies only where it is named.
 
 Each kit takes its version as an argument: `go` defaults to `1.27.3` and `python` to `3.12`, and both accept
-`major.minor` or `major.minor.patch`. A book named by reference uses its defaults. For another version, copy the
-book into your own books repository and replace its `kits` entry in `book.toml`, for example:
+`major.minor` or `major.minor.patch`. The .NET kit's `sdkChannel` defaults to `10.0` and takes `major.minor`; its
+`runtimes` adds shared runtimes as space-separated `runtime:channel` pairs, such as `aspnetcore:8.0`. A book named
+by reference uses its defaults. For another version, copy the book into your own books repository and replace its
+`kits` entry in `book.toml`, for example:
 
 ```toml
 kits = [{source = "./kits/python", args = {python = "3.11"}}]
@@ -1271,8 +1289,9 @@ Python builds can be downloaded only during installation; change the argument an
 another version is needed.
 
 What has been run: the Python book ran in a sandbox, given by path, on 2026-11-13. The Go book has not been run in
-a sandbox as a book. Its kit is the one this repository's own `.scoring-stage/config.toml` names. Neither has
-been used by reference in a sandbox; [VERIFICATION.md](VERIFICATION.md) lists what is still to run.
+a sandbox as a book. Its kit is the one this repository's own `.scoring-stage/config.toml` names. The .NET book has
+not been run in a sandbox from this repository. None has been used by reference in a sandbox;
+[VERIFICATION.md](VERIFICATION.md) lists what is still to run.
 
 ### Writing a kit
 

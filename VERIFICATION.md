@@ -47,7 +47,9 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
   2026-11-23, and a full commit on 2026-11-22.
 - The library books in `books/`, used by reference in a sandbox. The Go book has not been run in a sandbox as a
   book: its kit is the one this repository's own config names, but no entry here checks a Go command in a
-  sandbox. The Python book ran in a sandbox, given by path, on 2026-11-13.
+  sandbox. The Python book ran in a sandbox, given by path, on 2026-11-13. The .NET book has not been run in a
+  sandbox from this repository, by path or by reference, nor included by another book in one: no entry here
+  checks its SDK install, its NuGet or certificate revocation egress, or a `dotnet` command in a sandbox.
 - sbx's kit loader: which files it reads from a kit directory, and whether it matches keys case-insensitively.
   stage checks `.yaml`, `.yml` and `.json` files at any depth except under `files/`, and refuses keys that differ
   from `capabilities`, `extends`, `type`, `config`, `service`, `inject` or `domain` only in case.

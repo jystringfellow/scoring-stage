@@ -1,0 +1,3 @@
+name = "dotnet"
+description = "The .NET SDK (default channel 10.0) and any extra shared runtimes, with nuget.org and certificate revocation checks at runtime. No private feeds or credentials; a book that includes this one adds its own."
+kits = ["./kits/dotnet"]
