@@ -1193,8 +1193,8 @@ another book's name, and two books with the same name are an error wherever they
   twice at one version applies once; at two versions it is an error naming both include paths. The usual rule
   holds across includes: two books that set the same secret, binding, region or default profile differently are
   an error. An include chain is at most 8 books long, and includes reach at most 50 books in one run; past either
-  limit stage stops before fetching more and names the chain. `stage book lock` also locks what the repository's
-  books include.
+  limit stage stops before fetching more and names the chain. `stage book update` locks and asks about what a book
+  includes, and `stage book lock` also locks what the repository's books include.
 - **Arguments.** Wherever a book is named, in your config's `books`, a repository's `books` or a book's `includes`,
   the entry can be a table that also sets the book's kit arguments:
 
@@ -1213,22 +1213,30 @@ another book's name, and two books with the same name are an error wherever they
     two values is an error naming both places.
   - `--book` takes no arguments.
   - The approval covers the book together with its arguments, and the prompt lists each argument with where it came
-    from, so a change to one asks again. `stage book update` and `stage book lock` approve the book without
-    arguments, so the first `stage up` with them asks once more.
+    from, so a change to one asks again. `stage book update` and `stage book lock` approve the book without the
+    arguments your config or a repository gives it, so the first `stage up` with them asks once more; a book they
+    reach through an include is approved with the arguments that include sets.
   - Arguments a repository sets are always asked about, even for a book you turned on yourself with `--book` or a
     `[[repos]]` rule, and managed settings' `repo_kits = "deny"` refuses them. Arguments from your own config, or
     from includes in your own directory book, are not asked about, as the rest of your config is not.
   - The lock is unchanged: it records the reference and the book's content, which arguments do not change. A book
     named plainly behaves as before, and its earlier approvals and lock entries still hold.
 - **Commands.** `update` and `lock` run only in a terminal, and callers through `stage mcp` cannot use them.
-  - `stage book list` shows each locked book with its commit, whether it is cached and its short names, the
-    references in your config not fetched yet, and cached books your lock does not name.
+  - `stage book list` shows each locked book with its commit, whether it is cached, its short names and which
+    cached books include it, the references in your config not fetched yet, books that a cached book includes but
+    your lock does not hold yet, and cached books your lock does not name.
   - `stage book prune` lists, then removes, cached books your lock does not name and any partial fetch.
   - `stage book update [NAME|REF]...` is the only command that changes an entry in your lock. With no names it
     covers every reference in your config. It fetches the tag again, says plainly when the tag moved (with the old
     and new commit), shows what changed in what the book does, and asks. Only then does it write the lock entry and
     the approval together. If nothing changed it says so and asks nothing; a decline or a failure partway changes
     nothing.
+  - It also follows the book's `includes`, and theirs, in the same run. An included book your lock already holds
+    stays at that commit; one it does not hold is fetched at its version. Each included book you have not approved
+    is shown with what it does and asked about in the same question as the book. The lock entries for the book and
+    every book it includes are written together with the approvals. A book that is itself unchanged still gets
+    its includes locked and asked about, so a bare `stage book update` catches an include that a newer version
+    added. To move an included book whose tag moved, name its reference: `stage book update <its reference>`.
   - `--to VERSION` moves one reference to another tag or commit, and changes that one quoted value in your
     `config.toml`, leaving the rest of the file as it was, and drops the old reference's lock entry in the same
     write. If the value is not there exactly once, for example

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -52,22 +53,63 @@ func (a *App) bookList(args []string, home string) error {
 			aliases[reference.Ref.String()] = append(aliases[reference.Ref.String()], reference.Alias)
 		}
 	}
-	listed := false
+	names := map[string]string{}
+	cachedRefs := map[string]bool{}
+	includedBy := map[string][]string{}
+	var includes []string
 	for _, entry := range mine.Entries {
 		ref, _ := bookref.Parse(entry.Ref)
-		name, state := "?", "not cached"
-		if book, cached := library.Cached(ref); cached {
-			state = "cached"
-			if described, _, err := config.DescribeBook(settings.Agents, book.Dir); err == nil {
-				name = described
+		book, cached := library.Cached(ref)
+		if !cached {
+			continue
+		}
+		cachedRefs[entry.Ref] = true
+		described, _, err := config.DescribeBook(settings.Agents, book.Dir)
+		if err != nil {
+			continue
+		}
+		names[entry.Ref] = described
+		refs, err := config.IncludedRefs(settings.Agents, book)
+		if err != nil {
+			continue
+		}
+		for _, included := range refs {
+			if includedBy[included.String()] == nil {
+				includes = append(includes, included.String())
 			}
+			includedBy[included.String()] = append(includedBy[included.String()], described+" ("+entry.Ref+")")
+		}
+	}
+	includers := func(ref string) string {
+		if len(includedBy[ref]) == 0 {
+			return ""
+		}
+		return "included by " + strings.Join(includedBy[ref], ", ")
+	}
+	listed := false
+	for _, entry := range mine.Entries {
+		name, state := "?", "not cached"
+		if cachedRefs[entry.Ref] {
+			state = "cached"
+		}
+		if described, found := names[entry.Ref]; found {
+			name = described
 		}
 		line := fmt.Sprintf("%s  %s  commit %s  %s", name, entry.Ref, short(entry.Commit), state)
 		for _, alias := range aliases[entry.Ref] {
 			line += "  (short name " + alias + ")"
 		}
+		if by := includers(entry.Ref); by != "" {
+			line += "  (" + by + ")"
+		}
 		fmt.Fprintln(a.Stdout, config.Printable(line))
 		listed = true
+	}
+	for _, ref := range includes {
+		if _, locked := mine.Find(ref); !locked {
+			fmt.Fprintln(a.Stdout, config.Printable(ref+"  "+includers(ref)+"; not fetched yet; stage book update fetches it"))
+			listed = true
+		}
 	}
 	for _, reference := range settings.BookReferences() {
 		if _, locked := mine.Find(reference.Ref.String()); !locked {
@@ -274,10 +316,69 @@ func (a *App) updateBook(settings *config.Settings, target bookTarget, to string
 		}
 	}
 	nextKey := next.String()
-	if existing, found := mine.Find(nextKey); to == "" && found && existing == fetched.Entry() {
-		a.say("%s is unchanged at commit %s", nextKey, short(existing.Commit))
-		return nil
+	existing, found := mine.Find(nextKey)
+	unchanged := to == "" && found && existing == fetched.Entry()
+
+	book, err := library.Keep(fetched)
+	if err != nil {
+		return err
 	}
+	name, details, err := config.DescribeBook(settings.Agents, book.Dir)
+	if err != nil {
+		return err
+	}
+	approval := config.Approval{Label: "book " + name + " (" + nextKey + ")", Fingerprint: fetched.Fingerprint, Details: details}
+	toLock := map[string]bookref.Entry{}
+	included, err := settings.IncludesOf(book, func(ref bookref.Ref) (bookref.Book, error) {
+		pinned, entry, err := library.Pin(ref, team, mine)
+		if err != nil {
+			return bookref.Book{}, err
+		}
+		if own, found := mine.Find(entry.Ref); !found || own != entry {
+			toLock[entry.Ref] = entry
+		}
+		return pinned, nil
+	})
+	if err != nil {
+		return err
+	}
+	includedApprovals := make([]config.Approval, 0, len(included))
+	for _, book := range included {
+		includedApprovals = append(includedApprovals, config.Approval{Label: "book " + book.Name + " (" + book.Ref.String() + ")", Fingerprint: book.Approval, Details: book.Details})
+	}
+	missing, err := config.Unapproved(settings.Home, append([]config.Approval{approval}, includedApprovals...))
+	if err != nil {
+		return err
+	}
+	missingIncludes := slices.DeleteFunc(slices.Clone(missing), func(m config.Approval) bool { return m.Label == approval.Label })
+
+	if unchanged {
+		a.say("%s is unchanged at commit %s", nextKey, short(existing.Commit))
+		if len(missing) == 0 && len(toLock) == 0 {
+			return nil
+		}
+		if len(missing) > len(missingIncludes) {
+			a.showBookChange(nil, details)
+		}
+		a.showIncludes(nextKey, missingIncludes, toLock)
+		question := fmt.Sprintf("Approve what %s and the books it includes do, and lock them?", nextKey)
+		if len(missingIncludes) == 0 {
+			question = fmt.Sprintf("Approve what %s does?", nextKey)
+		}
+		if len(missing) > 0 && !a.confirm(question) {
+			return errorf("not updated; nothing was changed")
+		}
+		return a.writeBookUpdate(settings, missing, func(lock *bookref.Lock) {
+			for _, entry := range toLock {
+				lock.Set(entry)
+			}
+		}, nil, func() {
+			for _, key := range slices.Sorted(maps.Keys(toLock)) {
+				a.say("locked %s at commit %s", key, short(toLock[key].Commit))
+			}
+		})
+	}
+
 	switch {
 	case team != nil && haveCurrent:
 		a.say("%s: the repository's lock has commit %s; yours has commit %s", key, short(fetched.Commit), short(current.Commit))
@@ -290,14 +391,6 @@ func (a *App) updateBook(settings *config.Settings, target bookTarget, to string
 		}
 	}
 
-	book, err := library.Keep(fetched)
-	if err != nil {
-		return err
-	}
-	name, details, err := config.DescribeBook(settings.Agents, book.Dir)
-	if err != nil {
-		return err
-	}
 	var before []string
 	if old, cached := library.Cached(target.ref); cached {
 		if _, oldDetails, err := config.DescribeBook(settings.Agents, old.Dir); err == nil {
@@ -305,39 +398,74 @@ func (a *App) updateBook(settings *config.Settings, target bookTarget, to string
 		}
 	}
 	a.showBookChange(before, details)
-	if !a.confirm(fmt.Sprintf("Use %s at commit %s, and approve what it does?", nextKey, short(fetched.Commit))) {
+	a.showIncludes(nextKey, missingIncludes, toLock)
+	question := fmt.Sprintf("Use %s at commit %s, and approve what it does?", nextKey, short(fetched.Commit))
+	if len(missingIncludes) > 0 {
+		question = fmt.Sprintf("Use %s at commit %s and the books it includes, and approve what they do?", nextKey, short(fetched.Commit))
+	}
+	if !a.confirm(question) {
 		return errorf("not updated; nothing was changed")
 	}
 
-	approval := config.Approval{Label: "book " + name + " (" + nextKey + ")", Fingerprint: fetched.Fingerprint, Details: details}
-	err = writeTogether(
+	changeConfig := func() error {
+		if to == "" {
+			return nil
+		}
+		text, err := os.ReadFile(configPath)
+		if err != nil {
+			return err
+		}
+		if quotedOccurrences(string(text), key) != 1 {
+			return errorf("%s changed while updating; nothing was changed", configPath)
+		}
+		updated := strings.Replace(strings.Replace(string(text), `"`+key+`"`, `"`+nextKey+`"`, 1), `'`+key+`'`, `'`+nextKey+`'`, 1)
+		return os.WriteFile(configPath, []byte(updated), 0o644)
+	}
+	return a.writeBookUpdate(settings, missing, func(lock *bookref.Lock) {
+		lock.Set(fetched.Entry())
+		if nextKey != key {
+			lock.Remove(key)
+		}
+		for _, entry := range toLock {
+			lock.Set(entry)
+		}
+	}, changeConfig, func() {
+		a.say("%s is now commit %s; approved %s", nextKey, short(fetched.Commit), short(fetched.Fingerprint))
+		for _, key := range slices.Sorted(maps.Keys(toLock)) {
+			a.say("locked %s at commit %s, which %s includes", key, short(toLock[key].Commit), nextKey)
+		}
+	})
+}
+
+func (a *App) showIncludes(includer string, missing []config.Approval, toLock map[string]bookref.Entry) {
+	for _, approval := range missing {
+		a.say("%s includes %s; what it does:", includer, config.Printable(approval.Label))
+		for _, line := range approval.Details {
+			fmt.Fprintf(a.Stdout, "  + %s\n", config.Printable(line))
+		}
+	}
+	if len(missing) == 0 && len(toLock) > 0 {
+		a.say("%s includes books you have approved that your lock does not hold yet", includer)
+	}
+}
+
+func (a *App) writeBookUpdate(settings *config.Settings, missing []config.Approval, lockChange func(*bookref.Lock), configChange func() error, done func()) error {
+	library := bookref.Library{Home: settings.Home}
+	configPath := filepath.Join(settings.Home, "config.toml")
+	if configChange == nil {
+		configChange = func() error { return nil }
+	}
+	err := writeTogether(
 		fileWrite{config.TrustPath(settings.Home), func() error {
-			missing, err := config.Unapproved(settings.Home, []config.Approval{approval})
-			if err != nil || len(missing) == 0 {
-				return err
+			if len(missing) == 0 {
+				return nil
 			}
 			return config.Approve(settings.Home, missing)
 		}},
-		fileWrite{configPath, func() error {
-			if to == "" {
-				return nil
-			}
-			text, err := os.ReadFile(configPath)
-			if err != nil {
-				return err
-			}
-			if quotedOccurrences(string(text), key) != 1 {
-				return errorf("%s changed while updating; nothing was changed", configPath)
-			}
-			updated := strings.Replace(strings.Replace(string(text), `"`+key+`"`, `"`+nextKey+`"`, 1), `'`+key+`'`, `'`+nextKey+`'`, 1)
-			return os.WriteFile(configPath, []byte(updated), 0o644)
-		}},
+		fileWrite{configPath, configChange},
 		fileWrite{library.LockPath(), func() error {
 			return bookref.UpdateLock(library.LockPath(), func(lock *bookref.Lock) error {
-				lock.Set(fetched.Entry())
-				if nextKey != key {
-					lock.Remove(key)
-				}
+				lockChange(lock)
 				return nil
 			})
 		}},
@@ -345,7 +473,7 @@ func (a *App) updateBook(settings *config.Settings, target bookTarget, to string
 	if err != nil {
 		return err
 	}
-	a.say("%s is now commit %s; approved %s", nextKey, short(fetched.Commit), short(fetched.Fingerprint))
+	done()
 	return nil
 }
 
@@ -441,7 +569,7 @@ func (a *App) bookLock(args []string, home string) error {
 	}
 	var approvals []config.Approval
 	for _, book := range books {
-		approvals = append(approvals, config.Approval{Label: "book " + book.Name + " (" + book.Ref.String() + ")", Fingerprint: book.Fingerprint, Details: book.Details})
+		approvals = append(approvals, config.Approval{Label: "book " + book.Name + " (" + book.Ref.String() + ")", Fingerprint: book.Approval, Details: book.Details})
 	}
 	missing, err := config.Unapproved(settings.Home, approvals)
 	if err != nil {
