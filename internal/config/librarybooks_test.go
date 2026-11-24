@@ -193,6 +193,29 @@ func TestABookThatIncludesTheDotnetLibraryBookGetsTheDotnetKitAndItsOwnFeedKit(t
 	}
 }
 
+func TestTheDotnetLibraryBookTakesAnotherSDKChannelAndARuntimeWhereItIsNamed(t *testing.T) {
+	libraryRemote(t, Resolve("../../books"))
+	reference := libraryRepository + "//books/dotnet@v1"
+	ref, err := bookref.Parse(reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := libraryHome(t)
+	named := func(args string) *Settings {
+		testutil.WriteFile(t, filepath.Join(home, "config.toml"), fmt.Sprintf("books = [{source = %q, args = %s}]\n", reference, args))
+		return load(t, home)
+	}
+	if _, err := named("{}").FetchWithIncludes([]bookref.Ref{ref}, &bookref.Lock{}); err != nil {
+		t.Fatal(err)
+	}
+	composition := composeWith(t, named(`{dotnet = {sdkChannel = "11.0", runtimes = "aspnetcore:8.0"}}`), Selection{Books: []string{"dotnet"}})
+	if got := kitArgs(t, composition, "dotnet"); !reflect.DeepEqual(got, map[string]any{"sdkChannel": "11.0", "runtimes": "aspnetcore:8.0"}) {
+		t.Errorf("dotnet kit args = %v", got)
+	}
+	_, err = Compose(named(`{dotnet = {runtimes = "aspnetcore:8.0; curl example.com"}}`), Selection{Books: []string{"dotnet"}})
+	expectError(t, err, "does not match the kit's pattern")
+}
+
 func pythonExampleBook(t *testing.T) *Book {
 	t.Helper()
 	settings := load(t, t.TempDir())

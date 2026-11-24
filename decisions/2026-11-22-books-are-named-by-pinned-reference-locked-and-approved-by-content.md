@@ -37,8 +37,8 @@ by content, whoever named it. A book from a local directory keeps that earlier b
   user's for the references its config names, on disk, for the user to review and commit. stage never rewrites a
   repository's config. Both run only in a terminal, and callers through `stage mcp` cannot use them.
 - **Fingerprint.** Computed from the fetched git tree: each path, whether it is executable, and its content,
-  prefixed by a scheme name (`book-tree/1`). The same value is the lock's `sha256`, the cache key and the approval
-  fingerprint. Symbolic links and submodules are refused rather than hashed. The scheme is recorded in each lock
+  prefixed by a scheme name (`book-tree/1`). The same value is the lock's `sha256`, the cache key and, for a book named
+  without arguments, the approval fingerprint. Symbolic links and submodules are refused rather than hashed. The scheme is recorded in each lock
   entry, so a later change to the formula is reported as such and is never read as a moved tag. A local book keeps
   its own fingerprint over the files on disk, which includes their permissions and so could not be shared with a
   read-only cache.
@@ -65,6 +65,21 @@ by content, whoever named it. A book from a local directory keeps that earlier b
   on its own fingerprint, and the existing conflict rule holds across includes. Every include is a fetch made before
   the approval prompt, so includes are bounded: a chain of at most 8 books, and at most 50 books in one run; past
   either limit stage stops before fetching more and names the chain.
+- **Arguments are given where a book is named.** A book's version and its tools' versions are separate: one version
+  of a book serves every SDK or language version its kits accept, so a library needs no book per tool version and
+  nobody copies a book to change one value. Any place that names a book (the user's config, a repository's
+  `books`, an `includes` entry) may write `{source, args}`, with `args` keyed by the kit's directory name and then
+  the argument, because a book may have several kits and two of them may use the same argument name. A value must
+  be a string the kit declares with a `pattern`, matched against the whole value, so a repository can set only what
+  the kit already allows. The same book named in several places gets the union of their arguments; one argument
+  with two values is an error naming both places, the rule secrets and bindings already follow, and a plain naming
+  adds nothing, so a shared book can leave an argument for each repository to set. The approval fingerprint joins
+  the content fingerprint and the arguments, so arguments are approved with the book and listed in the prompt with
+  where each came from; a book named plainly keeps its fingerprint, approvals and lock entry. Arguments a repository
+  sets are asked about whoever else turned the book on, and `repo_kits = "deny"` refuses them. A book's own value
+  for an argument is a default its callers may replace within the kit's pattern; an author who means it as a limit
+  narrows the pattern. The lock records only
+  content, which arguments do not change.
 - **Trust levels.** Each book is `local` (a directory) or `pinned` (fetched, locked, approved), and both always
   ask. `trusted` (fetched, locked and signed by a publisher that managed settings name) is reserved: it may later
   let a book apply without a prompt, or let managed settings name books every sandbox gets. Neither may be built
@@ -83,6 +98,12 @@ Rejected:
 - **Updating the lock on `stage up`.** The lock would then record whatever was fetched, and catch nothing.
 - **Writing a repository's lock from `stage up`.** `stage up` reads the repository from a scratch clone that becomes
   the agent's workspace, and the user's working copy may be on another branch.
+- **Flat argument names for a book.** A book that later adds a kit using the same argument name would make an
+  existing caller's arguments ambiguous, or silently send them to both kits.
+- **A plain naming meaning "the kit's defaults".** It would make a book that includes another unable to leave an
+  argument to the repository, and every second naming an error.
+- **Arguments on `--book`.** A one-off flag for a per-sandbox override is not needed yet; a repository's or the
+  user's config names the book with its arguments.
 - **A book registry service.** Git now, and an OCI registry later, already give versions and access control.
 
 Evidence: `TestALockedReferenceKeepsItsCommitWhenTheTagMoves`,
@@ -90,7 +111,12 @@ Evidence: `TestALockedReferenceKeepsItsCommitWhenTheTagMoves`,
 `TestABookYouTurnOnYourselfByReferenceIsApprovedToo`,
 `TestARepositoryMayNameABookByReferenceYouNeverInstalledAndYouAreAsked`, `TestReadingConfigNeverFetchesABook`,
 `TestAPrefixedTagForTheBooksDirectoryWinsOverAPlainTagOfTheSameVersion`,
-`TestAPlainTagCoversABookWithoutItsOwnTagButAnotherBooksTagDoesNot`.
+`TestAPlainTagCoversABookWithoutItsOwnTagButAnotherBooksTagDoesNot`,
+`TestBookArgumentsMustBeArgumentsTheKitDeclaresWithAPatternTheWholeValueMatches`,
+`TestArgumentsForOneBookFromTwoPlacesMergeAndOneArgumentGivenTwoValuesIsAnErrorNamingBoth`,
+`TestARepositorysArgumentsForABookByReferenceAreApprovedThenReachTheEnvFileAndTheLockKeepsThePlainReference`,
+`TestARepositorysArgumentsNeedApprovalEvenForABookYouAlsoTurnedOn`,
+`TestRepoKitsDenyRefusesARepositorysArgumentsForABookYouAlsoTurnedOn`.
 Checked live against a private github.com repository: a full commit (2026-11-22) and a book's own lightweight tag
 (2026-11-23). The plain-tag fallback, an annotated tag and a moved tag have not been; the README lists them under
 Limitations.

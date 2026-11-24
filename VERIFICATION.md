@@ -50,6 +50,10 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
   sandbox. The Python book ran in a sandbox, given by path, on 2026-11-13. The .NET book has not been run in a
   sandbox from this repository, by path or by reference, nor included by another book in one: no entry here
   checks its SDK install, its NuGet or certificate revocation egress, or a `dotnet` command in a sandbox.
+- Kit arguments set where a book is named. The tests show stage checking each value against the kit's `pattern` and
+  writing it into the env file's kit `args`; no sandbox has been created from a book named with arguments, so it is
+  unchecked that sbx accepts them and that the kit's install sees them, for example the .NET kit installing another
+  SDK channel or an extra runtime.
 - sbx's kit loader: which files it reads from a kit directory, and whether it matches keys case-insensitively.
   stage checks `.yaml`, `.yml` and `.json` files at any depth except under `files/`, and refuses keys that differ
   from `capabilities`, `extends`, `type`, `config`, `service`, `inject` or `domain` only in case.

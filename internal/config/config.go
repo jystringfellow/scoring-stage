@@ -83,6 +83,7 @@ type Composition struct {
 	RepoKits          []Kit
 	RepoBooks         []Book
 	FetchedBooks      []Book
+	repoArgued        []Book
 	Takes             []string
 	RepoTakes         []string
 	Warnings          []string
@@ -116,7 +117,9 @@ type Book struct {
 	fingerprint string
 	commit      string
 	origin      bookref.Ref
-	includes    []string
+	includes    []bookUse
+	args        bookArgs
+	argPlaces   map[string]string
 	agents      []any
 	kits        []any
 	aws         aws
@@ -865,7 +868,14 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 		return nil, errorf("%s: the repository's takes are refused by %s (repo_kits = %q); list them in takes in ~/.scoring-stage/config.toml",
 			selection.Repo.Path, settings.Managed.where(), RepoKitsDeny)
 	}
-	if settings.Managed.RepoKitsDenied() && (len(composition.RepoKits) > 0 || len(composition.RepoBooks) > 0) {
+	if selection.Repo != nil {
+		for _, book := range active {
+			if book.hasArgsFrom(selection.Repo.Path) {
+				composition.repoArgued = append(composition.repoArgued, book)
+			}
+		}
+	}
+	if settings.Managed.RepoKitsDenied() && (len(composition.RepoKits) > 0 || len(composition.RepoBooks) > 0 || len(composition.repoArgued) > 0) {
 		return nil, repoKitsRefused(settings, selection.Repo)
 	}
 	if base != nil {

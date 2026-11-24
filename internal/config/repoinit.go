@@ -52,8 +52,12 @@ func (r *RepoConfig) MissingRequests(agents, books, kits []string) []string {
 			missing = append(missing, "--agent "+name)
 		}
 	}
+	var named []string
+	for _, use := range r.books {
+		named = append(named, use.text)
+	}
 	for _, name := range books {
-		if !contains(r.books, name) {
+		if !contains(named, name) {
 			missing = append(missing, "--book "+name)
 		}
 	}

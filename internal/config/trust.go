@@ -45,7 +45,10 @@ func Approvals(composition *Composition, repository string) ([]Approval, error) 
 		approvals = append(approvals, approval)
 	}
 	fromRepository := map[string]bool{}
-	for _, book := range composition.RepoBooks {
+	for _, book := range append(append([]Book{}, composition.RepoBooks...), composition.repoArgued...) {
+		if fromRepository[book.Path] {
+			continue
+		}
 		fromRepository[book.Path] = true
 		if book.Ref != "" {
 			continue
@@ -54,10 +57,10 @@ func Approvals(composition *Composition, repository string) ([]Approval, error) 
 		if err != nil {
 			return nil, err
 		}
-		approvals = append(approvals, Approval{Label: "book " + book.Name + " (" + book.Path + ")", Fingerprint: fingerprint, Details: summarizeBook(composition.agents, book), FromRepository: true})
+		approvals = append(approvals, Approval{Label: "book " + book.Name + " (" + book.Path + ")", Fingerprint: book.approvalFingerprint(fingerprint), Details: summarizeBook(composition.agents, book), FromRepository: true})
 	}
 	for _, book := range composition.FetchedBooks {
-		approvals = append(approvals, Approval{Label: "book " + book.Name + " (" + book.Ref + ")", Fingerprint: book.fingerprint, Details: summarizeBook(composition.agents, book), FromRepository: fromRepository[book.Path]})
+		approvals = append(approvals, Approval{Label: "book " + book.Name + " (" + book.Ref + ")", Fingerprint: book.approvalFingerprint(book.fingerprint), Details: summarizeBook(composition.agents, book), FromRepository: fromRepository[book.Path]})
 	}
 	if len(composition.RepoTakes) > 0 {
 		approvals = append(approvals, Approval{Label: "takes for " + repository, Fingerprint: takesFingerprint(repository, composition.RepoTakes), Details: takeDetails(composition.RepoTakes), FromRepository: true})
@@ -282,7 +285,7 @@ func Approve(home string, approvals []Approval) error {
 }
 
 func summarizeBook(agents Agents, book Book) []string {
-	var details []string
+	details := book.argDetails()
 	agentLine := func(entry any, where string) {
 		if name, ok := entry.(string); ok && looksLikeName(name) {
 			if spec, known := agents.specs[name]; known {
@@ -322,7 +325,7 @@ func summarizeBook(agents Agents, book Book) []string {
 	}
 	details = append(details, takeDetails(book.takes)...)
 	for _, entry := range book.includes {
-		details = append(details, "includes book "+entry+" (asked about on its own)")
+		details = append(details, "includes book "+entry.String()+" (asked about on its own)")
 	}
 	for _, entry := range book.kits {
 		kit, err := parseKit(entry, book.Path, "book "+book.Name)
