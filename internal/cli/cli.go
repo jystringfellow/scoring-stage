@@ -1012,7 +1012,7 @@ func (a *App) cmdShip(args []string, home string) (int, error) {
 	}
 	task, shipping := plan.task, plan.shipping
 	repo, sha, branch := task.RepoDir, plan.sha, plan.branch
-	if err := a.reviewShipment(repo, sha, branch, task.GitHubRepo, shipping, *yes, *allowProtected); err != nil {
+	if err := a.reviewShipment(plan, *yes, *allowProtected); err != nil {
 		return 0, err
 	}
 	if err := source.GitInteractive(repo, "push", "https://github.com/"+task.GitHubRepo+".git", sha+":refs/heads/"+branch); err != nil {
@@ -1165,16 +1165,71 @@ func isProtected(path string, added []string) bool {
 
 type shipReview struct {
 	commits, stat, base string
+	against, remoteHead string
 	protected           []string
 }
 
-func inspectShipment(repo, sha string, shipping config.ShipSettings) (shipReview, error) {
-	base, err := source.Git(repo, "merge-base", "HEAD", sha)
+func remoteHeads(listing string) (heads map[string]string, defaultBranch string) {
+	heads = map[string]string{}
+	var defaultHead string
+	for _, line := range strings.Split(listing, "\n") {
+		fields := strings.Fields(line)
+		switch {
+		case len(fields) == 3 && fields[0] == "ref:" && fields[2] == "HEAD":
+			defaultBranch, _ = strings.CutPrefix(fields[1], "refs/heads/")
+		case len(fields) == 2 && fields[1] == "HEAD":
+			defaultHead = fields[0]
+		case len(fields) == 2:
+			if branch, ok := strings.CutPrefix(fields[1], "refs/heads/"); ok {
+				heads[branch] = fields[0]
+			}
+		}
+	}
+	if defaultBranch != "" && heads[defaultBranch] == "" && defaultHead != "" {
+		heads[defaultBranch] = defaultHead
+	}
+	return heads, defaultBranch
+}
+
+func shipComparison(plan *shipPlan) (branch, commit string, err error) {
+	repo, url := plan.task.RepoDir, "https://github.com/"+plan.task.GitHubRepo+".git"
+	patterns := []string{"--symref", url, "HEAD", "refs/heads/" + plan.branch}
+	if plan.task.BaseBranch != "" {
+		patterns = append(patterns, "refs/heads/"+plan.task.BaseBranch)
+	}
+	listing, err := source.Git(repo, append([]string{"ls-remote"}, patterns...)...)
+	if err != nil {
+		return "", "", err
+	}
+	heads, defaultBranch := remoteHeads(listing)
+	for _, candidate := range []string{plan.branch, plan.task.BaseBranch, defaultBranch} {
+		if candidate != "" && heads[candidate] != "" {
+			branch = candidate
+			break
+		}
+	}
+	if branch == "" {
+		return "", "", errorf("cannot find %s or a default branch on %s to compare the shipment with", printable(plan.branch), plan.task.GitHubRepo)
+	}
+	if _, err := source.Git(repo, "fetch", "--quiet", "--no-tags", url, "refs/heads/"+branch); err != nil {
+		return "", "", err
+	}
+	commit, err = source.Git(repo, "rev-parse", "--verify", "FETCH_HEAD^{commit}")
+	return branch, commit, err
+}
+
+func inspectShipment(plan *shipPlan) (shipReview, error) {
+	repo, sha, shipping := plan.task.RepoDir, plan.sha, plan.shipping
+	against, remoteHead, err := shipComparison(plan)
 	if err != nil {
 		return shipReview{}, err
 	}
+	base, err := source.Git(repo, "merge-base", remoteHead, sha)
+	if err != nil {
+		return shipReview{}, errorf("refusing to ship %s: it has no history in common with %s on %s", sha[:min(8, len(sha))], printable(against), plan.task.GitHubRepo)
+	}
 	if base == sha {
-		return shipReview{}, errorf("nothing to ship: %s has no commits beyond the sandbox's starting point", sha[:min(8, len(sha))])
+		return shipReview{}, errorf("nothing to ship: %s on %s already has %s", printable(against), plan.task.GitHubRepo, sha[:min(8, len(sha))])
 	}
 	commits, err := source.Git(repo, "log", "--no-decorate", "--format=%h %s", base+".."+sha)
 	if err != nil {
@@ -1194,7 +1249,7 @@ func inspectShipment(repo, sha string, shipping config.ShipSettings) (shipReview
 			protected = append(protected, printable(name))
 		}
 	}
-	return shipReview{commits: commits, stat: stat, base: base, protected: protected}, nil
+	return shipReview{commits: commits, stat: stat, base: base, against: against, remoteHead: remoteHead, protected: protected}, nil
 }
 
 func protectedShipmentError(protected []string) error {
@@ -1202,12 +1257,14 @@ func protectedShipmentError(protected []string) error {
 		"repository's secrets or widen future sandboxes; review them and pass --allow-protected-paths to ship them", strings.Join(protected, ", "))
 }
 
-func (a *App) reviewShipment(repo, sha, branch, github string, shipping config.ShipSettings, yes, allowProtected bool) error {
-	review, err := inspectShipment(repo, sha, shipping)
+func (a *App) reviewShipment(plan *shipPlan, yes, allowProtected bool) error {
+	repo, sha, shipping := plan.task.RepoDir, plan.sha, plan.shipping
+	review, err := inspectShipment(plan)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(a.Stdout, "stage: shipping to %s %s:\n%s\n%s\n", github, printable(branch), indent(printable(review.commits)), indent(printable(review.stat)))
+	fmt.Fprintf(a.Stdout, "stage: shipping to %s %s, compared with %s at %s:\n%s\n%s\n", plan.task.GitHubRepo, printable(plan.branch),
+		printable(review.against), review.remoteHead[:min(8, len(review.remoteHead))], indent(printable(review.commits)), indent(printable(review.stat)))
 	if len(review.protected) > 0 {
 		if !allowProtected {
 			return protectedShipmentError(review.protected)

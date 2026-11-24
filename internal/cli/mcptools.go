@@ -480,7 +480,7 @@ func (s *mcpServer) ship(raw json.RawMessage) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	review, err := inspectShipment(plan.task.RepoDir, plan.sha, plan.shipping)
+	review, err := inspectShipment(plan)
 	if err != nil {
 		return nil, err
 	}
