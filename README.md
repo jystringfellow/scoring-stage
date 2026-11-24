@@ -136,6 +136,8 @@ head meet. For a branch that does not exist yet, it compares with the branch the
 or the default branch), and with the repository's default branch if that one has gone. A sandbox that pulled a
 newer main therefore ships only its own commits, and is not refused for workflow files main already has. A
 commit with no history in common with that branch is refused, and one the branch already has is nothing to ship.
+`ship` reads the branch with the same git and credentials it pushes with; when it cannot, it stops before the
+summary and says so.
 
 `stage ship --pr` opens a draft pull request with `gh`. Its body always starts by saying that an AI coding agent
 in a scoring-stage sandbox produced the change, and always names the commit. `pr_body` under `[ship]` replaces the
@@ -663,7 +665,9 @@ missing items and run its returned `stage up ... --approve-repo-config ...` comm
 When sbx has global secrets, `up` returns their names and a `stage up ... --allow-global-secrets ...` command for
 the person instead. `ship` never
 pushes or records a ship: review its result and run the returned `stage ship ...` command to confirm and push.
-It refuses protected paths outright and enforces the same branch namespace as the command line.
+It refuses protected paths outright and enforces the same branch namespace as the command line. To review, it
+reads the branch it would push onto from GitHub, as `stage ship` does, so it runs `git ls-remote` and `git fetch`
+on the host with your git credentials.
 
 Setup, init, broker control, tokens, GitHub login, saved agent logins, book updates and locks, and a host shell are deliberately absent:
 tools do not give an agent those credential and host administration choices. `exec` runs only inside the sandbox.

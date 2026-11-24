@@ -1197,9 +1197,13 @@ func shipComparison(plan *shipPlan) (branch, commit string, err error) {
 	if plan.task.BaseBranch != "" {
 		patterns = append(patterns, "refs/heads/"+plan.task.BaseBranch)
 	}
+	unreadable := func(err error) error {
+		return errorf("could not read %s from GitHub to compare the shipment with: %v. ship reads with the git credentials "+
+			"it pushes with; check that `git ls-remote %s` works on this machine", plan.task.GitHubRepo, err, url)
+	}
 	listing, err := source.Git(repo, append([]string{"ls-remote"}, patterns...)...)
 	if err != nil {
-		return "", "", err
+		return "", "", unreadable(err)
 	}
 	heads, defaultBranch := remoteHeads(listing)
 	for _, candidate := range []string{plan.branch, plan.task.BaseBranch, defaultBranch} {
@@ -1212,7 +1216,7 @@ func shipComparison(plan *shipPlan) (branch, commit string, err error) {
 		return "", "", errorf("cannot find %s or a default branch on %s to compare the shipment with", printable(plan.branch), plan.task.GitHubRepo)
 	}
 	if _, err := source.Git(repo, "fetch", "--quiet", "--no-tags", url, "refs/heads/"+branch); err != nil {
-		return "", "", err
+		return "", "", unreadable(err)
 	}
 	commit, err = source.Git(repo, "rev-parse", "--verify", "FETCH_HEAD^{commit}")
 	return branch, commit, err
