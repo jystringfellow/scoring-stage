@@ -116,7 +116,9 @@ type Book struct {
 	fingerprint string
 	commit      string
 	origin      bookref.Ref
-	includes    []string
+	includes    []bookUse
+	args        bookArgs
+	argPlaces   map[string]string
 	agents      []any
 	kits        []any
 	aws         aws

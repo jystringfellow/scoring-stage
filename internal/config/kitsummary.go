@@ -20,8 +20,9 @@ type kitCapability struct {
 }
 
 type kitSpec struct {
-	Extends      any             `yaml:"extends"`
-	Capabilities []kitCapability `yaml:"capabilities"`
+	Extends      any                    `yaml:"extends"`
+	Args         map[string]kitArgument `yaml:"args"`
+	Capabilities []kitCapability        `yaml:"capabilities"`
 }
 
 type kitDocument struct {

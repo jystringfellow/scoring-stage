@@ -29,7 +29,7 @@ type RepoConfig struct {
 	Path   string
 	dir    string
 	agents []any
-	books  []string
+	books  []bookUse
 	kits   []any
 	takes  []string
 	lock   *bookref.Lock
@@ -73,13 +73,14 @@ func LoadRepoConfig(repoDir string) (*RepoConfig, error) {
 	if repo.kits, err = optionalList(data, "kits", path); err != nil {
 		return nil, err
 	}
-	if repo.books, err = optionalStrings(data, "books", path); err != nil {
+	if repo.books, err = decodeBookUses(data["books"], "books", path); err != nil {
 		return nil, err
 	}
 	if repo.takes, err = decodeTakes(data, path); err != nil {
 		return nil, err
 	}
-	for _, name := range repo.books {
+	for _, use := range repo.books {
+		name := use.text
 		if bookref.IsRef(name) {
 			if _, err := bookref.Parse(name); err != nil {
 				return nil, errorf("%s: %v", path, err)
@@ -119,8 +120,8 @@ func repoFile(repoDir, relative string) (bool, error) {
 
 func (r *RepoConfig) BookReferences() []bookref.Ref {
 	var references []bookref.Ref
-	for _, entry := range r.books {
-		if ref, err := bookref.Parse(entry); err == nil && bookref.IsRef(entry) {
+	for _, use := range r.books {
+		if ref, err := bookref.Parse(use.text); err == nil && bookref.IsRef(use.text) {
 			references = append(references, ref)
 		}
 	}

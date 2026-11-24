@@ -960,7 +960,7 @@ A book is a directory with a `book.toml`:
 name = "backend"
 agents = ["claude"]                                       # agents this book's work needs
 kits = ["./kits/go"]                                      # local kits only, starting with ./ or ../
-includes = ["../observability"]                           # other books that apply whenever this one does; see Books by reference
+includes = ["../observability"]                           # other books that apply whenever this one does, optionally with arguments; see Books by reference
 
 [aws]
 profiles = ["dev", "staging"]
@@ -1010,7 +1010,7 @@ A repository's `.scoring-stage/config.toml`, read from the branch the sandbox st
 
 ```toml
 agents = ["claude", "codex"]     # the agents this repository's contributors run
-books = ["backend"]              # installed books, by name
+books = ["backend"]              # installed books by name, or references; either can set arguments
 kits = ["./.scoring-stage/kits/rules"]  # inside the repository; approved by you before use
 ```
 
@@ -1191,6 +1191,26 @@ another book's name, and two books with the same name are an error wherever they
   an error. An include chain is at most 8 books long, and includes reach at most 50 books in one run; past either
   limit stage stops before fetching more and names the chain. `stage book lock` also locks what the repository's
   books include.
+- **Arguments.** Wherever a book is named, in your config's `books`, a repository's `books` or a book's `includes`,
+  the entry can be a table that also sets the book's kit arguments:
+
+  ```toml
+  books = [{source = "github.com/example-org/books//backend/go@v1.2.0", args = {go = {go = "1.26.4"}}}]
+  ```
+
+  - `args` is keyed by the name of a kit's directory in the book, then by the argument. Each value is a string.
+  - The kit must declare the argument with a `pattern`, and the whole value must match it. An unknown kit or
+    argument, an argument without a pattern, or a value that does not match is an error before stage asks for
+    approval or creates a sandbox.
+  - A value overrides the book's own value for that argument; the kit's default applies to the rest.
+  - The same book named in two places gets the arguments of both, and a plain naming adds none. One argument given
+    two values is an error naming both places.
+  - `--book` takes no arguments.
+  - The approval covers the book together with its arguments, and the prompt lists each argument with where it came
+    from, so a change to one asks again. `stage book update` and `stage book lock` approve the book without
+    arguments, so the first `stage up` with them asks once more.
+  - The lock is unchanged: it records the reference and the book's content, which arguments do not change. A book
+    named plainly behaves as before, and its earlier approvals and lock entries still hold.
 - **Commands.** `update` and `lock` run only in a terminal, and callers through `stage mcp` cannot use them.
   - `stage book list` shows each locked book with its commit, whether it is cached and its short names, the
     references in your config not fetched yet, and cached books your lock does not name.
@@ -1257,12 +1277,11 @@ A book of your own can include a library book and add only what is yours, such a
 
 ```toml
 name = "dotnet-private"
-includes = ["github.com/jystringfellow/scoring-stage//books/dotnet@<version>"]
+includes = ["github.com/jystringfellow/scoring-stage//books/dotnet@v0.1.0"]
 kits = ["./kits/feed"]                             # the feed's egress and credential@1
 ```
 
-`<version>` is a release tag made after the .NET book was added, or a version with its own `books/dotnet/<version>`
-tag.
+`v0.1.0` resolves to the .NET book's own tag, `books/dotnet/v0.1.0`.
 
 The included book is fetched, locked and approved on its own, as [Includes](#books-by-reference) describes, and
 its kit applies alongside yours. The .NET kit's guidance tells the agent that NuGet packages come from nuget.org and
@@ -1275,15 +1294,26 @@ have no `books/` directory. If one book later needs to move on its own, it can g
 tag, which stage tries before the plain tag. There are no built-in short names and no default list: a repository
 names the full reference, and a book applies only where it is named.
 
-Each kit takes its version as an argument: `go` defaults to `1.27.3` and `python` to `3.12`, and both accept
-`major.minor` or `major.minor.patch`. The .NET kit's `sdkChannel` defaults to `10.0` and takes `major.minor`; its
-`runtimes` adds shared runtimes as space-separated `runtime:channel` pairs, such as `aspnetcore:8.0`. A book named
-by reference uses its defaults. For another version, copy the book into your own books repository and replace its
-`kits` entry in `book.toml`, for example:
+Each kit takes its tool's version as an argument, so one version of a book serves every version of the tool:
+
+| Book | Kit | Argument | Default | Accepts |
+|------|-----|----------|---------|---------|
+| `books/go` | `go` | `go` | `1.27.3` | `major.minor` or `major.minor.patch` |
+| `books/python` | `python` | `python` | `3.12` | `major.minor` or `major.minor.patch` |
+| `books/dotnet` | `dotnet` | `sdkChannel` | `10.0` | `major.minor` |
+| `books/dotnet` | `dotnet` | `runtimes` | none | space-separated `runtime:channel` pairs, such as `aspnetcore:8.0` |
+
+Set them where the book is named (see Arguments under [Books by reference](#books-by-reference)); a book named
+without them uses the defaults. A repository that needs the .NET 11 SDK and the ASP.NET Core 8 runtime:
 
 ```toml
-kits = [{source = "./kits/python", args = {python = "3.11"}}]
+books = [{source = "github.com/jystringfellow/scoring-stage//books/dotnet@v0.1.0", args = {dotnet = {sdkChannel = "11.0", runtimes = "aspnetcore:8.0"}}}]
 ```
+
+A book that includes the .NET book can set them in its `includes` entry the same way. A repository can name the
+.NET book as well, with the arguments it alone needs, and gets those together with the including book's. One
+argument given two values is an error, so a shared book should leave unset any argument, such as `runtimes`, that
+repositories need to set differently.
 
 Python builds can be downloaded only during installation; change the argument and recreate the sandbox when
 another version is needed.

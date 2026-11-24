@@ -13,12 +13,13 @@ const (
 	MaxIncludedBooks = 50
 )
 
-func decodeIncludes(data map[string]any, manifest string) ([]string, error) {
-	entries, err := optionalStrings(data, "includes", manifest)
+func decodeIncludes(data map[string]any, manifest string) ([]bookUse, error) {
+	uses, err := decodeBookUses(data["includes"], "includes", manifest)
 	if err != nil {
 		return nil, err
 	}
-	for _, entry := range entries {
+	for _, use := range uses {
+		entry := use.text
 		switch {
 		case bookref.IsRef(entry):
 			if _, err := bookref.Parse(entry); err != nil {
@@ -29,7 +30,7 @@ func decodeIncludes(data map[string]any, manifest string) ([]string, error) {
 			return nil, errorf("%s: includes: %s must be a book reference or a ./ or ../ path", manifest, Printable(entry))
 		}
 	}
-	return entries, nil
+	return uses, nil
 }
 
 type bookLoader struct {
@@ -52,7 +53,15 @@ func (l bookLoader) open(ref bookref.Ref, alias string) (Book, error) {
 	return *book, nil
 }
 
-func (l bookLoader) include(parent Book, entry string) (Book, error) {
+func (l bookLoader) include(parent Book, use bookUse) (Book, error) {
+	book, err := l.includeBook(parent, use.text)
+	if err != nil {
+		return Book{}, err
+	}
+	return book.withArgs(use.args, parent.place())
+}
+
+func (l bookLoader) includeBook(parent Book, entry string) (Book, error) {
 	switch {
 	case bookref.IsRef(entry):
 		ref, err := bookref.Parse(entry)
@@ -88,8 +97,11 @@ func (b Book) identity() string {
 	return "dir:" + b.Path
 }
 
-func expandIncludes(roots []Book, repoOnlyRoot func(Book) bool, include func(Book, string) (Book, error)) (active, repoOnly []Book, err error) {
-	type reached struct{ version, chain string }
+func expandIncludes(roots []Book, repoOnlyRoot func(Book) bool, include func(Book, bookUse) (Book, error)) (active, repoOnly []Book, err error) {
+	type reached struct {
+		version, chain string
+		index          int
+	}
 	seen := map[string]reached{}
 	onPath := map[string]bool{}
 	children := map[string][]string{}
@@ -104,13 +116,18 @@ func expandIncludes(roots []Book, repoOnlyRoot func(Book) bool, include func(Boo
 			if earlier.version != book.commit {
 				return errorf("two versions of one book are included: %s and %s; include one version", earlier.chain, strings.Join(chain, " → "))
 			}
+			merged, err := active[earlier.index].withArgsOf(book)
+			if err != nil {
+				return err
+			}
+			active[earlier.index] = merged
 			return nil
 		}
-		seen[id] = reached{book.commit, strings.Join(chain, " → ")}
+		seen[id] = reached{book.commit, strings.Join(chain, " → "), len(active)}
 		active = append(active, book)
 		onPath[id] = true
 		for _, entry := range book.includes {
-			next := strings.Join(append(chain, entry), " → ")
+			next := strings.Join(append(chain, entry.text), " → ")
 			if len(chain) >= MaxIncludeDepth {
 				return errorf("an include chain is longer than %d books: %s; nothing was fetched past it", MaxIncludeDepth, next)
 			}
@@ -148,6 +165,11 @@ func expandIncludes(roots []Book, repoOnlyRoot func(Book) bool, include func(Boo
 	for _, root := range roots {
 		if !repoOnlyRoot(root) {
 			mark(root.identity())
+		}
+	}
+	for i, book := range active {
+		if active[i], err = book.applyArgs(); err != nil {
+			return nil, nil, err
 		}
 	}
 	names := map[string]Book{}

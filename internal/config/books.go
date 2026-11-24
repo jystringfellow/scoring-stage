@@ -10,52 +10,66 @@ import (
 type bookEntry struct {
 	alias string
 	ref   bookref.Ref
+	args  bookArgs
 }
 
 func (s *Settings) decodeBooks(value any, path string) error {
-	type entry struct{ alias, text string }
+	type entry struct {
+		alias string
+		use   bookUse
+	}
 	var entries []entry
 	switch typed := value.(type) {
 	case nil:
 	case map[string]any:
 		for _, alias := range sortedKeys(typed) {
-			text, ok := typed[alias].(string)
-			if !ok {
-				return errorf("%s [books]: %s must be a book reference or a book's directory", path, Printable(alias))
-			}
 			if !bookName.MatchString(alias) {
 				return errorf("%s [books]: short name %q must match %s", path, Printable(alias), bookName)
 			}
-			entries = append(entries, entry{alias, text})
+			use, err := decodeBookUse(typed[alias], path+" [books] "+alias)
+			if err != nil {
+				return err
+			}
+			entries = append(entries, entry{alias, use})
 		}
 	default:
-		list, err := asStrings(value)
-		if err != nil {
+		if _, ok := asList(value); !ok {
 			return errorf("%s: books must be a list of book directories or a [books] table", path)
 		}
-		for _, text := range list {
-			entries = append(entries, entry{"", text})
+		uses, err := decodeBookUses(value, "books", path)
+		if err != nil {
+			return err
+		}
+		for _, use := range uses {
+			entries = append(entries, entry{"", use})
 		}
 	}
 	for _, e := range entries {
-		if bookref.IsRef(e.text) {
-			ref, err := bookref.Parse(e.text)
+		var book Book
+		if bookref.IsRef(e.use.text) {
+			ref, err := bookref.Parse(e.use.text)
 			if err != nil {
 				return errorf("%s: %v", path, err)
 			}
-			s.bookRefs = append(s.bookRefs, bookEntry{alias: e.alias, ref: ref})
-			if book, found := s.cachedBook(ref); found {
-				book.Alias = e.alias
-				s.Books = append(s.Books, book)
+			s.bookRefs = append(s.bookRefs, bookEntry{alias: e.alias, ref: ref, args: e.use.args})
+			cached, found := s.cachedBook(ref)
+			if !found {
+				continue
 			}
-			continue
+			book = cached
+		} else {
+			loaded, err := LoadBook(s.Agents, bookDirectory(s.Home, e.use.text))
+			if err != nil {
+				return err
+			}
+			book = *loaded
 		}
-		book, err := LoadBook(s.Agents, bookDirectory(s.Home, e.text))
+		book, err := book.withArgs(e.use.args, path)
 		if err != nil {
 			return err
 		}
 		book.Alias = e.alias
-		s.Books = append(s.Books, *book)
+		s.Books = append(s.Books, book)
 	}
 	return checkBookNames(s.Books, path)
 }
@@ -131,6 +145,9 @@ func activeBooks(settings *Settings, selection Selection) (active, repoOnly []Bo
 		if err != nil {
 			return nil, nil, err
 		}
+		if book, err = book.withArgs(entry.args, filepath.Join(settings.Home, "config.toml")); err != nil {
+			return nil, nil, err
+		}
 		available = append(available, book)
 	}
 	if err := checkBookNames(available, filepath.Join(settings.Home, "config.toml")); err != nil {
@@ -183,7 +200,8 @@ func activeBooks(settings *Settings, selection Selection) (active, repoOnly []Bo
 		asked = append(asked, book)
 	}
 	if repo := selection.Repo; repo != nil {
-		for _, entry := range repo.books {
+		for _, use := range repo.books {
+			entry := use.text
 			var book Book
 			if bookref.IsRef(entry) {
 				if settings.Managed.RepoKitsDenied() {
@@ -202,6 +220,10 @@ func activeBooks(settings *Settings, selection Selection) (active, repoOnly []Bo
 					return nil, nil, errorf("%s asks for book %s, which is not installed (installed: %s); add it to books in ~/.scoring-stage/config.toml", repo.Path, entry, installedList)
 				}
 			}
+			var err error
+			if book, err = book.withArgs(use.args, repo.Path); err != nil {
+				return nil, nil, err
+			}
 			byRepo[book.Path] = true
 			asked = append(asked, book)
 		}
@@ -215,15 +237,21 @@ func activeBooks(settings *Settings, selection Selection) (active, repoOnly []Bo
 	}
 
 	var roots []Book
-	seen := map[string]Book{}
+	seen := map[string]int{}
 	add := func(book Book) error {
-		if other, taken := seen[book.Name]; taken {
-			if other.Path == book.Path {
-				return nil
+		if index, taken := seen[book.Name]; taken {
+			other := roots[index]
+			if other.Path != book.Path {
+				return errorf("books %s and %s are both named %s", other.place(), book.place(), book.Name)
 			}
-			return errorf("books %s and %s are both named %s", other.place(), book.place(), book.Name)
+			merged, err := other.withArgsOf(book)
+			if err != nil {
+				return err
+			}
+			roots[index] = merged
+			return nil
 		}
-		seen[book.Name] = book
+		seen[book.Name] = len(roots)
 		roots = append(roots, book)
 		return nil
 	}
