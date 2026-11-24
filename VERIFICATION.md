@@ -54,6 +54,10 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
   writing it into the env file's kit `args`; no sandbox has been created from a book named with arguments, so it is
   unchecked that sbx accepts them and that the kit's install sees them, for example the .NET kit installing another
   SDK channel or an extra runtime.
+- `stage ship` on a stopped sandbox. The tests show it starting the sandbox with `sbx exec` before it fetches; a
+  live run has not checked that the remote is back when that exec returns, nor a fetch larger than sbx's 30-second
+  grace after it. Before this change, a run of v0.0.1-rc.6 saw ship fail on a stopped sandbox and succeed after a
+  `stage exec` in the same shell command.
 - sbx's kit loader: which files it reads from a kit directory, and whether it matches keys case-insensitively.
   stage checks `.yaml`, `.yml` and `.json` files at any depth except under `files/`, and refuses keys that differ
   from `capabilities`, `extends`, `type`, `config`, `service`, `inject` or `domain` only in case.

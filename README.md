@@ -349,9 +349,13 @@ stage down fix-login                 # on the host: remove the sandbox and the s
   behind and are deleted by `stage down`. The sandbox cannot push, so nothing leaves it until you ship.
 - **A sandbox stops shortly after its last session ends.** sbx stops it 30 seconds after the last `stage shell` or
   `stage exec` exits. A stopped sandbox keeps its files, and the next `stage exec` or `stage shell` starts it again.
-- **`ship` needs the sandbox running.** It fetches the commit from the sandbox over a git remote that sbx removes
-  when the sandbox stops, and it does not start the sandbox. If `ship` says there is no `sandbox-stage-<slug>`
-  remote, keep a `stage shell` open in another terminal while you ship.
+- **`ship` starts a stopped sandbox.** It fetches the commit from the sandbox over a git remote that sbx removes
+  when the sandbox stops. When that remote is missing, `ship` (and the `ship` tool of `stage mcp`) starts the
+  sandbox with an `sbx exec` that runs `true`, as `stage exec` would, then fetches. sbx stops the sandbox again 30
+  seconds after that exec, so a fetch that takes longer may be cut off; for a very large change, keep a
+  `stage shell` open while you ship. The scratch clone's git config is checked before the start and again after
+  it, so the remote sbx adds is checked too. If the remote is still missing after the start, check that `sbx ls`
+  lists the sandbox.
 
 To run an agent without a terminal, give its non-interactive command to `stage exec`, for example:
 
