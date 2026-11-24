@@ -1,0 +1,103 @@
+# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+displayName: .NET SDK
+description: >-
+  The .NET SDK and any extra shared runtimes, installed at create with
+  install-only egress to Microsoft's download hosts and the Debian archive,
+  plus the runtime egress `dotnet restore` and `dotnet test` need for
+  nuget.org and certificate revocation checks.
+
+args:
+  sdkChannel:
+    default: "10.0"
+    pattern: '^[0-9]+\.[0-9]+$'
+    description: SDK channel passed to dotnet-install.sh
+    env: STAGE_DOTNET_SDK_CHANNEL
+  runtimes:
+    default: ""
+    pattern: '^([a-z]+:[0-9]+\.[0-9]+( [a-z]+:[0-9]+\.[0-9]+)*)?$'
+    description: Extra shared runtimes as space-separated runtime:channel pairs, e.g. "aspnetcore:8.0"
+    env: STAGE_DOTNET_RUNTIMES
+  dotnetRoot:
+    default: /usr/share/dotnet
+    pattern: '^/usr/share/dotnet$'
+    description: Where the SDK is installed
+    env: DOTNET_ROOT
+  telemetryOptOut:
+    default: "1"
+    pattern: '^1$'
+    description: Turns off .NET CLI telemetry
+    env: DOTNET_CLI_TELEMETRY_OPTOUT
+  noLogo:
+    default: "1"
+    pattern: '^1$'
+    description: Turns off the .NET CLI first-run banner
+    env: DOTNET_NOLOGO
+
+capabilities:
+  - type: com.docker.sandbox/network-policy@2
+    config:
+      install:
+        allow:
+          - deb.debian.org:80
+          - dhi.io:80
+          - builds.dotnet.microsoft.com:443
+          - ci.dot.net:443
+      runtime:
+        allow:
+          - api.nuget.org:443
+          - "*.nuget.org:443"
+          - crl3.digicert.com:80
+          - crl4.digicert.com:80
+          - ocsp.digicert.com:80
+          - crl.sectigo.com:80
+          - s.symcb.com:80
+          - s.symcd.com:80
+          - ts-crl.ws.symantec.com:80
+          - ts-ocsp.ws.symantec.com:80
+          - www.microsoft.com:80
+
+  - type: com.docker.sandbox/lifecycle@1
+    config:
+      install:
+        - command: |
+            set -eu
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            icu=$(apt-cache pkgnames libicu | grep -E '^libicu[0-9]+$' | sort -V | tail -n 1)
+            apt-get install -y -qq --no-install-recommends "$icu" tzdata
+            rm -rf /var/lib/apt/lists/*
+          user: "0"
+          description: Install ICU and time zone data, which .NET globalization and TimeZoneInfo need
+        - command: |
+            set -eu
+            script=$(mktemp)
+            curl -fsSL --retry 3 https://builds.dotnet.microsoft.com/dotnet/scripts/v1/dotnet-install.sh -o "$script"
+            bash "$script" --channel "$STAGE_DOTNET_SDK_CHANNEL" --install-dir "$DOTNET_ROOT" --no-path
+            for runtime in $STAGE_DOTNET_RUNTIMES; do
+              bash "$script" --runtime "${runtime%%:*}" --channel "${runtime#*:}" --install-dir "$DOTNET_ROOT" --no-path
+            done
+            rm -f "$script"
+            ln -sf "$DOTNET_ROOT/dotnet" /usr/local/bin/dotnet
+          user: "0"
+          env: [STAGE_DOTNET_SDK_CHANNEL, STAGE_DOTNET_RUNTIMES, DOTNET_ROOT]
+          description: Install the .NET SDK and extra runtimes
+
+  - type: com.docker.sandbox/agent-context@1
+    optional: true
+    config: &guidance
+      content: |
+        ## .NET in this sandbox
+
+        - The .NET SDK is on PATH as `dotnet`. NuGet packages come from nuget.org and
+          any other feed a book in this sandbox allows; other feeds are refused with HTTP 403.
+        - Prefer focused runs such as `dotnet test --filter FullyQualifiedName~Name` over
+          whole-solution test runs, and say which tests you ran.
+        - Integration tests that reach databases, queues or other services only work
+          when a book in this sandbox allows those hosts. Report a refused host instead of skipping or
+          editing the test to pass.
+
+  - type: com.docker.sandbox/agent-context@2
+    optional: true
+    config: *guidance

@@ -71,6 +71,20 @@ func libraryRemote(t *testing.T, root string) {
 	t.Setenv("GIT_CONFIG_VALUE_0", "https://"+libraryRepository+".git")
 }
 
+func libraryHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Cleanup(func() {
+		filepath.WalkDir(home, func(path string, entry os.DirEntry, err error) error {
+			if err == nil && entry.IsDir() {
+				os.Chmod(path, 0o755)
+			}
+			return nil
+		})
+	})
+	return home
+}
+
 func TestEveryLibraryBookIsFetchedByReferenceAndComposesWithoutBindingsSecretsOrCredentials(t *testing.T) {
 	root := Resolve("../../books")
 	entries, err := os.ReadDir(root)
@@ -89,15 +103,7 @@ func TestEveryLibraryBookIsFetchedByReferenceAndComposesWithoutBindingsSecretsOr
 			if err != nil {
 				t.Fatal(err)
 			}
-			home := t.TempDir()
-			t.Cleanup(func() {
-				filepath.WalkDir(home, func(path string, entry os.DirEntry, err error) error {
-					if err == nil && entry.IsDir() {
-						os.Chmod(path, 0o755)
-					}
-					return nil
-				})
-			})
+			home := libraryHome(t)
 			testutil.WriteFile(t, filepath.Join(home, "config.toml"), fmt.Sprintf("books = [%q]\n", reference))
 			fetched, err := load(t, home).FetchWithIncludes([]bookref.Ref{ref}, &bookref.Lock{})
 			if err != nil {
@@ -133,13 +139,57 @@ func TestEveryLibraryBookIsFetchedByReferenceAndComposesWithoutBindingsSecretsOr
 				}
 				for _, document := range documents {
 					for _, capability := range document.spec.Capabilities {
-						if !slices.Contains([]string{"com.docker.sandbox/network-policy@2", "com.docker.sandbox/lifecycle@1"}, capability.Type) {
+						if !slices.Contains([]string{"com.docker.sandbox/network-policy@2", "com.docker.sandbox/lifecycle@1", "com.docker.sandbox/agent-context@1", "com.docker.sandbox/agent-context@2"}, capability.Type) {
 							t.Errorf("unexpected capability: %s", capability.Type)
 						}
 					}
 				}
 			}
 		})
+	}
+}
+
+func TestABookThatIncludesTheDotnetLibraryBookGetsTheDotnetKitAndItsOwnFeedKit(t *testing.T) {
+	libraryRemote(t, Resolve("../../books"))
+	reference := libraryRepository + "//books/dotnet@v1"
+	ref, err := bookref.Parse(reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := libraryHome(t)
+	scratch, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	private := book(t, scratch, "private", "includes = [\""+reference+"\"]\nkits = [\"./kits/feed\"]\n")
+	testutil.WriteFile(t, filepath.Join(private, "kits", "feed", "feed.yaml"), dedent(`
+		schemaVersion: "3"
+		kind: mixin
+		capabilities:
+		  - type: com.docker.sandbox/network-policy@2
+		    config:
+		      runtime:
+		        allow: [nuget.example.com:443]
+	`))
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), fmt.Sprintf("books = [%q]\n", private))
+	if _, err := load(t, home).FetchWithIncludes([]bookref.Ref{ref}, &bookref.Lock{}); err != nil {
+		t.Fatal(err)
+	}
+	composition := composeWith(t, load(t, home), Selection{Books: []string{"private"}})
+	if !slices.Contains(composition.Books, "private") || !slices.Contains(composition.Books, "dotnet") {
+		t.Fatalf("books = %v, want private and the dotnet book it includes", composition.Books)
+	}
+	var dotnetKit, feedKit int
+	for _, kit := range composition.Kits {
+		switch {
+		case kit.Source == filepath.Join(private, "kits", "feed"):
+			feedKit++
+		case filepath.Base(kit.Source) == "dotnet" && filepath.Base(filepath.Dir(kit.Source)) == "kits":
+			dotnetKit++
+		}
+	}
+	if dotnetKit != 1 || feedKit != 1 {
+		t.Errorf("kits = %v, want the dotnet kit and the feed kit once each", sources(composition.Kits))
 	}
 }
 
