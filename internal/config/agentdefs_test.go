@@ -424,7 +424,7 @@ func TestTwoAgentsThatDisagreeOnASecretAreRefusedWithOrWithoutGh(t *testing.T) {
 			expectError(t, err, "agent "+chosen[1]+" sets secret copilot differently from agent "+chosen[0])
 		}
 	}
-	same := homeWith(t, "[agent.example]\nkit = \"docker.io/org/kit:1\"\n[agent.example.secrets.copilot]\ncommand = \"{gh} auth token\"\n")
+	same := homeWith(t, "[agent.example]\nkit = \"docker.io/org/kit:1\"\n[agent.example.secrets.copilot]\ncommand = \"{gh} auth token\"\nrefresh = \"30m\"\n")
 	composition := composeWith(t, load(t, same), Selection{Agents: []string{"copilot", "example"}})
 	if _, set := composition.Secrets["copilot"]; set || len(composition.Warnings) != 1 {
 		t.Errorf("secrets %v warnings %v", composition.Secrets, composition.Warnings)

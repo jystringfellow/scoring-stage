@@ -111,6 +111,7 @@ commands:
   book lock <repo>                  write the repository's .scoring-stage/stage.lock from yours, for you to commit
   up <repo> <slug> [options]        create a sandbox for a repository
   shell <slug>                      open a login shell in the repository
+  secrets refresh <slug>            have sbx run a sandbox's secret commands again, for a login that changed
   login <slug>                      save the sandbox's copyable agent logins (copy_logins) for future sandboxes
   exec <slug> -- <command> [args]   run a command in the repository
   exec --detach <slug> -- <command> [args] start a job held open by a host process
@@ -140,9 +141,10 @@ func (a *App) Main(args []string) int {
 	commands := map[string]func([]string, string) (int, error){
 		"init": a.cmdInit, "setup": a.cmdSetup, "broker": a.cmdBroker, "up": a.cmdUp, "shell": a.cmdShell,
 		"exec": a.cmdExec, "attach": a.cmdAttach, "ship": a.cmdShip, "list": a.cmdList, "hall": a.cmdHall, "down": a.cmdDown, "login": a.cmdLogin, "take": a.cmdTake,
-		"github": a.cmdGitHub,
-		"token":  a.cmdToken,
-		"put":    a.cmdPut, "job": a.cmdJob, "mcp": a.cmdMCP,
+		"github":  a.cmdGitHub,
+		"token":   a.cmdToken,
+		"secrets": a.cmdSecrets,
+		"put":     a.cmdPut, "job": a.cmdJob, "mcp": a.cmdMCP,
 		"approve": a.cmdApprove, "book": a.cmdBook,
 	}
 	name := args[0]
@@ -590,7 +592,11 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 			return 0, err
 		}
 		if existing[sandbox] {
-			return 0, errorf("sandbox %s already exists", sandbox)
+			return 0, errorf("sandbox %s already exists. stage up does not change a sandbox that exists: it keeps the secrets, bindings, kits and gear it was created with, "+
+				"so a changed login on your machine does not reach it by itself.\n"+
+				"  For a changed login, `stage secrets refresh %s` has sbx run the sandbox's secret commands again; the sandbox keeps its files.\n"+
+				"  For anything else, keep what you need with `stage take %s` and run `stage down %s`, then `stage up` again; "+
+				"the new sandbox starts from your repository, not from this one's files", sandbox, slug, slug, slug)
 		}
 	}
 

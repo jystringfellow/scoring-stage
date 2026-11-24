@@ -99,6 +99,7 @@ stage list [--json] [--shallow]      # one line per stage; --shallow runs nothin
 stage hall [--port N]                # the same stages as a page on 127.0.0.1, until Ctrl-C
 stage login fix-login                # save the sandbox's agy login for future sandboxes (copy_logins)
 stage take fix-login                 # copy the sandbox's takes to ~/.scoring-stage/takes/fix-login/ now
+stage secrets refresh fix-login      # have sbx run the sandbox's secret commands again, after your gh login changed
 stage down fix-login                 # keep the sandbox's takes, then remove it, its scoped secrets and the scratch clone
 stage broker start|stop|status       # the AWS broker (up starts it when a sandbox needs it)
 stage broker serve                   # run the broker in the foreground
@@ -147,6 +148,29 @@ reach the host scratch clone, and that the host source mount, if sbx adds one, i
 [sbx environment file](https://docs.docker.com/ai/sandboxes/configuration/environment-files/) next to it and runs
 `sbx env create`. The sandbox sees the repository at the scratch clone's host path. `stage down` deletes the scratch
 clone, so ship anything you want to keep first.
+
+`stage up` creates a sandbox; it never changes one. On a slug whose sandbox exists it stops with "already exists"
+before it clones, fetches a book, copies gear or asks sbx to create anything: the sandbox keeps the kits,
+secrets, bindings, workspace and gear it was created with, as sbx provisions them only at creation. So a change
+on your machine, such as a new `gh` login, a new token from `stage token set`, a new book version or a change to
+your gear, reaches the next sandbox and not this one. The message says what you can do:
+
+- `stage secrets refresh <slug>` gives a running sandbox a changed login. For each secret in the sandbox's env file
+  that is one of sbx's own services (such as `copilot`, `github`, `anthropic` or `openai`), it runs
+  `sbx secret set <service> --sandbox stage-<slug> --command <its command> [--refresh <its interval>] --force`.
+  sbx runs the command on your machine and the sandbox uses the new value from its next request, keeping its
+  files. A secret for another service, such as a book's own, cannot be set this way, and the command names it.
+- `stage take <slug>`, then `stage down <slug>` and `stage up`, gives a new sandbox everything as it is now. The
+  new sandbox starts from your repository; only the paths your takes list are kept.
+
+The secrets that come from your logins (`copilot`, and `github` in `gh` and `fine-grained` mode) ask sbx to run
+their command again every 30 minutes (`refresh: 30m`), as app mode always has, so a sandbox created now picks up a
+changed login by itself. sbx runs the command again when a request needs the secret and the interval has passed,
+whether the sandbox kept running or was stopped and started. A secret without `refresh` is run when the sandbox
+is created and at its first use, then kept: stopping and starting the sandbox does not run it again. So a sandbox
+created before this setting keeps its first token until `stage secrets refresh`. See
+[VERIFICATION.md](VERIFICATION.md), 2026-11-24.
+
 The scratch clone's `origin/*` refs come from GitHub as of `stage up`. Its only local branches are the base and the
 repository's default branch, both at GitHub's commit, with the base checked out; branches of your checkout are not
 carried over. sbx clones the scratch clone into the sandbox, so the sandbox starts on the base, tracking
@@ -491,7 +515,9 @@ What is copied:
   stops `stage up`.
 
 Your copy wins. Gear is unpacked over whatever is at the destination, so a file a kit wrote there is replaced, and
-a directory is merged: your files replace those of the same name, and files only the kit wrote stay. Entries are
+a directory is merged: your files replace those of the same name, and files only the kit wrote stay. A file is
+replaced whole, never merged line by line, so settings that only the sandbox's copy had, such as a kit's default
+mapping in a tool's config file, are gone; put them in your copy. Entries are
 copied in the order listed, so a later entry wins over an earlier one it overlaps.
 
 stage can first reach a sandbox when `sbx env create` returns, so that is when gear lands: through `sbx exec`, the
@@ -729,9 +755,9 @@ tools do not give an agent those credential and host administration choices. `ex
    changes, run `stage github login` again.
 
    App mode has been tested only against a simulated GitHub, not yet against a registered app; in particular,
-   whether `/user/installations` reports every permission a user token carries is unverified. That sbx re-runs a
-   secret's command on its `refresh` interval is also unverified: if it does not, a sandbox loses GitHub access
-   when its first token expires.
+   whether `/user/installations` reports every permission a user token carries is unverified. sbx runs a secret's
+   command again on a request after its `refresh` interval has passed, in a running sandbox too; that was checked
+   with a dummy command on the `copilot` service, not with app mode itself (VERIFICATION.md, 2026-11-24).
 
    **gh.** stage warns on `stage setup` and every `stage up` in this mode. GraphQL lets a sandbox do anything your gh
    login can, in every repository it can write to: commit to and move or delete branches (`createCommitOnBranch`,
@@ -1428,6 +1454,11 @@ and what has not been run live yet.
 
 ## Limitations
 
+- **A sandbox keeps the secrets it was created with until something refreshes them.** sbx provisions a sandbox's
+  secrets when `stage up` creates it, and `stage up` refuses a sandbox that exists. The secrets from your logins
+  are run again every 30 minutes; a secret without a `refresh` in your config, or one in a sandbox created before
+  this setting, keeps its first value until `stage secrets refresh <slug>`. That command can set again only sbx's
+  own services; a book's own secret needs `stage down` and `stage up`.
 - **MCP cancellation does not roll back sandbox changes.** It cancels job waits and synchronous exec; commands such
   as up, put, take and down finish their existing command paths. Closing input cancels waits and exec, then drains
   those command paths before exit, so an unresponsive child can delay shutdown. A client timeout alone does not

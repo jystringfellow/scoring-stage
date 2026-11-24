@@ -58,6 +58,9 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
   live run has not checked that the remote is back when that exec returns, nor a fetch larger than sbx's 30-second
   grace after it. Before this change, a run of v0.0.1-rc.6 saw ship fail on a stopped sandbox and succeed after a
   `stage exec` in the same shell command.
+- `stage secrets refresh` itself against a live sandbox. The `sbx secret set --sandbox … --command … --force` call
+  it makes was checked on 2026-11-24 by hand, with a dummy command; the command as stage runs it, `--refresh`
+  passed to `sbx secret set`, and services other than `copilot` were not.
 - sbx's kit loader: which files it reads from a kit directory, and whether it matches keys case-insensitively.
   stage checks `.yaml`, `.yml` and `.json` files at any depth except under `files/`, and refuses keys that differ
   from `capabilities`, `extends`, `type`, `config`, `service`, `inject` or `domain` only in case.
@@ -645,3 +648,32 @@ Observed:
 - A version with neither tag was refused: `has neither tag <directory>/v9.9.9 nor tag v9.9.9; nothing was
   changed`.
 - Not checked: the plain-tag fallback, an annotated tag, and a tag moved on github.com.
+
+## 2026-11-24: secret commands in a live sandbox, with and without `refresh`
+
+- **sbx:** 0.51.0, macOS.
+- **stage:** 5aacee7 with this change's uncommitted work, built from its working tree.
+- **Credentials:** none real. Two sandboxes from this repository, each with its own `STAGE_HOME` under a temp
+  directory, `[github] mode = "none"`, and the `copilot` agent's secret replaced in that config by a host command
+  that appended the time to a log file and printed a dummy value (`stage-probe-dummy-…`). One had `refresh = "1m"`,
+  the other no `refresh`. Requests from inside each sandbox went to `https://api.githubcopilot.com/models`, so the
+  proxy used the secret; they carried the dummy value and were answered 400.
+- **Restoration:** both sandboxes removed with `stage down`, which removed their scoped secrets; `sbx secret ls`
+  then listed none for them and `sbx ls` the same number of sandboxes as before. sbx's `credentials.yaml` had the
+  same sha256 before and after; it was hashed, not copied. Nothing else was created.
+
+Checked:
+
+- **With `refresh = "1m"`,** the command ran at creation, then again on the first request after each minute had
+  passed while the sandbox kept running (requests every 30 seconds for 4 minutes: a run on every other request).
+  After `sbx stop` and a start, a request within the minute did not run it, and the first request after the
+  minute did.
+- **Without `refresh`,** the command ran at creation and on the first request, then not again: not over 4 minutes
+  of requests in a running sandbox, and not after `sbx stop` and a start. So an env-file secret with no `refresh`
+  keeps its first value for the sandbox's life, which is how a sandbox kept a `gh` token after the host's login
+  changed. This also settles, for `copilot`, the part of app mode's open question above about re-running on the
+  interval in a running sandbox: sbx does, on a request after the interval.
+- **`sbx secret set copilot --sandbox <sandbox> --command <new command> --force --no-input`** on the running
+  sandbox without `refresh` printed "Applied secret to sandbox", ran the new command once to check it, and the
+  sandbox's next request ran the new command; the old one never ran again. This is the call `stage secrets
+  refresh` makes. The command itself was not run against a live sandbox.

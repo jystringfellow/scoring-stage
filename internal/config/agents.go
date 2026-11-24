@@ -6,6 +6,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -50,7 +51,7 @@ var builtinAgents = map[string]agentSpec{
 			"api.enterprise.githubcopilot.com",
 			"copilot.github.com",
 		)},
-		secrets: map[string]any{"copilot": map[string]any{"command": ghPlaceholder + " auth token"}},
+		secrets: map[string]any{"copilot": map[string]any{"command": ghPlaceholder + " auth token", "refresh": HostLoginSecretRefresh}},
 	},
 	"agy": {
 		kit: "docker.io/sbx/antigravity-mixin:1.0.0",
@@ -453,6 +454,8 @@ func ghPlaceholderMisplaced(command string) bool {
 var hostsBesideGitHub = []string{"copilot.github.com"}
 
 var sbxBuiltinServices = []string{"anthropic", "copilot", "cursor", "devin", "droid", "github", "google", "groq", "mistral", "nebius", "openai", "openrouter", "xai"}
+
+func IsSbxService(service string) bool { return slices.Contains(sbxBuiltinServices, service) }
 
 var gitHubApexes = []string{"github.com", "github.ai", "githubusercontent.com"}
 
