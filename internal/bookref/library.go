@@ -57,52 +57,64 @@ func (l Library) Open(ref Ref, team *Lock) (Book, error) {
 		return Book{}, errorf("%s is locked to %s in %s and to %s in %s; to use the repository's, run `stage book update %s --from <repo>`; to give the repository yours, run `stage book lock <repo>` and commit it",
 			key, own.describe(), mine.Path, theirs.describe(), team.Path, key)
 	}
-	entry, locked := own, haveOwn
-	if !haveOwn && haveTheirs {
-		entry, locked = theirs, true
-	}
-	if !locked {
-		files, _, commit, err := fetchVersion(ref)
-		if err != nil {
-			return Book{}, err
-		}
-		entry = Entry{Ref: key, Commit: commit, SHA256: fingerprint(files), Scheme: Scheme}
-		if err := l.store(ref, entry.SHA256, files); err != nil {
-			return Book{}, err
-		}
-	} else {
-		where := mine.Path
-		if !haveOwn {
-			where = team.Path
-		}
-		if entry.Scheme != Scheme {
-			return Book{}, errorf("%s is locked in %s with fingerprint scheme %s, which this stage does not read (it reads %s); nothing was changed",
-				key, where, strconv.QuoteToASCII(entry.Scheme), Scheme)
-		}
-		cached, err := l.cached(ref, entry.SHA256)
-		if err != nil {
-			return Book{}, err
-		}
-		if !cached {
-			files, err := fetchCommit(ref, entry.Commit)
-			if err != nil {
-				return Book{}, err
-			}
-			if got := fingerprint(files); got != entry.SHA256 {
-				return Book{}, errorf("%s at commit %s does not match its lock in %s (locked sha256 %s, fetched %s); nothing was changed",
-					key, entry.Commit[:12], where, entry.SHA256[:12], got[:12])
-			}
-			if err := l.store(ref, entry.SHA256, files); err != nil {
-				return Book{}, err
-			}
-		}
+	book, entry, err := l.Pin(ref, mine, team)
+	if err != nil {
+		return Book{}, err
 	}
 	if !haveOwn {
 		if err := addToLock(mine.Path, entry); err != nil {
 			return Book{}, err
 		}
 	}
-	return Book{Ref: ref, Dir: filepath.Join(l.CacheRoot(), entry.SHA256), Commit: entry.Commit, Fingerprint: entry.SHA256}, nil
+	return book, nil
+}
+
+func (l Library) Pin(ref Ref, locks ...*Lock) (Book, Entry, error) {
+	key := ref.String()
+	for _, lock := range locks {
+		if lock == nil {
+			continue
+		}
+		entry, found := lock.Find(key)
+		if !found {
+			continue
+		}
+		if entry.Scheme != Scheme {
+			return Book{}, Entry{}, errorf("%s is locked in %s with fingerprint scheme %s, which this stage does not read (it reads %s); nothing was changed",
+				key, lock.Path, strconv.QuoteToASCII(entry.Scheme), Scheme)
+		}
+		cached, err := l.cached(ref, entry.SHA256)
+		if err != nil {
+			return Book{}, Entry{}, err
+		}
+		if !cached {
+			files, err := fetchCommit(ref, entry.Commit)
+			if err != nil {
+				return Book{}, Entry{}, err
+			}
+			if got := fingerprint(files); got != entry.SHA256 {
+				return Book{}, Entry{}, errorf("%s at commit %s does not match its lock in %s (locked sha256 %s, fetched %s); nothing was changed",
+					key, entry.Commit[:12], lock.Path, entry.SHA256[:12], got[:12])
+			}
+			if err := l.store(ref, entry.SHA256, files); err != nil {
+				return Book{}, Entry{}, err
+			}
+		}
+		return l.book(ref, entry), entry, nil
+	}
+	files, _, commit, err := fetchVersion(ref)
+	if err != nil {
+		return Book{}, Entry{}, err
+	}
+	entry := Entry{Ref: key, Commit: commit, SHA256: fingerprint(files), Scheme: Scheme}
+	if err := l.store(ref, entry.SHA256, files); err != nil {
+		return Book{}, Entry{}, err
+	}
+	return l.book(ref, entry), entry, nil
+}
+
+func (l Library) book(ref Ref, entry Entry) Book {
+	return Book{Ref: ref, Dir: filepath.Join(l.CacheRoot(), entry.SHA256), Commit: entry.Commit, Fingerprint: entry.SHA256}
 }
 
 func (l Library) Cached(ref Ref) (Book, bool) {
