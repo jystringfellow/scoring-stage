@@ -54,6 +54,7 @@ func (a *App) bookList(args []string, home string) error {
 		}
 	}
 	names := map[string]string{}
+	cachedRefs := map[string]bool{}
 	includedBy := map[string][]string{}
 	var includes []string
 	for _, entry := range mine.Entries {
@@ -62,6 +63,7 @@ func (a *App) bookList(args []string, home string) error {
 		if !cached {
 			continue
 		}
+		cachedRefs[entry.Ref] = true
 		described, _, err := config.DescribeBook(settings.Agents, book.Dir)
 		if err != nil {
 			continue
@@ -87,8 +89,11 @@ func (a *App) bookList(args []string, home string) error {
 	listed := false
 	for _, entry := range mine.Entries {
 		name, state := "?", "not cached"
-		if described, cached := names[entry.Ref]; cached {
-			name, state = described, "cached"
+		if cachedRefs[entry.Ref] {
+			state = "cached"
+		}
+		if described, found := names[entry.Ref]; found {
+			name = described
 		}
 		line := fmt.Sprintf("%s  %s  commit %s  %s", name, entry.Ref, short(entry.Commit), state)
 		for _, alias := range aliases[entry.Ref] {

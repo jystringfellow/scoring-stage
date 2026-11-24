@@ -121,6 +121,57 @@ func TestBookListShowsWhatIncludesEachBookAndAnIncludeNotFetchedYet(t *testing.T
 	h.expectStdout(observeRef + "  included by go (" + goV2 + "); not fetched yet")
 }
 
+func TestBookListSaysALockedBookIsCachedEvenWhenItCannotDescribeIt(t *testing.T) {
+	h := setup(t)
+	h.booksRemote().publishFiles("v1", map[string]string{"backend/go/book.toml": "name = 3\n"})
+	h.noTerminal()
+	h.expect(1, "up", h.remote.Checkout, "fix", "--book", goBookRef)
+	if h.lockedCommit(filepath.Join(h.home, "stage.lock"), goBookRef) == "" {
+		t.Fatalf("stage up did not lock the book:\n%s", testutil.ReadFile(t, filepath.Join(h.home, "stage.lock")))
+	}
+	h.stdout.Reset()
+	h.expect(0, "book", "list")
+	h.expectStdout("?  " + goBookRef)
+	if !strings.Contains(h.stdout.String(), "  cached") || strings.Contains(h.stdout.String(), "not cached") {
+		t.Errorf("a cached book it cannot describe is not listed as cached:\n%s", h.stdout.String())
+	}
+}
+
+func TestBookUpdateFromTakesTheRepositorysEntryForAnIncludedBookAndAsksAboutIt(t *testing.T) {
+	h := setup(t)
+	books := h.booksRemote()
+	h.goBookThatIncludesObserve(t, books, "v1")
+	writeGitHubSetup(t, h.home, "[books]\ngo = \""+goBookRef+"\"\n")
+	h.answerAtATerminal("y\n")
+	h.expect(0, "book", "update")
+	lockPath, trustPath := filepath.Join(h.home, "stage.lock"), filepath.Join(h.home, "trusted-kits")
+	yours, approved := testutil.ReadFile(t, lockPath), testutil.ReadFile(t, trustPath)
+	first := h.lockedCommit(lockPath, observeRef)
+
+	moved := books.publishFiles("v1", map[string]string{"shared/observe/book.toml": bookToml("observe", "", "takes = [\"~/observe-moved\"]\n")})
+	h.expect(0, "book", "update", observeRef)
+	testutil.WriteFile(t, filepath.Join(h.remote.Checkout, ".scoring-stage", "stage.lock"), testutil.ReadFile(t, lockPath))
+	testutil.WriteFile(t, lockPath, yours)
+	testutil.WriteFile(t, trustPath, approved)
+
+	h.answerAtATerminal("n\n")
+	h.expect(1, "book", "update", "go", "--from", h.remote.Checkout)
+	h.expectStdout("book observe ("+observeRef+")", "~/observe-moved")
+	if got := h.lockedCommit(lockPath, observeRef); got != first {
+		t.Fatalf("a declined update moved the include to %s, want your %s", got, first)
+	}
+
+	h.stdout.Reset()
+	h.answerAtATerminal("y\n")
+	h.expect(0, "book", "update", "go", "--from", h.remote.Checkout)
+	h.expectStdout("book observe ("+observeRef+")", "~/observe-moved")
+	if got := h.lockedCommit(lockPath, observeRef); got != moved {
+		t.Errorf("the include is at %s, want the repository's %s", got, moved)
+	}
+	h.noTerminal()
+	h.expect(0, "up", h.remote.Checkout, "after", "--book", "go")
+}
+
 func TestBookLockLocksAndAsksAboutABookIncludedByReference(t *testing.T) {
 	h := setup(t)
 	books := h.booksRemote()
