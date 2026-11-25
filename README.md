@@ -1643,11 +1643,14 @@ The build job also renders the Homebrew formula from `packaging/homebrew/scoring
 `SHA256SUMS` it wrote, and fails if a placeholder is left; CI renders it with dummy values on every change. After
 the release, a `homebrew` job commits the formula to `Formula/scoring-stage.rb` in
 [jystringfellow/homebrew-tap](https://github.com/jystringfellow/homebrew-tap) as "scoring-stage <tag>", only if it
-changed. It uses the repository secret `HOMEBREW_TAP_TOKEN`: a fine-grained token whose only repository is the tap,
-with Contents read and write and nothing else. The job has no permissions of its own on this repository, and the
-token reaches git only through a credential helper in its environment, never on a command line. Without the secret
-the job says it is skipping the tap and succeeds. A prerelease tag publishes the formula too, so the tap follows
-the newest tag.
+changed. It pushes with a token minted for that run from a GitHub App installed on the tap, through
+`actions/create-github-app-token`, for the tap alone and with Contents write and nothing else. Set the App's client
+ID as the repository variable `PUBLISHER_APP_CLIENT_ID` and its private key as the repository secret
+`PUBLISHER_APP_PRIVATE_KEY`. The tap's commit is authored as the App's bot, `<app-slug>[bot]`. If the tap's
+default branch has a ruleset requiring pull requests, the App needs a bypass entry on it, or the push is refused.
+The job has no permissions of its own on this repository, and the token reaches git only through a credential
+helper in its environment, never on a command line. Without the variable or the secret the job says it is
+skipping the tap and succeeds. A prerelease tag publishes the formula too, so the tap follows the newest tag.
 
 The tag and `main` checks catch mistakes, not a malicious writer: a tag push runs `release.yml` as it exists at
 the tagged commit, so anyone who can push a tag can also change the checks. The real controls are branch

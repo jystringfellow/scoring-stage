@@ -26,7 +26,8 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
   runtime owns it; this has not been looked at on a live sbx.
 - The release workflow's refusals: a tag that is not `vX.Y.Z[-suffix]`, and a tagged commit that is not on `main`.
 - The release workflow's `homebrew` job: rendering the formula from a real release's `SHA256SUMS`, skipping without
-  `HOMEBREW_TAP_TOKEN`, and pushing to the tap with it. `brew install jystringfellow/tap/scoring-stage` from a
+  `PUBLISHER_APP_CLIENT_ID` or `PUBLISHER_APP_PRIVATE_KEY`, and pushing to the tap with a token minted from the
+  publisher App, past the tap's ruleset, as the App's bot. `brew install jystringfellow/tap/scoring-stage` from a
   formula this workflow published.
 - Managed settings, beyond unit tests.
 - Takes: `stage down` keeping takes before a real removal, a repository's takes approval, a take near the size,
