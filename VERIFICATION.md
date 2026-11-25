@@ -21,6 +21,9 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
   session held open across the expiry. Also whether a refresh rotates the refresh token, and whether
   `/user/installations` reports account permissions (the app checked on 2026-11-10 had none).
 - `stage ship --pr`.
+- Where sbx puts a book or repository kit's `host-mount@1` directory on the host when stage passes no `--mount` or
+  `mounts`, and that it is the same directory for every sandbox using the kit. The kit specification says the
+  runtime owns it; this has not been looked at on a live sbx.
 - The release workflow's refusals: a tag that is not `vX.Y.Z[-suffix]`, and a tagged commit that is not on `main`.
 - The release workflow's `homebrew` job: rendering the formula from a real release's `SHA256SUMS`, skipping without
   `HOMEBREW_TAP_TOKEN`, and pushing to the tap with it. `brew install jystringfellow/tap/scoring-stage` from a
