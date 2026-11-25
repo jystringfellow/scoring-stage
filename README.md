@@ -1044,6 +1044,14 @@ reserved service. A repository's local kits may declare no credentials at all, s
 Service names are compared in lower case without surrounding spaces, and names with control or invisible characters
 are refused. Kits that extend another kit (`extends:`), or have capabilities stage does not recognise, are refused.
 
+A `host-mount@1` entry names only a path inside the sandbox and, optionally, the permissions of a new directory
+(`path`, `mode`). The kit specification leaves the host directory to sbx: one it owns, kept on the host and
+shared by every sandbox using the same kit, so a book or repository cannot use it to mount your files or
+`~/.scoring-stage`. That is from the specification, not yet checked against a live sbx. stage
+refuses an entry with any other key, or another version of the capability, and never passes sbx a host
+directory for one (`--mount`, or `mounts` in the env file). The approval shows such an entry as sharing its path
+with the host and with every sandbox using the kit.
+
 **This fence is not a boundary against a malicious book.** It stops a book from silently rebinding the credentials
 stage sets up, and it guards against mistakes. A book's secret commands still run on your machine with all your
 access: `[secrets.feed] command = "gh auth token"`, with the book's own kit injecting `feed` on a host the book

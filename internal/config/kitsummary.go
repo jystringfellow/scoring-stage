@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -229,6 +230,12 @@ func checkUntrustedKit(agents Agents, dir, owner string, owned map[string]any) e
 			if name == "" {
 				return errorf("%s: unrecognised capability type %q", where, Printable(capability.Type))
 			}
+			if name == "host-mount" {
+				if err := checkHostMount(capability.Type, capability.Config); err != nil {
+					return errorf("%s: %v", where, err)
+				}
+				continue
+			}
 			if name != "credential" {
 				continue
 			}
@@ -261,6 +268,30 @@ func checkUntrustedKit(agents Agents, dir, owner string, owned map[string]any) e
 					return errorf("%s: credential %s is injected on %s, a host a reserved service uses; %s", where, service, Printable(domain), agents.reservedReason())
 				}
 			}
+		}
+	}
+	return nil
+}
+
+var hostMountFields = []string{"path", "mode"}
+
+func checkHostMount(kind string, config map[string]any) error {
+	if _, version, _ := strings.Cut(strings.ToLower(strings.TrimSpace(kind)), "@"); version != "1" {
+		return errorf("declares host-mount@%s, a version stage does not know; stage knows host-mount@1, whose config "+
+			"names only the sandbox path and mode", Printable(version))
+	}
+	for _, key := range slices.Sorted(maps.Keys(config)) {
+		if !slices.Contains(hostMountFields, key) {
+			return errorf("host-mount@1 config has %s, which host-mount@1 does not define; a kit names only the sandbox "+
+				"path and mode, and sbx chooses the host directory", Printable(key))
+		}
+	}
+	if path, ok := config["path"].(string); !ok || strings.TrimSpace(path) == "" {
+		return errorf("host-mount@1 has no path")
+	}
+	if mode, found := config["mode"]; found {
+		if _, ok := mode.(string); !ok {
+			return errorf("host-mount@1 mode must be a string, such as \"0755\"")
 		}
 	}
 	return nil
@@ -324,7 +355,11 @@ func describeCapability(kind string, config map[string]any) []string {
 		}
 		return []string{fmt.Sprintf("writes %d file(s) and runs %d command(s) in the sandbox", len(files), commands)}
 	case "host-mount":
-		return []string{fmt.Sprintf("mounts from the host: %v", config)}
+		path, _ := config["path"].(string)
+		if path == "" {
+			return []string{"host-mount with no path; read the kit's file before approving"}
+		}
+		return []string{fmt.Sprintf("shares %s with the host and with every sandbox using this kit", path)}
 	default:
 		return []string{name}
 	}
