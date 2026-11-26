@@ -167,7 +167,7 @@ func (g Grants) Issue(owner string, profiles []string) (string, error) {
 }
 
 func (g Grants) Revoke(owner string) error {
-	for _, suffix := range []string{".token", ".profiles"} {
+	for _, suffix := range []string{".token", ".profiles", ".secrets"} {
 		if err := os.Remove(filepath.Join(g.Path, owner+suffix)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
@@ -176,12 +176,26 @@ func (g Grants) Revoke(owner string) error {
 }
 
 func (g Grants) Lookup(supplied string) (string, map[string]bool, bool) {
-	if supplied == "" {
+	owner, found := g.owner(supplied)
+	if !found {
 		return "", nil, false
+	}
+	profiles := map[string]bool{}
+	if listing, err := os.ReadFile(filepath.Join(g.Path, owner+".profiles")); err == nil {
+		for _, profile := range strings.Fields(string(listing)) {
+			profiles[profile] = true
+		}
+	}
+	return owner, profiles, true
+}
+
+func (g Grants) owner(supplied string) (string, bool) {
+	if supplied == "" {
+		return "", false
 	}
 	entries, err := os.ReadDir(g.Path)
 	if err != nil {
-		return "", nil, false
+		return "", false
 	}
 	var names []string
 	for _, entry := range entries {
@@ -199,16 +213,9 @@ func (g Grants) Lookup(supplied string) (string, map[string]bool, bool) {
 		if token == "" || subtle.ConstantTimeCompare([]byte(supplied), []byte(token)) != 1 {
 			continue
 		}
-		owner := strings.TrimSuffix(name, ".token")
-		profiles := map[string]bool{}
-		if listing, err := os.ReadFile(filepath.Join(g.Path, owner+".profiles")); err == nil {
-			for _, profile := range strings.Fields(string(listing)) {
-				profiles[profile] = true
-			}
-		}
-		return owner, profiles, true
+		return strings.TrimSuffix(name, ".token"), true
 	}
-	return "", nil, false
+	return "", false
 }
 
 func writePrivate(path, text string) error {
@@ -268,20 +275,30 @@ func Handler(source Credentials, grants Grants, log func(string)) http.Handler {
 }
 
 func Serve(grantsDir string, out io.Writer) error {
-	listener, err := net.Listen("tcp", Address)
+	credentialListener, err := net.Listen("tcp", Address)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "broker: listening on %s; grants in %s\n", Address, grantsDir)
+	secretsListener, err := net.Listen("tcp", SecretsManagerAddress)
+	if err != nil {
+		credentialListener.Close()
+		return err
+	}
+	fmt.Fprintf(out, "broker: listening on %s (credentials) and %s (Secrets Manager); grants in %s\n", Address, SecretsManagerAddress, grantsDir)
 	var mu sync.Mutex
 	log := func(line string) {
 		mu.Lock()
 		defer mu.Unlock()
 		fmt.Fprintln(out, line)
 	}
-	server := &http.Server{
-		Handler:           Handler(NewCredentialSource(ExecRunner), Grants{grantsDir}, log),
-		ReadHeaderTimeout: 10 * time.Second,
+	source, grants := NewCredentialSource(ExecRunner), Grants{grantsDir}
+	stopped := make(chan error, 2)
+	for listener, handler := range map[net.Listener]http.Handler{
+		credentialListener: Handler(source, grants, log),
+		secretsListener:    SecretsManagerHandler(NewSecretsManager(source), grants, log),
+	} {
+		server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: time.Minute}
+		go func() { stopped <- server.Serve(listener) }()
 	}
-	return server.Serve(listener)
+	return <-stopped
 }
