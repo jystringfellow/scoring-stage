@@ -849,7 +849,7 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 	}
 	for _, profile := range listed.profiles() {
 		if contains(profiles, profile) {
-			warnings = append(warnings, fmt.Sprintf("AWS profile %s is granted to the sandbox and also reads Secrets Manager secrets on your machine; "+
+			warnings = append(warnings, fmt.Sprintf("AWS profile %s is granted to the sandbox and also listed for Secrets Manager secrets; "+
 				"its keys in the sandbox can read unlisted secrets through any open host that reads secrets for them", profile))
 		}
 	}

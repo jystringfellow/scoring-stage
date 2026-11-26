@@ -642,11 +642,11 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	}
 	config.AddStageBindings(auditExpected, composition.Bindings, "this sandbox")
 	if len(composition.AWSSecretsManager) > 0 && len(globalAllows) > 0 {
-		return 0, errorf("[aws.secrets_manager] lists secrets the sandbox reads only through the stage broker, so the global sbx policy must be deny-all: " +
+		return 0, errorf("[aws.secrets_manager] lists secrets, so the global sbx policy must be deny-all: " +
 			"a global allow rule could open Secrets Manager. Run stage setup, or remove the list")
 	}
 	for _, profile := range slices.Sorted(maps.Keys(composition.AWSSecretsManager)) {
-		a.say("aws secrets manager (read on your machine with profile %s): %s", profile, strings.Join(composition.AWSSecretsManager[profile], ", "))
+		a.say("aws secrets manager (profile %s): %s", profile, strings.Join(composition.AWSSecretsManager[profile], ", "))
 	}
 	if err := a.checkApprovals(settings.Home, composition, github, *approveRepoConfig, *plan); err != nil {
 		return 0, err
