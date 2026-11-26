@@ -328,27 +328,35 @@ func summarizeBook(agents Agents, book Book) []string {
 	for _, entry := range book.includes {
 		details = append(details, "includes book "+entry.String()+" (asked about on its own)")
 	}
-	for _, entry := range book.kits {
-		kit, err := parseKit(entry, book.Path, "book "+book.Name)
-		if err != nil {
-			continue
-		}
-		if kit.IsLocal() {
-			for _, line := range SummarizeKit(kit.Source) {
-				details = append(details, filepath.Base(kit.Source)+": "+line)
+	kitLines := func(entries []any, where string) {
+		for _, entry := range entries {
+			kit, err := parseKit(entry, book.Path, "book "+book.Name)
+			if err != nil {
+				continue
 			}
-		} else {
-			details = append(details, "published kit "+kit.Source)
+			if kit.IsLocal() {
+				for _, line := range SummarizeKit(kit.Source) {
+					details = append(details, where+filepath.Base(kit.Source)+": "+line)
+				}
+			} else {
+				details = append(details, where+"published kit "+kit.Source)
+			}
 		}
 	}
+	kitLines(book.kits, "")
 	if len(book.repos) > 0 {
 		details = append(details, fmt.Sprintf("%d per-repository rule(s)", len(book.repos)))
 	}
 	for _, r := range book.repos {
+		where := "repos matching " + strings.Join(r.patterns, ", ") + ": "
 		for _, entry := range r.agents {
-			agentLine(entry, "repos matching "+strings.Join(r.patterns, ", ")+": ")
+			agentLine(entry, where)
 		}
-		details = append(details, secretsManagerDetails(r.aws.secretsManager, "repos matching "+strings.Join(r.patterns, ", ")+": ")...)
+		if len(r.aws.profiles) > 0 {
+			details = append(details, where+"AWS profiles: "+strings.Join(r.aws.profiles, " "))
+		}
+		details = append(details, secretsManagerDetails(r.aws.secretsManager, where)...)
+		kitLines(r.kits, where)
 	}
 	for i, detail := range details {
 		details[i] = Printable(detail)
