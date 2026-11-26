@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -342,4 +343,33 @@ func TestABooksApprovalNamesTheSecretsManagerSecretsItListsAndTheirProfiles(t *t
 			t.Errorf("details %q, want %q", details, want)
 		}
 	}
+}
+
+func TestListedSecretsBringTheBrokerKitWithItsSecretsManagerEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	only := book(t, dir, "only", "[aws.secrets_manager]\nvault = [\"shared/key\"]\n")
+	both := book(t, dir, "both", "[aws]\nprofiles = [\"build\"]\nregion = \"eu-west-1\"\n[aws.secrets_manager]\nbuild = [\"app/db\"]\n")
+	for path, args := range map[string]map[string]any{
+		only: {"profiles": "", "region": DefaultAWSRegion, "secrets_manager": "on"},
+		both: {"profiles": "build", "region": "eu-west-1", "default_profile": "build", "secrets_manager": "on"},
+	} {
+		settings := load(t, filepath.Join(dir, "home"))
+		composition := composeWith(t, settings, Selection{Books: []string{path}})
+		want := Kit{Source: filepath.Join(settings.CoreKits(), "aws-broker"), Args: args}
+		if !slices.ContainsFunc(composition.Kits, want.Equal) {
+			t.Errorf("%s: kits %v, want %v", filepath.Base(path), composition.Kits, want)
+		}
+		if composition.Bindings[BrokerService] == nil {
+			t.Errorf("%s: no %s binding", filepath.Base(path), BrokerService)
+		}
+	}
+}
+
+func TestAProfileNamedDefaultCannotSitBesideThePlaceholderKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := book(t, dir, "org", "[aws]\nprofiles = [\"default\", \"build\"]\n[aws.secrets_manager]\nbuild = [\"app/db\"]\n")
+	_, err := Compose(load(t, filepath.Join(dir, "home")), Selection{Books: []string{path}})
+	expectError(t, err, "AWS profile default is granted with no default profile named, so the sandbox's [default] would hold the placeholder keys stage writes for Secrets Manager; set default_profile")
+	named := book(t, dir, "named", "[aws]\nprofiles = [\"default\", \"build\"]\ndefault_profile = \"default\"\n[aws.secrets_manager]\nbuild = [\"app/db\"]\n")
+	composeWith(t, load(t, filepath.Join(dir, "home")), Selection{Books: []string{named}})
 }
