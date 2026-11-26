@@ -1328,11 +1328,10 @@ profile: `build = ["app/config", "app/db"]`.
   Secrets Manager host or a pattern that could match one, for every AWS partition's DNS and dual-stack suffix (as
   the AWS SDK for Go lists them). That covers `*.amazonaws.com`, `*.api.aws`, `*`, and a `*` inside a label, such as
   `*-east-1.amazonaws.com`. It also refuses:
-  - an entry it cannot read as a host: a URL, an IP address, an empty label or a leading dot;
+  - an entry it cannot read as a host: a URL, an IP address in any form, an empty label or a leading dot;
   - a network policy whose shape it cannot read exactly, down to the keys of each allow entry;
   - a capability type it does not know;
-  - a local kit that `extends` another, or that carries a kit descriptor in a file other than YAML or JSON, such as
-    a Dockerfile with a `# kit:` block;
+  - a local kit that `extends` another;
   - a global sbx allow rule, even with `--allow-global-policy`.
   Published kits, such as the agents' mixins, cannot be read, so they are not checked.
 - **Read through the broker.** The sandbox reads listed secrets through the broker, which reads them on your
@@ -1631,7 +1630,7 @@ and what has not been run live yet.
   refreshed while the sandbox lives. The copy has run only against fakes.
 - AWS keys from the broker enter the sandbox and stay usable until they expire, up to about 12 hours, even after
   `stage down`.
-- `[aws.secrets_manager]` limits what the sandbox reads through Secrets Manager, not what a profile can read. A
+- `[aws.secrets_manager]` closes Secrets Manager to the sandbox's kits; it does not limit what a profile can read. A
   profile also granted, by `profiles` in any book or your config or by `--aws-profile`, puts its keys in the
   sandbox, and any open host that reads secrets for those
   keys reaches unlisted ones; Systems Manager's `GetParameter` on `/aws/reference/secretsmanager/<name>` is one.
@@ -1642,6 +1641,9 @@ and what has not been run live yet.
   read, not what the agent does with a value. The broker's log names the sandbox, the call and the listed secrets,
   never a value.
 - The broker's Secrets Manager endpoint has run only against fakes; see VERIFICATION.md.
+- stage reads a local kit's YAML and JSON files. The kit specification also lets a Dockerfile carry a kit's
+  descriptor in a `# kit:` comment block, and stage does not read that form, for this check or for any other check
+  on a book's or repository's kits.
 - Bindings are shared by every sandbox. One written for a sandbox stays after `stage down` and approves that service
   for all sandboxes; a sandbox gets a value only from its own secret or a global sbx secret. `stage up` refuses a
   global `github` secret, and stops on any other global secret unless `--allow-global-secrets` is passed.

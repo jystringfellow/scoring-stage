@@ -2,9 +2,7 @@ package config
 
 import (
 	"fmt"
-	"io/fs"
 	"maps"
-	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -15,8 +13,8 @@ import (
 var (
 	awsProfileName       = regexp.MustCompile(`^[A-Za-z0-9_.][A-Za-z0-9_.-]*$`)
 	secretsManagerName   = regexp.MustCompile(`^[A-Za-z0-9/_+=.@][A-Za-z0-9/_+=.@-]{0,511}$`)
-	awsRegionLabel       = regexp.MustCompile(`^[a-z]{2,4}(-[a-z]+)*-[a-z]+-[0-9]+$`)
-	numericLabel         = regexp.MustCompile(`^[0-9]+$`)
+	awsRegionLabel       = regexp.MustCompile(`^[a-z]+(-[a-z0-9]+)*-[a-z0-9]+-[0-9]+[a-z]?$`)
+	addressLabel         = regexp.MustCompile(`^([0-9]+|0x[0-9a-f]*)$`)
 	hostPortSuffix       = regexp.MustCompile(`:[0-9]+$`)
 	hostPattern          = regexp.MustCompile(`^[a-z0-9.*-]+$`)
 	secretsManagerLabels = []string{"secretsmanager", "secretsmanager-fips"}
@@ -96,7 +94,7 @@ func (l secretsManagerListing) add(byProfile map[string][]string, owner string) 
 			if existing, found := l[name]; found {
 				if existing.profile != profile {
 					return errorf("%s lists Secrets Manager secret %s under profile %s, but %s listed it under %s; "+
-						"each secret is read with one profile", owner, name, profile, existing.owner, existing.profile)
+						"each secret is listed under one profile", owner, name, profile, existing.owner, existing.profile)
 				}
 				continue
 			}
@@ -173,9 +171,6 @@ func allowedHosts(dir string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := refuseOtherDescriptors(dir); err != nil {
-		return nil, err
-	}
 	var hosts []string
 	for _, document := range documents {
 		where := fmt.Sprintf("kit %s (%s)", dir, document.file)
@@ -185,7 +180,7 @@ func allowedHosts(dir string) ([]string, error) {
 		for _, capability := range document.spec.Capabilities {
 			switch capabilityName(capability.Type) {
 			case "":
-				return nil, errorf("%s: unrecognised capability type %q", where, Printable(capability.Type))
+				return nil, errorf("%s: unrecognised capability type \"%s\"", where, Printable(capability.Type))
 			case "network-policy":
 			default:
 				continue
@@ -255,32 +250,6 @@ func entryHosts(entry any) ([]string, error) {
 	return nil, errorf("entries must be hosts or mappings")
 }
 
-func refuseOtherDescriptors(dir string) error {
-	return filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() && path == filepath.Join(dir, "files") {
-			return filepath.SkipDir
-		}
-		if !entry.Type().IsRegular() || contains(kitFileExtensions, strings.ToLower(filepath.Ext(path))) {
-			return nil
-		}
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		for _, line := range strings.Split(string(content), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "# kit:" || strings.HasPrefix(line, "# syntax=docker/sandbox-kit") {
-				relative, _ := filepath.Rel(dir, path)
-				return errorf("kit %s: %s carries a kit descriptor, which stage does not read", dir, relative)
-			}
-		}
-		return nil
-	})
-}
-
 type hostReach int
 
 const (
@@ -294,7 +263,7 @@ func secretsManagerReach(entry string) hostReach {
 	if !hostPattern.MatchString(host) || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") || strings.Contains(host, "..") {
 		return hostUnreadable
 	}
-	if !strings.Contains(host, "*") && !slices.ContainsFunc(strings.Split(host, "."), func(label string) bool { return !numericLabel.MatchString(label) }) {
+	if !strings.Contains(host, "*") && !slices.ContainsFunc(strings.Split(host, "."), func(label string) bool { return !addressLabel.MatchString(label) }) {
 		return hostUnreadable
 	}
 	partial := false

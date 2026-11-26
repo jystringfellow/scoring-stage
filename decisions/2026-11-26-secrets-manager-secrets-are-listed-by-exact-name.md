@@ -22,7 +22,7 @@ Rejected:
   `*-east-1.amazonaws.com`, matched none of the enumerated shapes and was let through. An entry with a `*` is now
   refused when the text after its last `*` could end any Secrets Manager host, whatever comes before.
 
-Evidence: `TestABookListsSecretsManagerSecretsByExactNameUnderTheHostProfileThatReadsThem`,
+Evidence: `TestABookListsSecretsManagerSecretsByExactNameUnderAHostProfile`,
 `TestSecretsManagerEntriesAreExactSecretNamesUnderProfileNames`,
 `TestNoKitMayAllowASecretsManagerHostWhenSecretsAreListed`,
 `TestSecretsManagerCallsNeedTheSandboxsTokenInTheBrokersOwnHeader`,

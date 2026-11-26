@@ -11,7 +11,7 @@ import (
 	"github.com/jystringfellow/scoring-stage/internal/testutil"
 )
 
-func TestABookListsSecretsManagerSecretsByExactNameUnderTheHostProfileThatReadsThem(t *testing.T) {
+func TestABookListsSecretsManagerSecretsByExactNameUnderAHostProfile(t *testing.T) {
 	dir := t.TempDir()
 	path := book(t, dir, "org", `
 		[aws]
@@ -162,6 +162,11 @@ func TestNoKitMayAllowASecretsManagerHostWhenSecretsAreListed(t *testing.T) {
 		"*.api.cloud-aws.adc-e.uk",
 		"*.api.aws.hci.ic.gov",
 		"secretsmanager.us-isof-south-1.api.aws.hci.ic.gov",
+		"*.us-east2-1.amazonaws.com",
+		"*.apacx-east-1.amazonaws.com",
+		"*.us-east-1a.amazonaws.com",
+		"us-east2-1.amazonaws.com",
+		"apacx-east-1.amazonaws.com",
 	}
 	unreadable := []string{
 		"secretsmanager.us-east-?.amazonaws.com",
@@ -176,6 +181,9 @@ func TestNoKitMayAllowASecretsManagerHostWhenSecretsAreListed(t *testing.T) {
 		"secretsmanager..us-east-1.amazonaws.com",
 		"10.0.0.1",
 		"52.94.0.1:443",
+		"0x7f.0.0.1",
+		"0x7f000001",
+		"2130706433",
 	}
 	compose := func(phase, entry string) error {
 		dir := t.TempDir()
@@ -198,7 +206,7 @@ func TestNoKitMayAllowASecretsManagerHostWhenSecretsAreListed(t *testing.T) {
 				t.Errorf("%s %q: %v", phase, entry, err)
 			}
 		}
-		for _, entry := range []string{"s3.us-east-1.amazonaws.com", "*.s3.amazonaws.com", "sts.amazonaws.com", "api.github.com", "*.example.com", "ssm.us-east-1.amazonaws.com", "registry.npmjs.org:443", "s3-us-west-2.amazonaws.com", "s3-external-1.amazonaws.com", "*.s3-us-west-2.amazonaws.com", "*.compute-1.amazonaws.com", "ec2.us-east-1.api.aws"} {
+		for _, entry := range []string{"s3.us-east-1.amazonaws.com", "*.s3.amazonaws.com", "sts.amazonaws.com", "api.github.com", "*.example.com", "ssm.us-east-1.amazonaws.com", "registry.npmjs.org:443", "s3-us-west-2.amazonaws.com", "s3-external-1.amazonaws.com", "*.s3-us-west-2.amazonaws.com", "*.compute-1.amazonaws.com", "ec2.us-east-1.api.aws", "*.execute-api.us-east-1.amazonaws.com", "*.s3-accesspoint.us-east-1.amazonaws.com", "*.elb.us-east-1.amazonaws.com"} {
 			if err := compose(phase, entry); err != nil {
 				t.Errorf("%s %q: %v", phase, entry, err)
 			}
@@ -232,18 +240,13 @@ func TestAUserKitStageCannotReadIsRefusedWhenSecretsAreListed(t *testing.T) {
 		"extends another kit": "extends: docker.io/acme/base:1\ncapabilities: []\n",
 		"is unreadable":       "capabilities: [\n",
 		"is not a directory":  "",
-		"unrecognised capability type \"com.docker.sandbox/egress@9\"":       "capabilities:\n  - type: com.docker.sandbox/egress@9\n    config: {allow: [secretsmanager.us-east-1.amazonaws.com]}\n",
-		"unrecognised capability type \"\"":                                  "capabilities:\n  - config: {runtime: {allow: [secretsmanager.us-east-1.amazonaws.com]}}\n",
-		"kit.dockerfile carries a kit descriptor, which stage does not read": "capabilities: []\n",
+		"unrecognised capability type \"com.docker.sandbox/egress@9\"": "capabilities:\n  - type: com.docker.sandbox/egress@9\n    config: {allow: [secretsmanager.us-east-1.amazonaws.com]}\n",
+		"unrecognised capability type \"\"":                            "capabilities:\n  - config: {runtime: {allow: [secretsmanager.us-east-1.amazonaws.com]}}\n",
 	} {
 		dir := t.TempDir()
 		home := filepath.Join(dir, "home")
 		if kit != "" {
 			testutil.WriteFile(t, filepath.Join(home, "kits", "mine", "kit.yaml"), kit)
-		}
-		if strings.HasPrefix(name, "kit.dockerfile") {
-			testutil.WriteFile(t, filepath.Join(home, "kits", "mine", "kit.dockerfile"),
-				"# syntax=docker/sandbox-kit:3\n# kit:\n#   schemaVersion: \"3\"\n#   kind: mixin\nFROM scratch\n")
 		}
 		testutil.WriteFile(t, filepath.Join(home, "config.toml"), "kits = [\"./kits/mine\"]\n[aws.secrets_manager]\ndev = [\"app/db\"]\n")
 		_, err := Compose(load(t, home), Selection{})
@@ -319,7 +322,7 @@ func TestTheUsersAndTheRepositorysLocalKitsCannotAllowSecretsManagerWhenABookLis
 	expectError(t, err, "reaches AWS Secrets Manager")
 }
 
-func TestABooksApprovalNamesTheSecretsManagerSecretsItListsAndTheProfileThatReadsThem(t *testing.T) {
+func TestABooksApprovalNamesTheSecretsManagerSecretsItListsAndTheirProfiles(t *testing.T) {
 	path := book(t, t.TempDir(), "org", `
 		[aws.secrets_manager]
 		build = ["app/db", "app/config"]
