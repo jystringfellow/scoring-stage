@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -34,44 +33,27 @@ type kitDocument struct {
 
 var kitFileExtensions = []string{".yaml", ".yml", ".json"}
 
-func kitFiles(dir string) ([]string, error) {
-	var files []string
-	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() && path == filepath.Join(dir, "files") {
-			return filepath.SkipDir
-		}
-		if entry.Type()&fs.ModeSymlink != 0 {
-			if info, err := os.Stat(path); err == nil && info.IsDir() {
-				return errorf("%s is a link to a directory", path)
-			}
-		}
-		if !entry.IsDir() && contains(kitFileExtensions, strings.ToLower(filepath.Ext(path))) {
-			files = append(files, path)
-		}
-		return nil
-	})
-	sort.Strings(files)
-	return files, err
-}
-
 func loadKit(dir string) ([]kitDocument, error) {
+	shownDir := Printable(dir)
 	info, err := os.Stat(dir)
 	if err != nil || !info.IsDir() {
-		return nil, errorf("kit %s is not a directory", dir)
+		return nil, errorf("kit %s is not a directory", shownDir)
 	}
-	files, err := kitFiles(dir)
+	files, err := kitRoot(dir)
 	if err != nil {
-		return nil, errorf("kit %s: %v", dir, err)
+		return nil, errorf("kit %s: %v", shownDir, err)
 	}
 	var documents []kitDocument
 	for _, file := range files {
 		relative, _ := filepath.Rel(dir, file)
+		shown := Printable(relative)
 		content, err := os.ReadFile(file)
 		if err != nil {
-			return nil, errorf("kit %s: cannot read %s: %v", dir, relative, err)
+			return nil, errorf("kit %s: cannot read %s: %s", shownDir, shown, Printable(err.Error()))
+		}
+		if opensCommentDescriptor(content) {
+			return nil, errorf("kit %s: %s has a line that is only `# kit:`, which opens a comment descriptor in a Dockerfile; "+
+				"stage reads this file as YAML and cannot tell which a runtime would read, so remove that line", shownDir, shown)
 		}
 		decoder := yaml.NewDecoder(bytes.NewReader(content))
 		for {
@@ -81,14 +63,14 @@ func loadKit(dir string) ([]kitDocument, error) {
 				break
 			}
 			if err != nil {
-				return nil, errorf("kit %s: %s is unreadable: %v", dir, relative, err)
+				return nil, errorf("kit %s: %s is unreadable: %s", shownDir, shown, Printable(err.Error()))
 			}
 			if err := checkKitKeys(raw); err != nil {
-				return nil, errorf("kit %s: %s: %v", dir, relative, err)
+				return nil, errorf("kit %s: %s: %v", shownDir, shown, err)
 			}
 			var spec kitSpec
 			if err := convert(raw, &spec); err != nil {
-				return nil, errorf("kit %s: %s is unreadable: %v", dir, relative, err)
+				return nil, errorf("kit %s: %s is unreadable: %s", shownDir, shown, Printable(err.Error()))
 			}
 			documents = append(documents, kitDocument{file: relative, spec: spec})
 		}

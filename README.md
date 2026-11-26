@@ -1430,6 +1430,26 @@ not been run in a sandbox from this repository. None has been used by reference 
 
 ### Writing a kit
 
+A book's or repository's kit is a directory whose root holds exactly one descriptor (`.yaml`, `.yml` or
+`.json`). Beside it may sit only:
+- documentation: `README`, `LICENSE`, `NOTICE`, `CHANGELOG`, `AUTHORS` or `CONTRIBUTING`, bare or with `.md` or
+  `.txt`, in any case;
+- `.gitignore`, `.gitattributes`, `.gitkeep`, `.editorconfig`, and the `.DS_Store` and `Thumbs.db` files that
+  Finder and Explorer leave;
+- a `files/` directory, which holds everything else the kit carries and which stage does not read.
+
+stage refuses any other file, any other directory and any link at the root, by name and without reading it,
+because it cannot tell whether another file declares something; the kit specification lets a Dockerfile carry a
+descriptor too. A kit with a companion `<stem>.dockerfile` recipe, a script at its root, a second descriptor or a
+subdirectory is refused, and the message says to move the file under `files/`. Names must be ASCII.
+
+An editor's swap or backup file (`.tool.yaml.swp`, `tool.yaml~`, `#tool.yaml#`) or an AppleDouble file (`._tool.yaml`)
+at the root is refused while it is there, with a message saying to close the editor or delete the file. stage does
+not accept these unread, since one can carry a descriptor's extension. stage also refuses a descriptor with a line
+that is only `# kit:` (with `#` at the start of the line), which is how a Dockerfile opens a descriptor block; a
+comment with text after the colon, or an indented one, is fine. The same rules apply to your own local kits
+when Secrets Manager secrets are listed.
+
 [`books/go/kits/go/go.yaml`](books/go/kits/go/go.yaml) is a small kit to start from. Two things
 about the sandbox have caught kits in use; both come from one kit's notes and have not been checked again for
 this README:
@@ -1641,9 +1661,9 @@ and what has not been run live yet.
   read, not what the agent does with a value. The broker's log names the sandbox, the call and the listed secrets,
   never a value.
 - The broker's Secrets Manager endpoint has run only against fakes; see VERIFICATION.md.
-- stage reads a local kit's YAML and JSON files. The kit specification also lets a Dockerfile carry a kit's
-  descriptor in a `# kit:` comment block, and stage does not read that form, for this check or for any other check
-  on a book's or repository's kits.
+- stage reads a kit's one root descriptor and refuses other files at its root (see [Writing a kit](#writing-a-kit)).
+  It does not read `files/`. If sbx found a descriptor somewhere under `files/`, stage would not see it; nothing
+  shows that sbx looks there.
 - Bindings are shared by every sandbox. One written for a sandbox stays after `stage down` and approves that service
   for all sandboxes; a sandbox gets a value only from its own secret or a global sbx secret. `stage up` refuses a
   global `github` secret, and stops on any other global secret unless `--allow-global-secrets` is passed.
