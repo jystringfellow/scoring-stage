@@ -1625,8 +1625,11 @@ and what has not been run live yet.
   `[aws.secrets_manager]` gives the sandbox no keys. stage checks local kits only, so a published kit that opens
   Secrets Manager is not refused.
 - stage reads a local kit's YAML and JSON files. The kit specification also lets a Dockerfile carry a kit's
-  descriptor in a `# kit:` comment block, and stage does not read that form, for this check or for any other check
-  on a book's or repository's kits.
+  descriptor in a `# kit:` comment block. stage does not read that form, so it refuses a book's, a repository's
+  or (with Secrets Manager secrets listed) your own kit that has one. Any other file whose leading parser
+  directives name the `sandbox-kit` frontend counts, whatever its name, under `files/` too, and so does a link to
+  one. Only the first 64 KiB of a file are read. A Dockerfile recipe beside a YAML descriptor, which names its own
+  frontend, and documentation that shows an example further down, are left alone.
 - Bindings are shared by every sandbox. One written for a sandbox stays after `stage down` and approves that service
   for all sandboxes; a sandbox gets a value only from its own secret or a global sbx secret. `stage up` refuses a
   global `github` secret, and stops on any other global secret unless `--allow-global-secrets` is passed.

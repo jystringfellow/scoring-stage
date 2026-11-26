@@ -66,6 +66,9 @@ func loadKit(dir string) ([]kitDocument, error) {
 	if err != nil {
 		return nil, errorf("kit %s: %v", dir, err)
 	}
+	if err := refuseUnreadDescriptors(dir); err != nil {
+		return nil, err
+	}
 	var documents []kitDocument
 	for _, file := range files {
 		relative, _ := filepath.Rel(dir, file)

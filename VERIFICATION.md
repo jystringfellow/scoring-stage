@@ -67,7 +67,10 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
   passed to `sbx secret set`, and services other than `copilot` were not.
 - sbx's kit loader: which files it reads from a kit directory, and whether it matches keys case-insensitively.
   stage checks `.yaml`, `.yml` and `.json` files at any depth except under `files/`, and refuses keys that differ
-  from `capabilities`, `extends`, `type`, `config`, `service`, `inject` or `domain` only in case.
+  from `capabilities`, `extends`, `type`, `config`, `service`, `inject` or `domain` only in case. It refuses any
+  other file, `files/` included, whose leading parser directives name the `sandbox-kit` frontend. Whether sbx
+  reads a comment descriptor from a local kit directory at all, and which comment prefixes and encodings its
+  directive parser takes (stage takes `#`, `//` and `;`, any case, and UTF-8 or UTF-16), are unchecked.
 
 ## 2026-11-08 to 2026-11-09: sbx behaviours stage relies on
 
