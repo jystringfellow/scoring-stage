@@ -297,7 +297,7 @@ func Serve(grantsDir string, out io.Writer) error {
 		credentialListener: Handler(source, grants, log),
 		secretsListener:    SecretsManagerHandler(NewSecretsManager(source), grants, log),
 	} {
-		server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+		server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: time.Minute}
 		go func() { stopped <- server.Serve(listener) }()
 	}
 	return <-stopped

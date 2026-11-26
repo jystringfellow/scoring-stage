@@ -251,7 +251,7 @@ func (a *App) secretsManagerAnswers() bool {
 	if a.SecretsManagerAnswers != nil {
 		return a.SecretsManagerAnswers()
 	}
-	return answers(broker.SecretsManagerAddress)
+	return broker.ServesSecretsManager("http://" + broker.SecretsManagerAddress + "/")
 }
 
 func brokerPID(home string) int {

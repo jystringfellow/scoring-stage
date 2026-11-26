@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 const secretValue = "s3cr3t-value-marker"
@@ -44,6 +45,11 @@ type fakeSecretsManager struct {
 	answer   func(target string, body map[string]any) (int, any)
 	nameFor  func(id string) string
 	pageSize int
+
+	redirect    string
+	endlessList bool
+	batchPage   int
+	batchErrors map[string]map[string]any
 }
 
 func (f *fakeSecretsManager) serve(w http.ResponseWriter, r *http.Request) {
@@ -52,6 +58,10 @@ func (f *fakeSecretsManager) serve(w http.ResponseWriter, r *http.Request) {
 	json.Unmarshal(raw, &body)
 	target := r.Header.Get("X-Amz-Target")
 	f.calls = append(f.calls, awsCall{target, r.Header.Get("Authorization"), r.Header.Get("X-Amz-Security-Token"), body})
+	if f.redirect != "" {
+		http.Redirect(w, r, f.redirect, http.StatusTemporaryRedirect)
+		return
+	}
 	status, payload := f.respond(target, body)
 	encoded, _ := json.Marshal(payload)
 	w.Header().Set("Content-Type", "application/x-amz-json-1.1")
@@ -84,12 +94,31 @@ func (f *fakeSecretsManager) respond(target string, body map[string]any) (int, a
 	case "secretsmanager.GetSecretValue":
 		return 200, f.value(body["SecretId"].(string))
 	case "secretsmanager.BatchGetSecretValue":
-		var values []any
+		values, failures := []any{}, []any{}
 		for _, id := range body["SecretIdList"].([]any) {
+			if failure, failed := f.batchErrors[id.(string)]; failed {
+				failures = append(failures, failure)
+				continue
+			}
 			values = append(values, f.value(id.(string)))
 		}
-		return 200, map[string]any{"SecretValues": values, "Errors": []any{}}
+		page := map[string]any{"SecretValues": values, "Errors": failures}
+		if f.batchPage > 0 {
+			start := 0
+			if token, _ := body["NextToken"].(string); token != "" {
+				fmt.Sscan(token, &start)
+			}
+			end := min(start+f.batchPage, len(values))
+			page["SecretValues"] = values[start:end]
+			if end < len(values) {
+				page["NextToken"] = fmt.Sprint(end)
+			}
+		}
+		return 200, page
 	case "secretsmanager.ListSecrets":
+		if f.endlessList {
+			return 200, map[string]any{"SecretList": []any{}, "NextToken": "more"}
+		}
 		var prefixes []string
 		for _, filter := range body["Filters"].([]any) {
 			for _, value := range filter.(map[string]any)["Values"].([]any) {
@@ -297,20 +326,163 @@ func TestGetSecretValueDropsAnAnswerThatNamesAnotherSecret(t *testing.T) {
 	b := newSecretsBroker(t)
 	b.aws.nameFor = func(string) string { return "app/config-old" }
 	code, decoded, raw := b.send("GetSecretValue", map[string]any{"SecretId": "app/config"})
-	b.expectRefused(code, decoded, "AWS answered for a different secret")
+	b.expectRefused(code, decoded, "secret app/config is not listed for this sandbox")
+	if !strings.Contains(strings.Join(b.lines, "\n"), "dropped an answer for app/config-old") {
+		t.Errorf("the host log does not say an answer was dropped: %v", b.lines)
+	}
 	if strings.Contains(raw, secretValue) {
 		t.Fatalf("the other secret's value was returned: %s", raw)
 	}
 }
 
-func TestAWSErrorsForAListedSecretComeBackAsAWSSentThem(t *testing.T) {
+const awsDenial = "User: arn:aws:sts::111122223333:assumed-role/dev/person@example.com is not authorized to perform: secretsmanager:GetSecretValue"
+
+func TestAWSErrorsComeBackAsTheirTypeWithAWSsMessageOnlyInTheHostLog(t *testing.T) {
 	b := newSecretsBroker(t)
 	b.aws.answer = func(string, map[string]any) (int, any) {
-		return 400, map[string]any{"__type": "ResourceNotFoundException", "Message": "Secrets Manager can't find the specified secret."}
+		return 400, map[string]any{"__type": "com.amazonaws.secretsmanager#AccessDeniedException:http://internal", "Message": awsDenial}
 	}
+	code, decoded, raw := b.send("GetSecretValue", map[string]any{"SecretId": "app/db"})
+	if code != 400 || decoded["__type"] != "AccessDeniedException" || strings.Contains(raw, "person@example.com") || strings.Contains(raw, "arn:aws:sts") {
+		t.Fatalf("%d %s", code, raw)
+	}
+	if !strings.Contains(decoded["Message"].(string), "Secrets Manager answered AccessDeniedException for app/db") {
+		t.Errorf("message %v", decoded["Message"])
+	}
+	if !strings.Contains(strings.Join(b.lines, "\n"), awsDenial) {
+		t.Errorf("the host log lacks AWS's message: %v", b.lines)
+	}
+	b.aws.answer = func(string, map[string]any) (int, any) {
+		return 500, map[string]any{"__type": "not a type!", "message": "x"}
+	}
+	code, decoded, _ = b.send("GetSecretValue", map[string]any{"SecretId": "app/db"})
+	if code != 500 || decoded["__type"] != "InternalServiceError" {
+		t.Errorf("an unreadable type: %d %v", code, decoded)
+	}
+}
+
+func TestBatchErrorsFromAWSNameTheClientsIdAndKeepAWSsMessageOnTheHost(t *testing.T) {
+	b := newSecretsBroker(t)
+	b.aws.batchErrors = map[string]map[string]any{"app/db": {"SecretId": "app/db", "ErrorCode": "AccessDeniedException", "Message": awsDenial}}
+	_, decoded, raw := b.send("BatchGetSecretValue", map[string]any{"SecretIdList": []string{"app/config", arnOf("app/db")}})
+	if strings.Contains(raw, "person@example.com") {
+		t.Fatalf("AWS's message reached the sandbox: %s", raw)
+	}
+	errors, _ := decoded["Errors"].([]any)
+	if len(errors) != 1 || errors[0].(map[string]any)["SecretId"] != arnOf("app/db") || errors[0].(map[string]any)["ErrorCode"] != "AccessDeniedException" {
+		t.Errorf("errors %v", errors)
+	}
+	if !strings.Contains(strings.Join(b.lines, "\n"), awsDenial) {
+		t.Errorf("the host log lacks AWS's message: %v", b.lines)
+	}
+}
+
+func TestAnARNOnlyNamesAListedSecretAndAWSIsAskedForTheListedName(t *testing.T) {
+	b := newSecretsBroker(t)
+	code, decoded, _ := b.send("GetSecretValue", map[string]any{"SecretId": arnOf("app/db")})
+	if code != 200 || decoded["Name"] != "app/db" || b.aws.calls[0].body["SecretId"] != "app/db" {
+		t.Fatalf("own ARN: %d %v; AWS asked %v", code, decoded, b.aws.calls[0].body)
+	}
+	for _, id := range []string{
+		"arn:aws:secretsmanager:us-east-1:999999999999:secret:app/db-AbC123",
+		"arn:aws-cn:secretsmanager:us-east-1:111122223333:secret:app/db-AbC123",
+		"arn:aws:secretsmanager:us-east-1:111122223333:secret:app/db-ZZZZZZ",
+		"arn:aws:secretsmanager:us-east-1:111122223333:secret:app/db-backup",
+	} {
+		b.aws.calls = nil
+		code, decoded, raw := b.send("GetSecretValue", map[string]any{"SecretId": id})
+		b.expectRefused(code, decoded, "is not listed for this sandbox")
+		if strings.Contains(raw, secretValue) {
+			t.Errorf("%s: a value came back: %s", id, raw)
+		}
+		for _, call := range b.aws.calls {
+			if call.body["SecretId"] != "app/db" {
+				t.Errorf("%s: AWS was asked for %v", id, call.body["SecretId"])
+			}
+		}
+	}
+	b.aws.calls = nil
+	_, decoded, raw := b.send("BatchGetSecretValue", map[string]any{"SecretIdList": []string{"arn:aws:secretsmanager:us-east-1:999999999999:secret:app/db-AbC123"}})
+	if names(decoded["SecretValues"]) != nil || strings.Contains(raw, secretValue) {
+		t.Errorf("batch with another account's ARN: %s", raw)
+	}
+	for _, call := range b.aws.calls {
+		if !reflect.DeepEqual(call.body["SecretIdList"], []any{"app/db"}) {
+			t.Errorf("AWS was asked for %v", call.body["SecretIdList"])
+		}
+	}
+}
+
+func TestTheBrokerDoesNotFollowRedirectsFromSecretsManager(t *testing.T) {
+	b := newSecretsBroker(t)
+	var elsewhere []string
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		elsewhere = append(elsewhere, r.Header.Get("X-Amz-Security-Token"))
+	}))
+	defer other.Close()
+	b.aws.redirect = other.URL + "/"
 	code, decoded, _ := b.send("GetSecretValue", map[string]any{"SecretId": "app/db"})
-	if code != 400 || decoded["__type"] != "ResourceNotFoundException" {
-		t.Fatalf("%d %v", code, decoded)
+	if code != 503 || decoded["__type"] != "ServiceUnavailableException" || len(elsewhere) != 0 {
+		t.Errorf("%d %v; the redirect target saw %v", code, decoded, elsewhere)
+	}
+}
+
+func TestBatchGetSecretValueFollowsAWSsPages(t *testing.T) {
+	b := newSecretsBroker(t)
+	b.aws.batchPage = 1
+	_, decoded, raw := b.send("BatchGetSecretValue", map[string]any{"SecretIdList": []string{"app/config", "app/db"}})
+	if got := names(decoded["SecretValues"]); !reflect.DeepEqual(got, []string{"app/config", "app/db"}) {
+		t.Errorf("values %v (%s)", got, raw)
+	}
+	if errors, _ := decoded["Errors"].([]any); len(errors) != 0 {
+		t.Errorf("errors %v", errors)
+	}
+}
+
+func TestListSecretsStopsAfterAHundredPages(t *testing.T) {
+	b := newSecretsBroker(t)
+	b.aws.endlessList = true
+	code, decoded, _ := b.send("ListSecrets", map[string]any{})
+	if code != 502 || len(b.aws.calls) > 100 {
+		t.Errorf("%d %v after %d calls", code, decoded, len(b.aws.calls))
+	}
+}
+
+type slowCredentials struct{ release chan struct{} }
+
+func (s slowCredentials) CredentialProcess(profile string, granted map[string]bool) (json.RawMessage, error) {
+	if profile == "build" {
+		<-s.release
+	}
+	return json.RawMessage(credentials), nil
+}
+
+func TestASlowHostLoginForOneProfileDoesNotHoldUpAnother(t *testing.T) {
+	slow := slowCredentials{make(chan struct{})}
+	defer close(slow.release)
+	api := NewSecretsManager(slow)
+	go api.key("build")
+	time.Sleep(50 * time.Millisecond)
+	done := make(chan struct{})
+	go func() { api.key("vault"); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("vault waited for build's login")
+	}
+}
+
+func TestTheBrokerSaysItServesSecretsManagerAndOtherListenersDoNot(t *testing.T) {
+	b := newSecretsBroker(t)
+	serving := httptest.NewServer(b.handler)
+	defer serving.Close()
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusUnauthorized) }))
+	defer other.Close()
+	if !ServesSecretsManager(serving.URL + "/") {
+		t.Error("the broker's own handler was not recognised")
+	}
+	if ServesSecretsManager(other.URL+"/") || ServesSecretsManager("http://127.0.0.1:1/") {
+		t.Error("another listener passed as the broker")
 	}
 }
 
@@ -320,8 +492,8 @@ func TestBatchGetSecretValueReportsUnlistedSecretsInErrorsWithoutAskingAWSForThe
 	if code != 200 {
 		t.Fatalf("%d %s", code, raw)
 	}
-	if got := names(decoded["SecretValues"]); !reflect.DeepEqual(got, []string{"app/config", "app/db", "shared/key"}) {
-		t.Errorf("values for %v", got)
+	if got := names(decoded["SecretValues"]); !reflect.DeepEqual(got, []string{"app/config", "shared/key", "app/db"}) {
+		t.Errorf("values for %v, want them in the order asked for", got)
 	}
 	errors, _ := decoded["Errors"].([]any)
 	if len(errors) != 1 {
@@ -480,6 +652,17 @@ func TestOnlyTheThreeReadOperationsAreServed(t *testing.T) {
 	b.expectRefused(code, decoded, `unknown field "Surprise"`)
 	code, decoded, _ = b.send("GetSecretValue", map[string]any{"SecretId": strings.Repeat("a", 70000)})
 	b.expectRefused(code, decoded, "larger than")
+	for _, target := range []string{"/v1/anything?Action=PutSecretValue", "/?Action=PutSecretValue", "/other"} {
+		request := httptest.NewRequest("POST", target, strings.NewReader(`{"SecretId":"app/config"}`))
+		request.Header.Set("Content-Type", "application/x-amz-json-1.1")
+		request.Header.Set("X-Amz-Target", "secretsmanager.GetSecretValue")
+		request.Header.Set(TokenHeader, b.token)
+		recorder := httptest.NewRecorder()
+		b.handler.ServeHTTP(recorder, request)
+		var refused map[string]any
+		json.Unmarshal(recorder.Body.Bytes(), &refused)
+		b.expectRefused(recorder.Code, refused, "only POST / is served")
+	}
 	request := httptest.NewRequest("GET", "/", nil)
 	request.Header.Set(TokenHeader, b.token)
 	recorder := httptest.NewRecorder()
@@ -504,8 +687,11 @@ func TestAnExpiredHostLoginIsAServiceErrorNamingTheProfile(t *testing.T) {
 	b.cli.result = Result{ExitCode: 255, Stderr: "Error when retrieving token from sso: Token has expired\n"}
 	code, decoded, _ := b.send("GetSecretValue", map[string]any{"SecretId": "app/config"})
 	message, _ := decoded["Message"].(string)
-	if code != 503 || decoded["__type"] != "ServiceUnavailableException" || !strings.Contains(message, "build: Error when retrieving token from sso: Token has expired; refresh the profile's login on the host") {
+	if code != 503 || decoded["__type"] != "ServiceUnavailableException" || !strings.Contains(message, "cannot get AWS credentials for profile build on the host") || strings.Contains(message, "Token has expired") {
 		t.Errorf("%d %v", code, decoded)
+	}
+	if !strings.Contains(strings.Join(b.lines, "\n"), "build: Error when retrieving token from sso: Token has expired; refresh the profile's login on the host") {
+		t.Errorf("the host log lacks the reason: %v", b.lines)
 	}
 	b.expectNoAWSCalls()
 }

@@ -1340,13 +1340,15 @@ profile: `build = ["app/config", "app/db"]`.
   profile and `[default]` get `services = stage-broker`, and `[services stage-broker]` sets `secrets_manager`'s
   `endpoint_url` to the broker's port, 9912. When no profile is the default, `[default]` gets placeholder keys
   that only the broker accepts, so the SDK can sign. The broker answers three calls and refuses every other:
-  - `GetSecretValue` for a listed name, or the full ARN of one in the sandbox's region;
+  - `GetSecretValue` for a listed name. An ARN is only another way to name a listed secret: the broker asks AWS
+    for the listed name, in the profile's own account, and refuses the answer unless its ARN is the one given;
   - `BatchGetSecretValue` with `SecretIdList`: an unlisted id comes back in `Errors` as `AccessDeniedException`,
     and is not sent to AWS;
   - `ListSecrets`, which lists only listed secrets, in one page. The client's `name`, `description`, `tag-key`
     and `tag-value` filters, `!` negation included, are applied on your machine to the listed secrets; other
     filter keys and `NextToken` are refused.
-  The profile must give temporary keys, as for a granted profile. A broker started by an earlier `stage` does not
+  An AWS error comes back as its type, with AWS's message kept in the broker's log on your machine, since it can
+  name the profile's role and session. The profile must give temporary keys, as for a granted profile. A broker started by an earlier `stage` does not
   answer on 9912; `stage up` says to restart it.
 
 A kit that a book adds for its own service declares a `credential@1` entry for that service and names the hosts it is

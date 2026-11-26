@@ -361,3 +361,12 @@ func TestListedSecretsBringTheBrokerKitWithItsSecretsManagerEndpoint(t *testing.
 		}
 	}
 }
+
+func TestAProfileNamedDefaultCannotSitBesideThePlaceholderKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := book(t, dir, "org", "[aws]\nprofiles = [\"default\", \"build\"]\n[aws.secrets_manager]\nbuild = [\"app/db\"]\n")
+	_, err := Compose(load(t, filepath.Join(dir, "home")), Selection{Books: []string{path}})
+	expectError(t, err, "AWS profile default is granted with no default profile named, so the sandbox's [default] would hold the placeholder keys stage writes for Secrets Manager; set default_profile")
+	named := book(t, dir, "named", "[aws]\nprofiles = [\"default\", \"build\"]\ndefault_profile = \"default\"\n[aws.secrets_manager]\nbuild = [\"app/db\"]\n")
+	composeWith(t, load(t, filepath.Join(dir, "home")), Selection{Books: []string{named}})
+}

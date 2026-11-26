@@ -2,6 +2,7 @@ package broker
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +29,9 @@ const (
 	maxResponseBody    = 16 << 20
 	maxBatchSecretIDs  = 20
 	maxFilters         = 10
+	maxPages           = 100
+	BrokerHeader       = "X-Stage-Broker"
+	brokerHeaderValue  = "secrets-manager/1"
 )
 
 var (
@@ -36,6 +40,7 @@ var (
 	secretARN             = regexp.MustCompile(`^arn:[a-z-]+:secretsmanager:([a-z0-9-]+):[0-9]{12}:secret:(.+)-[A-Za-z0-9]{6}$`)
 	filterValue           = regexp.MustCompile(`^!?[a-zA-Z0-9 :_@/+=.\-!]{0,512}$`)
 	listSortKeys          = []string{"created-date", "last-accessed-date", "last-changed-date", "name"}
+	awsErrorType          = regexp.MustCompile(`^[A-Za-z]+$`)
 	appliedFilterKeys     = []string{"name", "description", "tag-key", "tag-value"}
 )
 
@@ -102,22 +107,46 @@ type SecretsManager struct {
 	Endpoint    func(region string) string
 	mu          sync.Mutex
 	keys        map[string]cachedKey
+	logins      map[string]*sync.Mutex
 }
 
 func NewSecretsManager(credentials Credentials) *SecretsManager {
 	return &SecretsManager{
 		Credentials: credentials,
-		Client:      &http.Client{Timeout: 30 * time.Second},
-		Endpoint:    func(region string) string { return "https://secretsmanager." + region + ".amazonaws.com/" },
-		keys:        map[string]cachedKey{},
+		Client: &http.Client{
+			Timeout: 30 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return errors.New("Secrets Manager answered with a redirect, which the broker does not follow")
+			},
+		},
+		Endpoint: func(region string) string { return "https://secretsmanager." + region + ".amazonaws.com/" },
+		keys:     map[string]cachedKey{},
+		logins:   map[string]*sync.Mutex{},
 	}
 }
 
-func (s *SecretsManager) key(profile string) (accessKey, error) {
+func (s *SecretsManager) login(profile string) *sync.Mutex {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if cached, found := s.keys[profile]; found && now().Before(cached.until) {
-		return cached.key, nil
+	if s.logins[profile] == nil {
+		s.logins[profile] = &sync.Mutex{}
+	}
+	return s.logins[profile]
+}
+
+func (s *SecretsManager) cached(profile string) (accessKey, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cached, found := s.keys[profile]
+	return cached.key, found && now().Before(cached.until)
+}
+
+func (s *SecretsManager) key(profile string) (accessKey, error) {
+	login := s.login(profile)
+	login.Lock()
+	defer login.Unlock()
+	if key, fresh := s.cached(profile); fresh {
+		return key, nil
 	}
 	raw, err := s.Credentials.CredentialProcess(profile, map[string]bool{profile: true})
 	if err != nil {
@@ -132,7 +161,9 @@ func (s *SecretsManager) key(profile string) (accessKey, error) {
 		return accessKey{}, &Error{http.StatusBadGateway, profile + ": aws cli returned an unreadable Expiration"}
 	}
 	key := accessKey{exported.AccessKeyId, exported.SecretAccessKey, exported.SessionToken}
+	s.mu.Lock()
 	s.keys[profile] = cachedKey{key, expires.Add(-5 * time.Minute)}
+	s.mu.Unlock()
 	return key, nil
 }
 
@@ -142,16 +173,22 @@ type awsAnswer struct {
 	requestID string
 }
 
-func (s *SecretsManager) call(profile, region, operation string, payload any) (awsAnswer, error) {
+func (s *SecretsManager) call(ctx context.Context, profile, region, operation, about string, payload any) (awsAnswer, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return awsAnswer{}, err
 	}
 	key, err := s.key(profile)
 	if err != nil {
-		return awsAnswer{}, err
+		status, kind := http.StatusServiceUnavailable, "ServiceUnavailableException"
+		var brokerErr *Error
+		if errors.As(err, &brokerErr) && brokerErr.Status == http.StatusForbidden {
+			status, kind = http.StatusForbidden, "AccessDeniedException"
+		}
+		return awsAnswer{}, &refusal{status, kind, "stage broker: cannot get AWS credentials for profile " + profile +
+			" on the host; the broker's log on the host says why", err.Error()}
 	}
-	request, err := http.NewRequest(http.MethodPost, s.Endpoint(region), bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, s.Endpoint(region), bytes.NewReader(body))
 	if err != nil {
 		return awsAnswer{}, err
 	}
@@ -160,26 +197,55 @@ func (s *SecretsManager) call(profile, region, operation string, payload any) (a
 	signRequest(request, body, key, region, "secretsmanager", now())
 	response, err := s.Client.Do(request)
 	if err != nil {
-		return awsAnswer{}, &Error{http.StatusServiceUnavailable, fmt.Sprintf("%s: cannot reach Secrets Manager in %s: %v", profile, region, err)}
+		return awsAnswer{}, &refusal{http.StatusServiceUnavailable, "ServiceUnavailableException",
+			"stage broker: cannot reach Secrets Manager; the broker's log on the host says why", fmt.Sprintf("%s in %s: %v", profile, region, err)}
 	}
 	defer response.Body.Close()
 	answer, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBody+1))
 	if err != nil || len(answer) > maxResponseBody {
-		return awsAnswer{}, &Error{http.StatusBadGateway, fmt.Sprintf("%s: Secrets Manager's answer was unreadable or too large", profile)}
+		return awsAnswer{}, &refusal{http.StatusBadGateway, "InternalServiceError", "stage broker: Secrets Manager's answer was unreadable or too large", ""}
+	}
+	if response.StatusCode != http.StatusOK {
+		kind, message := awsError(answer)
+		return awsAnswer{}, &refusal{response.StatusCode, kind,
+			fmt.Sprintf("stage broker: Secrets Manager answered %s for %s; the broker's log on the host has its message", kind, about), message}
 	}
 	return awsAnswer{response.StatusCode, answer, response.Header.Get("X-Amzn-Requestid")}, nil
+}
+
+func awsError(body []byte) (string, string) {
+	var answer struct {
+		Type     string `json:"__type"`
+		Message  string `json:"Message"`
+		Fallback string `json:"message"`
+	}
+	json.Unmarshal(body, &answer)
+	kind := answer.Type
+	if hash := strings.LastIndex(kind, "#"); hash >= 0 {
+		kind = kind[hash+1:]
+	}
+	kind, _, _ = strings.Cut(kind, ":")
+	if !awsErrorType.MatchString(kind) {
+		kind = "InternalServiceError"
+	}
+	message := answer.Message
+	if message == "" {
+		message = answer.Fallback
+	}
+	return kind, message
 }
 
 type refusal struct {
 	status int
 	kind   string
 	msg    string
+	detail string
 }
 
 func (r *refusal) Error() string { return r.msg }
 
 func refuse(format string, args ...any) *refusal {
-	return &refusal{http.StatusBadRequest, "AccessDeniedException", "stage broker: " + fmt.Sprintf(format, args...)}
+	return &refusal{http.StatusBadRequest, "AccessDeniedException", "stage broker: " + fmt.Sprintf(format, args...), ""}
 }
 
 func asRefusal(err error) *refusal {
@@ -187,33 +253,33 @@ func asRefusal(err error) *refusal {
 	if errors.As(err, &refused) {
 		return refused
 	}
-	var brokerErr *Error
-	if errors.As(err, &brokerErr) {
-		kind := "ServiceUnavailableException"
-		if brokerErr.Status == http.StatusForbidden {
-			kind = "AccessDeniedException"
-		}
-		return &refusal{brokerErr.Status, kind, "stage broker: " + brokerErr.Error()}
-	}
-	return &refusal{http.StatusInternalServerError, "InternalServiceError", "stage broker: " + err.Error()}
+	return &refusal{http.StatusInternalServerError, "InternalServiceError", "stage broker: the request failed; the broker's log on the host says why", err.Error()}
 }
 
 type secretsRequest struct {
-	api   *SecretsManager
-	grant SecretsManagerGrant
-	read  []string
+	api     *SecretsManager
+	ctx     context.Context
+	grant   SecretsManagerGrant
+	read    []string
+	details []string
 }
 
-func (q *secretsRequest) resolve(id string) (name, profile string, listed bool) {
+type resolved struct{ id, name, profile, arn string }
+
+func (q *secretsRequest) resolve(id string) (resolved, bool) {
 	if profile, listed := q.grant.Profiles[id]; listed {
-		return id, profile, true
+		return resolved{id, id, profile, ""}, true
 	}
 	if match := secretARN.FindStringSubmatch(id); match != nil && match[1] == q.grant.Region {
 		if profile, listed := q.grant.Profiles[match[2]]; listed {
-			return match[2], profile, true
+			return resolved{id, match[2], profile, id}, true
 		}
 	}
-	return "", "", false
+	return resolved{}, false
+}
+
+func (r resolved) answeredBy(name, arn string) bool {
+	return name == r.name && (r.arn == "" || arn == r.arn)
 }
 
 func (q *secretsRequest) noteRead(name string) {
@@ -237,8 +303,9 @@ func decodeStrictly(body []byte, target any) error {
 func SecretsManagerHandler(api *SecretsManager, grants Grants, log func(string)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		owner, operation := "-", "-"
-		query := &secretsRequest{api: api}
+		query := &secretsRequest{api: api, ctx: r.Context()}
 		send := func(status int, body []byte, requestID string) {
+			w.Header().Set(BrokerHeader, brokerHeaderValue)
 			w.Header().Set("Content-Type", jsonContentType)
 			w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 			if requestID != "" {
@@ -251,15 +318,21 @@ func SecretsManagerHandler(api *SecretsManager, grants Grants, log func(string))
 				read = strings.Join(query.read, ",")
 			}
 			log(fmt.Sprintf("broker: %s secretsmanager %s %s %d", owner, operation, read, status))
+			for _, detail := range query.details {
+				log(fmt.Sprintf("broker: %s secretsmanager %s: %s", owner, operation, escaped(detail)))
+			}
 		}
 		fail := func(err error) {
 			refused := asRefusal(err)
+			if refused.detail != "" {
+				query.details = append(query.details, refused.detail)
+			}
 			body, _ := json.Marshal(map[string]string{"__type": refused.kind, "Message": refused.msg})
 			query.read = nil
 			send(refused.status, body, "")
 		}
 		if r.Method != http.MethodPost {
-			fail(&refusal{http.StatusMethodNotAllowed, "AccessDeniedException", "stage broker: only POST is served"})
+			fail(&refusal{http.StatusMethodNotAllowed, "AccessDeniedException", "stage broker: only POST / is served", ""})
 			return
 		}
 		tokens := r.Header.Values(TokenHeader)
@@ -270,10 +343,14 @@ func SecretsManagerHandler(api *SecretsManager, grants Grants, log func(string))
 		}
 		if !found {
 			owner = "-"
-			fail(&refusal{http.StatusUnauthorized, "UnrecognizedClientException", "stage broker: missing or unknown broker token"})
+			fail(&refusal{http.StatusUnauthorized, "UnrecognizedClientException", "stage broker: missing or unknown broker token", ""})
 			return
 		}
 		query.grant = grant
+		if r.URL.Path != "/" || r.URL.RawQuery != "" {
+			fail(refuse("only POST / is served"))
+			return
+		}
 		if media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || media != jsonContentType {
 			fail(refuse("Content-Type must be %s", jsonContentType))
 			return
@@ -314,19 +391,21 @@ func (q *secretsRequest) getSecretValue(body []byte) (awsAnswer, error) {
 	if err := decodeStrictly(body, &request); err != nil {
 		return awsAnswer{}, err
 	}
-	name, profile, listed := q.resolve(request.SecretId)
+	secret, listed := q.resolve(request.SecretId)
 	if !listed {
 		return awsAnswer{}, refuse("secret %s is not listed for this sandbox", escaped(request.SecretId))
 	}
-	answer, err := q.api.call(profile, q.grant.Region, "GetSecretValue", request)
-	if err != nil || answer.status != http.StatusOK {
+	request.SecretId = secret.name
+	answer, err := q.api.call(q.ctx, secret.profile, q.grant.Region, "GetSecretValue", secret.name, request)
+	if err != nil {
 		return answer, err
 	}
-	var value struct{ Name string }
-	if json.Unmarshal(answer.body, &value) != nil || value.Name != name {
-		return awsAnswer{}, refuse("AWS answered for a different secret than %s, so the answer was dropped", name)
+	var value struct{ Name, ARN string }
+	if json.Unmarshal(answer.body, &value) != nil || !secret.answeredBy(value.Name, value.ARN) {
+		q.details = append(q.details, fmt.Sprintf("dropped an answer for %s (ARN %s) asked as %s", value.Name, value.ARN, secret.id))
+		return awsAnswer{}, refuse("secret %s is not listed for this sandbox", escaped(secret.id))
 	}
-	q.noteRead(name)
+	q.noteRead(secret.name)
 	return answer, nil
 }
 
@@ -359,65 +438,96 @@ func (q *secretsRequest) batchGetSecretValue(body []byte) (awsAnswer, error) {
 		return awsAnswer{}, refuse("SecretIdList takes at most %d secret ids", maxBatchSecretIDs)
 	}
 	values, failures := []json.RawMessage{}, []json.RawMessage{}
-	addFailure := func(id, message string) {
-		entry, _ := json.Marshal(secretError{id, "AccessDeniedException", "stage broker: " + message})
+	addFailure := func(id, code, message string) {
+		entry, _ := json.Marshal(secretError{id, code, "stage broker: " + message})
 		failures = append(failures, entry)
 	}
-	idsByProfile, namesByID := map[string][]string{}, map[string]string{}
+	var wanted []resolved
+	namesByProfile := map[string][]string{}
 	for _, id := range request.SecretIdList {
-		name, profile, listed := q.resolve(id)
+		secret, listed := q.resolve(id)
 		if !listed {
-			addFailure(id, fmt.Sprintf("secret %s is not listed for this sandbox", escaped(id)))
+			addFailure(id, "AccessDeniedException", fmt.Sprintf("secret %s is not listed for this sandbox", escaped(id)))
 			continue
 		}
-		idsByProfile[profile] = append(idsByProfile[profile], id)
-		namesByID[id] = name
+		wanted = append(wanted, secret)
+		if !slices.Contains(namesByProfile[secret.profile], secret.name) {
+			namesByProfile[secret.profile] = append(namesByProfile[secret.profile], secret.name)
+		}
 	}
-	for _, profile := range slices.Sorted(maps.Keys(idsByProfile)) {
-		ids := idsByProfile[profile]
-		answer, err := q.api.call(profile, q.grant.Region, "BatchGetSecretValue", map[string]any{"SecretIdList": ids})
-		if err != nil || answer.status != http.StatusOK {
-			return answer, err
-		}
-		var page struct {
-			SecretValues []json.RawMessage
-			Errors       []json.RawMessage
-		}
-		if err := json.Unmarshal(answer.body, &page); err != nil {
-			return awsAnswer{}, &Error{http.StatusBadGateway, profile + ": Secrets Manager's answer was unreadable"}
-		}
-		answered := map[string]bool{}
-		for _, raw := range page.SecretValues {
-			var value struct{ Name string }
-			json.Unmarshal(raw, &value)
-			for _, id := range ids {
-				if namesByID[id] == value.Name && !answered[id] {
-					answered[id] = true
-					values = append(values, raw)
-					q.noteRead(value.Name)
-					break
+	type batchValue struct {
+		raw       json.RawMessage
+		Name, ARN string
+	}
+	answered, awsFailed := map[string]batchValue{}, map[string]string{}
+	for _, profile := range slices.Sorted(maps.Keys(namesByProfile)) {
+		names := namesByProfile[profile]
+		token := ""
+		for pages := 0; ; pages++ {
+			if pages == maxPages {
+				return awsAnswer{}, &refusal{http.StatusBadGateway, "InternalServiceError", fmt.Sprintf("stage broker: Secrets Manager answered in more than %d pages", maxPages), ""}
+			}
+			payload := map[string]any{"SecretIdList": names}
+			if token != "" {
+				payload["NextToken"] = token
+			}
+			answer, err := q.api.call(q.ctx, profile, q.grant.Region, "BatchGetSecretValue", strings.Join(names, ", "), payload)
+			if err != nil {
+				return answer, err
+			}
+			var page struct {
+				SecretValues []json.RawMessage
+				Errors       []secretError
+				NextToken    string
+			}
+			if err := json.Unmarshal(answer.body, &page); err != nil {
+				return awsAnswer{}, &refusal{http.StatusBadGateway, "InternalServiceError", "stage broker: Secrets Manager's answer was unreadable", ""}
+			}
+			for _, raw := range page.SecretValues {
+				var value batchValue
+				json.Unmarshal(raw, &value)
+				value.raw = raw
+				if slices.Contains(names, value.Name) {
+					answered[value.Name] = value
+				} else {
+					q.details = append(q.details, fmt.Sprintf("dropped a value for %s, which was not asked for", value.Name))
 				}
 			}
-		}
-		failures = append(failures, page.Errors...)
-		for _, id := range ids {
-			if !answered[id] && !reportedIn(page.Errors, id) {
-				addFailure(id, fmt.Sprintf("AWS answered for a different secret than %s, so the answer was dropped", namesByID[id]))
+			for _, entry := range page.Errors {
+				kind, _, _ := strings.Cut(entry.ErrorCode, ":")
+				if !awsErrorType.MatchString(kind) {
+					kind = "InternalServiceError"
+				}
+				awsFailed[entry.SecretId] = kind
+				q.details = append(q.details, fmt.Sprintf("Secrets Manager answered %s for %s: %s", kind, entry.SecretId, entry.Message))
 			}
+			if page.NextToken == "" {
+				break
+			}
+			token = page.NextToken
+		}
+	}
+	returned := map[string]bool{}
+	for _, secret := range wanted {
+		value, found := answered[secret.name]
+		switch {
+		case found && secret.answeredBy(value.Name, value.ARN):
+			if !returned[secret.name] {
+				returned[secret.name] = true
+				values = append(values, value.raw)
+				q.noteRead(secret.name)
+			}
+		case found:
+			addFailure(secret.id, "AccessDeniedException", fmt.Sprintf("secret %s is not listed for this sandbox", escaped(secret.id)))
+		case awsFailed[secret.name] != "":
+			kind := awsFailed[secret.name]
+			addFailure(secret.id, kind, fmt.Sprintf("Secrets Manager answered %s for %s; the broker's log on the host has its message", kind, secret.name))
+		default:
+			addFailure(secret.id, "InternalServiceError", fmt.Sprintf("Secrets Manager did not answer for %s", secret.name))
 		}
 	}
 	encoded, err := json.Marshal(map[string][]json.RawMessage{"SecretValues": values, "Errors": failures})
 	return awsAnswer{status: http.StatusOK, body: encoded}, err
-}
-
-func reportedIn(errors []json.RawMessage, id string) bool {
-	for _, raw := range errors {
-		var entry secretError
-		if json.Unmarshal(raw, &entry) == nil && entry.SecretId == id {
-			return true
-		}
-	}
-	return false
 }
 
 type listFilter struct {
@@ -486,9 +596,9 @@ func (q *secretsRequest) listSecrets(body []byte) (awsAnswer, error) {
 		names := slices.Sorted(slices.Values(namesByProfile[profile]))
 		for start := 0; start < len(names); start += maxFilters {
 			chunk := names[start:min(start+maxFilters, len(names))]
-			found, answer, err := q.listPages(profile, chunk, request.IncludePlannedDeletion)
-			if err != nil || answer.status != http.StatusOK {
-				return answer, err
+			found, err := q.listPages(profile, chunk, request.IncludePlannedDeletion)
+			if err != nil {
+				return awsAnswer{}, err
 			}
 			for _, entry := range found {
 				if !slices.ContainsFunc(entries, func(seen listedEntry) bool { return seen.Name == entry.Name }) {
@@ -521,10 +631,13 @@ func (q *secretsRequest) listSecrets(body []byte) (awsAnswer, error) {
 	return awsAnswer{status: http.StatusOK, body: encoded}, err
 }
 
-func (q *secretsRequest) listPages(profile string, names []string, includePlannedDeletion *bool) ([]listedEntry, awsAnswer, error) {
+func (q *secretsRequest) listPages(profile string, names []string, includePlannedDeletion *bool) ([]listedEntry, error) {
 	var found []listedEntry
 	token := ""
-	for {
+	for pages := 0; ; pages++ {
+		if pages == maxPages {
+			return nil, &refusal{http.StatusBadGateway, "InternalServiceError", fmt.Sprintf("stage broker: Secrets Manager listed more than %d pages", maxPages), ""}
+		}
 		payload := map[string]any{"Filters": []listFilter{{Key: "name", Values: names}}, "MaxResults": 100}
 		if token != "" {
 			payload["NextToken"] = token
@@ -532,16 +645,16 @@ func (q *secretsRequest) listPages(profile string, names []string, includePlanne
 		if includePlannedDeletion != nil {
 			payload["IncludePlannedDeletion"] = *includePlannedDeletion
 		}
-		answer, err := q.api.call(profile, q.grant.Region, "ListSecrets", payload)
-		if err != nil || answer.status != http.StatusOK {
-			return nil, answer, err
+		answer, err := q.api.call(q.ctx, profile, q.grant.Region, "ListSecrets", strings.Join(names, ", "), payload)
+		if err != nil {
+			return nil, err
 		}
 		var page struct {
 			SecretList []json.RawMessage
 			NextToken  string
 		}
 		if err := json.Unmarshal(answer.body, &page); err != nil {
-			return nil, awsAnswer{}, &Error{http.StatusBadGateway, profile + ": Secrets Manager's answer was unreadable"}
+			return nil, &refusal{http.StatusBadGateway, "InternalServiceError", "stage broker: Secrets Manager's answer was unreadable", ""}
 		}
 		for _, raw := range page.SecretList {
 			var entry listedEntry
@@ -554,7 +667,7 @@ func (q *secretsRequest) listPages(profile string, names []string, includePlanne
 			found = append(found, entry)
 		}
 		if page.NextToken == "" {
-			return found, awsAnswer{status: http.StatusOK}, nil
+			return found, nil
 		}
 		token = page.NextToken
 	}
@@ -593,6 +706,16 @@ func fieldStartsWith(entry listedEntry, key, prefix string) bool {
 		return slices.ContainsFunc(entry.Tags, func(tag struct{ Key, Value string }) bool { return strings.HasPrefix(tag.Value, prefix) })
 	}
 	return false
+}
+
+func ServesSecretsManager(url string) bool {
+	client := &http.Client{Timeout: 2 * time.Second}
+	response, err := client.Post(url, jsonContentType, strings.NewReader("{}"))
+	if err != nil {
+		return false
+	}
+	response.Body.Close()
+	return response.Header.Get(BrokerHeader) == brokerHeaderValue
 }
 
 func escaped(text string) string {

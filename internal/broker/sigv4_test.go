@@ -52,3 +52,21 @@ func TestRequestsToAWSAreSignedAsInAWSsSignatureVersion4TestSuite(t *testing.T) 
 		}
 	}
 }
+
+func TestASecretsManagerRequestIsSignedAsBotocoreSignsIt(t *testing.T) {
+	body := `{"SecretId": "app/db"}`
+	request, err := http.NewRequest("POST", "http://127.0.0.1:9/", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/x-amz-json-1.1")
+	request.Header.Set("X-Amz-Target", "secretsmanager.GetSecretValue")
+	key := accessKey{ID: "AKIDEXAMPLE", Secret: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY", Token: "session-token-example"}
+	signRequest(request, []byte(body), key, "us-east-1", "secretsmanager", time.Date(2026, 11, 26, 20, 47, 20, 0, time.UTC))
+	want := "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20261126/us-east-1/secretsmanager/aws4_request, " +
+		"SignedHeaders=content-type;host;x-amz-date;x-amz-security-token;x-amz-target, " +
+		"Signature=3837c570b2fda3a93681bb849dce05057a246115a124ca83e75fad2e48792739"
+	if got := request.Header.Get("Authorization"); got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+}
