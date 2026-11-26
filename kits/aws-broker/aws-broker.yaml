@@ -1,17 +1,18 @@
 # syntax=docker/sandbox-kit:3
 schemaVersion: "3"
 kind: mixin
-displayName: AWS credentials from the scoring-stage broker
+displayName: AWS credentials and listed Secrets Manager secrets from the scoring-stage broker
 description: >-
   AWS profiles whose credential_process asks the scoring-stage broker on the
-  host for short-lived credentials. The sandbox never holds the broker token:
-  the proxy adds it to requests for the broker, and the broker serves only the
-  profiles the host granted this sandbox.
+  host for short-lived credentials, and a Secrets Manager endpoint on the
+  broker that serves only the secrets the host listed for this sandbox. The
+  sandbox never holds the broker token: the proxy adds it to requests for the
+  broker, and the broker serves only what the host granted this sandbox.
 
 args:
   profiles:
-    required: true
-    pattern: '^[A-Za-z0-9_.-]+( [A-Za-z0-9_.-]+)*$'
+    default: ""
+    pattern: '^([A-Za-z0-9_.-]+( [A-Za-z0-9_.-]+)*)?$'
     description: Space-separated AWS profile names to write to ~/.aws/config
     env: STAGE_AWS_PROFILES
   region:
@@ -24,6 +25,11 @@ args:
     pattern: '^([A-Za-z0-9_.-]+)?$'
     description: Granted profile also written as the [default] profile, so the aws CLI and SDKs work without AWS_PROFILE
     env: STAGE_AWS_DEFAULT_PROFILE
+  secrets_manager:
+    default: ""
+    pattern: '^(on)?$'
+    description: on sends every profile's Secrets Manager calls to the broker, and gives [default] placeholder keys when no profile is the default
+    env: STAGE_AWS_SECRETS_MANAGER
 
 capabilities:
   - type: com.docker.sandbox/network-policy@2
@@ -31,6 +37,7 @@ capabilities:
       runtime:
         allow:
           - localhost:9911
+          - localhost:9912
 
   - type: com.docker.sandbox/credential@1
     description: Per-sandbox broker token, added to broker requests by the proxy
@@ -40,6 +47,7 @@ capabilities:
       apiKey:
         inject:
           - {domain: "localhost:9911", header: Authorization, format: "Bearer %s"}
+          - {domain: "localhost:9912", header: X-Stage-Broker-Token, format: "%s"}
 
   - type: com.docker.sandbox/lifecycle@1
     config:
@@ -57,14 +65,25 @@ capabilities:
             mkdir -p "$HOME/.aws"
             config="$HOME/.aws/config"
             : > "$config"
+            services=''
+            if [ "$STAGE_AWS_SECRETS_MANAGER" = on ]; then
+              services='services = stage-broker
+            '
+            fi
             for profile in $STAGE_AWS_PROFILES; do
-              printf '[profile %s]\nregion = %s\ncredential_process = /home/agent/.local/bin/stage-aws-credentials %s\n\n' \
-                "$profile" "$STAGE_AWS_REGION" "$profile" >> "$config"
+              printf '[profile %s]\nregion = %s\ncredential_process = /home/agent/.local/bin/stage-aws-credentials %s\n%s\n' \
+                "$profile" "$STAGE_AWS_REGION" "$profile" "$services" >> "$config"
             done
             if [ -n "$STAGE_AWS_DEFAULT_PROFILE" ]; then
-              printf '[default]\nregion = %s\ncredential_process = /home/agent/.local/bin/stage-aws-credentials %s\n' \
-                "$STAGE_AWS_REGION" "$STAGE_AWS_DEFAULT_PROFILE" >> "$config"
+              printf '[default]\nregion = %s\ncredential_process = /home/agent/.local/bin/stage-aws-credentials %s\n%s' \
+                "$STAGE_AWS_REGION" "$STAGE_AWS_DEFAULT_PROFILE" "$services" >> "$config"
+            elif [ -n "$services" ]; then
+              printf '[default]\nregion = %s\naws_access_key_id = stage-broker\naws_secret_access_key = stage-broker\n%s' \
+                "$STAGE_AWS_REGION" "$services" >> "$config"
+            fi
+            if [ -n "$services" ]; then
+              printf '\n[services stage-broker]\nsecrets_manager =\n  endpoint_url = http://host.docker.internal:9912\n' >> "$config"
             fi
           user: agent
-          env: [STAGE_AWS_PROFILES, STAGE_AWS_REGION, STAGE_AWS_DEFAULT_PROFILE]
-          description: Write ~/.aws/config with a broker-backed profile per granted profile, plus [default]
+          env: [STAGE_AWS_PROFILES, STAGE_AWS_REGION, STAGE_AWS_DEFAULT_PROFILE, STAGE_AWS_SECRETS_MANAGER]
+          description: Write ~/.aws/config with a broker-backed profile per granted profile, plus [default], and the broker's Secrets Manager endpoint when secrets are listed

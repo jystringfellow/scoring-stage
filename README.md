@@ -101,7 +101,7 @@ stage login fix-login                # save the sandbox's agy login for future s
 stage take fix-login                 # copy the sandbox's takes to ~/.scoring-stage/takes/fix-login/ now
 stage secrets refresh fix-login      # have sbx run the sandbox's secret commands again, after your gh login changed
 stage down fix-login                 # keep the sandbox's takes, then remove it, its scoped secrets and the scratch clone
-stage broker start|stop|status       # the AWS broker (up starts it when a sandbox needs it)
+stage broker start|stop|status       # the AWS broker: credentials and listed Secrets Manager secrets (up starts it when a sandbox needs it)
 stage broker serve                   # run the broker in the foreground
 stage token set acme                 # save a fine-grained token for owner acme ([github] mode = "fine-grained")
 stage github login                   # log in to your GitHub App ([github] mode = "app")
@@ -856,7 +856,7 @@ Nothing you did not choose. Every sandbox gets:
 | --- | --- |
 | `docker.io/sbx/shell` | Debian base with git, gh, curl, jq, Python and Docker |
 | [`kits/stage`](kits/stage/stage.yaml) | Refuses `POST /**/git-receive-pack` on ports 443 and 80 of every host and GitHub REST writes, sets your git identity, tells the agent the rules |
-| [`kits/aws-broker`](kits/aws-broker/aws-broker.yaml) | Only when AWS profiles are configured: `~/.aws/config` with a `credential_process` per profile, plus `[default]` when a default profile applies |
+| [`kits/aws-broker`](kits/aws-broker/aws-broker.yaml) | Only when AWS profiles are granted or Secrets Manager secrets are listed: `~/.aws/config` with a `credential_process` per profile, plus `[default]` when a default profile applies; with secrets listed, every profile's Secrets Manager endpoint on the broker |
 
 plus the agents chosen by your config, the repository, a book or `--agent`. Agents are Docker's published mixins,
 each with its own egress and credentials:
@@ -1334,8 +1334,21 @@ profile: `build = ["app/config", "app/db"]`.
   - a local kit that `extends` another;
   - a global sbx allow rule, even with `--allow-global-policy`.
   Published kits, such as the agents' mixins, cannot be read, so they are not checked.
-- **Not served yet.** In this version the broker serves AWS credentials only, so a listed secret cannot be read from
-  inside the sandbox.
+- **Read through the broker.** The sandbox reads listed secrets through the broker, which reads them on your
+  machine with the profile each is listed under. The SDKs and the `aws` CLI find it through `~/.aws/config`: each
+  profile and `[default]` get `services = stage-broker`, and `[services stage-broker]` sets `secrets_manager`'s
+  `endpoint_url` to the broker's port, 9912. When no profile is the default, `[default]` gets placeholder keys
+  that only the broker accepts, so the SDK can sign. The broker answers three calls and refuses every other:
+  - `GetSecretValue` for a listed name. An ARN is only another way to name a listed secret: the broker asks AWS
+    for the listed name, in the profile's own account, and refuses the answer unless its ARN is the one given;
+  - `BatchGetSecretValue` with `SecretIdList`: an unlisted id comes back in `Errors` as `AccessDeniedException`,
+    and is not sent to AWS;
+  - `ListSecrets`, which lists only listed secrets, in one page. The client's `name`, `description`, `tag-key`
+    and `tag-value` filters, `!` negation included, are applied on your machine to the listed secrets; other
+    filter keys and `NextToken` are refused.
+  An AWS error comes back as its type, with AWS's message kept in the broker's log on your machine, since it can
+  name the profile's role and session. The profile must give temporary keys, as for a granted profile. A broker started by an earlier `stage` does not
+  answer on 9912; `stage up` says to restart it.
 
 A kit that a book adds for its own service declares a `credential@1` entry for that service and names the hosts it is
 injected on; the book's `secrets` entry supplies the value for each sandbox, and its `bindings` entry authorises the
@@ -1624,6 +1637,10 @@ and what has not been run live yet.
   The list is a boundary only when no open host can read secrets for the sandbox's keys. A profile named only in
   `[aws.secrets_manager]` gives the sandbox no keys. stage checks local kits only, so a published kit that opens
   Secrets Manager is not refused.
+- A secret's value reaches the sandbox once it is read, and stays there. The broker limits which secrets can be
+  read, not what the agent does with a value. The broker's log names the sandbox, the call and the listed secrets,
+  never a value.
+- The broker's Secrets Manager endpoint has run only against fakes; see VERIFICATION.md.
 - stage reads a local kit's YAML and JSON files. The kit specification also lets a Dockerfile carry a kit's
   descriptor in a `# kit:` comment block, and stage does not read that form, for this check or for any other check
   on a book's or repository's kits.

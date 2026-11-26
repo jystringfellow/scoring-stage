@@ -65,6 +65,15 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
 - `stage secrets refresh` itself against a live sandbox. The `sbx secret set --sandbox … --command … --force` call
   it makes was checked on 2026-11-24 by hand, with a dummy command; the command as stage runs it, `--refresh`
   passed to `sbx secret set`, and services other than `copilot` were not.
+- The broker's Secrets Manager endpoint in a live sandbox, and against AWS itself:
+  - whether the proxy injects the broker token as `X-Stage-Broker-Token` on a `POST` to `localhost:9912`;
+  - whether an SDK in a sandbox reads the `[services stage-broker]` section that the `aws-broker` kit writes (the
+    key is `secrets_manager`), and signs with the placeholder keys when no profile is the default;
+  - the broker's own signed calls to Secrets Manager with a real temporary session, and AWS's answers to them.
+
+  Run only against fakes: the operations, filters and refusals.
+- Whether sbx matches allow entries that are IP addresses, CIDR ranges or hosts with underscores. stage refuses
+  them when Secrets Manager secrets are listed, because the kit specification's host grammar does not name them.
 - sbx's kit loader: which files it reads from a kit directory, and whether it matches keys case-insensitively.
   stage checks `.yaml`, `.yml` and `.json` files at any depth except under `files/`, and refuses keys that differ
   from `capabilities`, `extends`, `type`, `config`, `service`, `inject` or `domain` only in case.
