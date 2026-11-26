@@ -11,7 +11,8 @@ import (
 )
 
 const allowedKitRoot = "a kit's root may hold one descriptor (.yaml, .yml or .json), README, LICENSE, NOTICE, CHANGELOG, AUTHORS, " +
-	"CONTRIBUTING (bare or .md or .txt), .gitignore and a files/ directory; everything else belongs under files/"
+	"CONTRIBUTING (bare or .md or .txt), .gitignore, .gitattributes, .gitkeep, .editorconfig, .DS_Store, Thumbs.db and a files/ directory; " +
+	"everything else belongs under files/"
 
 func toolKit(t *testing.T) (string, string) {
 	t.Helper()
@@ -87,22 +88,89 @@ func TestAKitRootEntryThatCannotBeReadIsRefused(t *testing.T) {
 }
 
 func TestAKitRootRefusalEscapesTheFileName(t *testing.T) {
-	path, kit := toolKit(t)
-	name := "evil\x1b[31m‮name"
-	testutil.WriteFile(t, filepath.Join(kit, name), "x\n")
-	_, err := LoadBook(BuiltinAgents(), path)
-	if err == nil || strings.ContainsAny(err.Error(), "\x1b‮") {
-		t.Errorf("error %q", err)
+	hostile := "evil\x1b[31m\u202ename"
+	for name, setup := range map[string]func(kit string){
+		"an unknown file": func(kit string) { testutil.WriteFile(t, filepath.Join(kit, hostile), "x\n") },
+		"an unreadable descriptor": func(kit string) {
+			os.Remove(filepath.Join(kit, "tool.yaml"))
+			testutil.WriteFile(t, filepath.Join(kit, hostile+".yaml"), "capabilities: []\n")
+			os.Chmod(filepath.Join(kit, hostile+".yaml"), 0)
+		},
+		"a descriptor with a kit comment": func(kit string) {
+			os.Remove(filepath.Join(kit, "tool.yaml"))
+			testutil.WriteFile(t, filepath.Join(kit, hostile+".yaml"), "# kit:\ncapabilities: []\n")
+		},
+		"a descriptor that does not parse": func(kit string) {
+			os.Remove(filepath.Join(kit, "tool.yaml"))
+			testutil.WriteFile(t, filepath.Join(kit, hostile+".yaml"), "capabilities: [\n")
+		},
+	} {
+		path, kit := toolKit(t)
+		setup(kit)
+		_, err := LoadBook(BuiltinAgents(), path)
+		if err == nil || strings.ContainsAny(err.Error(), "\x1b\u202e") {
+			t.Errorf("%s: error %q", name, err)
+		}
+	}
+}
+
+func TestEditorAndSystemFilesAtAKitRoot(t *testing.T) {
+	for _, name := range []string{".DS_Store", "Thumbs.db", ".gitattributes", ".gitkeep", ".editorconfig"} {
+		path, kit := toolKit(t)
+		testutil.WriteFile(t, filepath.Join(kit, name), "x\n")
+		if _, err := LoadBook(BuiltinAgents(), path); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	for _, name := range []string{".tool.yaml.swp", ".tool.yaml.swo", "tool.yaml~", "#tool.yaml#", "._tool.yaml", "._README"} {
+		path, kit := toolKit(t)
+		testutil.WriteFile(t, filepath.Join(kit, name), "x\n")
+		_, err := LoadBook(BuiltinAgents(), path)
+		if err == nil || !strings.Contains(err.Error(), name+" is an editor or system file at the kit's root; close the editor or delete the file") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+func TestANonASCIINameAtAKitRootIsRefused(t *testing.T) {
+	for _, name := range []string{"L\u0130CENSE", "NOT\u0130CE.md", "r\u00e9sum\u00e9.yaml"} {
+		path, kit := toolKit(t)
+		testutil.WriteFile(t, filepath.Join(kit, name), "x\n")
+		_, err := LoadBook(BuiltinAgents(), path)
+		if err == nil || !strings.Contains(err.Error(), "is not an ASCII name, which is not allowed at the kit's root") {
+			t.Errorf("%q: %v", name, err)
+		}
 	}
 }
 
 func TestADescriptorWithAKitCommentBlockIsRefused(t *testing.T) {
-	for _, line := range []string{"# kit:", "#kit:", "   # KIT :", "\t#  Kit:   {kind: mixin}"} {
+	refused := map[string]string{
+		"plain":       "# kit:\n#   kind: mixin\ncapabilities: []\n",
+		"no space":    "#kit:\ncapabilities: []\n",
+		"tab":         "#\tkit:  \ncapabilities: []\n",
+		"doubled":     "## kit:\ncapabilities: []\n",
+		"upper case":  "# KIT:\ncapabilities: []\n",
+		"no-break":    "#\u00a0kit:\ncapabilities: []\n",
+		"after a BOM": "\xef\xbb\xbf# kit:\ncapabilities: []\n",
+		"bare CR":     "# syntax=docker/sandbox-kit:3\r# kit:\r#   kind: mixin\rcapabilities: []\r",
+	}
+	for name, content := range refused {
 		path, kit := toolKit(t)
-		testutil.WriteFile(t, filepath.Join(kit, "tool.yaml"), "# syntax=docker/sandbox-kit:3\n"+line+"\n#   kind: mixin\ncapabilities: []\n")
+		testutil.WriteFile(t, filepath.Join(kit, "tool.yaml"), content)
 		_, err := LoadBook(BuiltinAgents(), path)
-		if err == nil || !strings.Contains(err.Error(), "tool.yaml has a `# kit:` comment line") {
-			t.Errorf("%q: %v", line, err)
+		if err == nil || !strings.Contains(err.Error(), "tool.yaml has a line that is only `# kit:`, which opens a comment descriptor") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	for name, content := range map[string]string{
+		"descriptive comment": "# kit: installs node\ncapabilities: []\n",
+		"in a script":         "capabilities:\n  - type: com.docker.sandbox/lifecycle@1\n    config:\n      install:\n        - command: |\n            # kit:\n            # kit: set up\n            true\n",
+		"indented":            "   # kit:\ncapabilities: []\n",
+	} {
+		path, kit := toolKit(t)
+		testutil.WriteFile(t, filepath.Join(kit, "tool.yaml"), content)
+		if _, err := LoadBook(BuiltinAgents(), path); err != nil {
+			t.Errorf("%s: %v", name, err)
 		}
 	}
 }

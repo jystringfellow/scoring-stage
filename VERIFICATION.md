@@ -78,7 +78,8 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
   stage reads the one `.yaml`, `.yml` or `.json` descriptor at a kit's root, refuses any other root entry but
   documentation and `files/`, and refuses keys that differ from `capabilities`, `extends`, `type`, `config`,
   `service`, `inject` or `domain` only in case. Whether sbx reads a descriptor from `files/`, or a `# kit:` comment
-  inside a YAML descriptor, is unchecked.
+  inside a YAML descriptor, is unchecked. Also unchecked: that sbx never takes a descriptor from a file named like
+  documentation (README, LICENSE and the rest) or `.DS_Store`, which stage accepts at a kit's root unread.
 
 ## 2026-11-08 to 2026-11-09: sbx behaviours stage relies on
 
