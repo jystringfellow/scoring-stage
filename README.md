@@ -1417,6 +1417,19 @@ not been run in a sandbox from this repository. None has been used by reference 
 
 ### Writing a kit
 
+A book's or repository's kit is a directory whose root holds exactly one descriptor (`.yaml`, `.yml` or
+`.json`). Beside it may sit only:
+- documentation: `README`, `LICENSE`, `NOTICE`, `CHANGELOG`, `AUTHORS` or `CONTRIBUTING`, bare or with `.md` or
+  `.txt`, and `.gitignore`;
+- a `files/` directory, which holds everything else the kit carries and which stage does not read.
+
+stage refuses any other file, any other directory and any link at the root, by name and without reading it,
+because it cannot tell whether another file declares something; the kit specification lets a Dockerfile carry a
+descriptor too. A kit with a companion `<stem>.dockerfile` recipe, a script at its root, a second descriptor or a
+subdirectory is refused, and the message says to move the file under `files/`. stage also refuses a descriptor
+with a `# kit:` comment line, which is how a Dockerfile carries one. The same rules apply to your own local kits
+when Secrets Manager secrets are listed.
+
 [`books/go/kits/go/go.yaml`](books/go/kits/go/go.yaml) is a small kit to start from. Two things
 about the sandbox have caught kits in use; both come from one kit's notes and have not been checked again for
 this README:
@@ -1624,12 +1637,9 @@ and what has not been run live yet.
   The list is a boundary only when no open host can read secrets for the sandbox's keys. A profile named only in
   `[aws.secrets_manager]` gives the sandbox no keys. stage checks local kits only, so a published kit that opens
   Secrets Manager is not refused.
-- stage reads a local kit's YAML and JSON files. The kit specification also lets a Dockerfile carry a kit's
-  descriptor in a `# kit:` comment block. stage does not read that form, so it refuses a book's, a repository's
-  or (with Secrets Manager secrets listed) your own kit that has one. Any other file whose leading parser
-  directives name the `sandbox-kit` frontend counts, whatever its name, under `files/` too, and so does a link to
-  one. Only the first 64 KiB of a file are read. A Dockerfile recipe beside a YAML descriptor, which names its own
-  frontend, and documentation that shows an example further down, are left alone.
+- stage reads a kit's one root descriptor and refuses other files at its root (see [Writing a kit](#writing-a-kit)).
+  It does not read `files/`. If sbx found a descriptor somewhere under `files/`, stage would not see it; nothing
+  shows that sbx looks there.
 - Bindings are shared by every sandbox. One written for a sandbox stays after `stage down` and approves that service
   for all sandboxes; a sandbox gets a value only from its own secret or a global sbx secret. `stage up` refuses a
   global `github` secret, and stops on any other global secret unless `--allow-global-secrets` is passed.

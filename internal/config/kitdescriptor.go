@@ -1,80 +1,69 @@
 package config
 
 import (
-	"bytes"
-	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
-	"unicode/utf16"
 )
 
-const directivePrefixLimit = 64 << 10
+const kitFilesDir = "files"
 
 var (
-	parserDirective = regexp.MustCompile(`^(?:#|//|;)\s*([A-Za-z][A-Za-z0-9_-]*)\s*=\s*(.*?)\s*$`)
-	lineBreak       = regexp.MustCompile(`\r\n|\r|\n`)
+	inertKitNames  = []string{"readme", "license", "notice", "changelog", "authors", "contributing"}
+	kitCommentLine = regexp.MustCompile(`(?im)^[ \t]*#[ \t]*kit[ \t]*:`)
+	allowedAtRoot  = "a kit's root may hold one descriptor (.yaml, .yml or .json), README, LICENSE, NOTICE, CHANGELOG, AUTHORS, " +
+		"CONTRIBUTING (bare or .md or .txt), .gitignore and a files/ directory; everything else belongs under files/"
 )
 
-func refuseUnreadDescriptors(dir string) error {
-	return filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
-			return err
-		}
-		relative, _ := filepath.Rel(dir, path)
-		underFiles := strings.HasPrefix(relative, "files"+string(filepath.Separator))
-		if !underFiles && contains(kitFileExtensions, strings.ToLower(filepath.Ext(path))) {
-			return nil
-		}
-		info, err := os.Stat(path)
-		if err != nil || !info.Mode().IsRegular() {
-			return nil
-		}
-		if frontend, named := kitFrontendNamedBy(path); named {
-			return errorf("kit %s: %s names the sandbox-kit frontend in its parser directives (syntax=%s), so it is a kit descriptor stage cannot read; "+
-				"write the kit's descriptor as YAML", dir, relative, Printable(frontend))
-		}
-		return nil
-	})
+func inertKitFile(name string) bool {
+	lower := strings.ToLower(name)
+	if lower == ".gitignore" {
+		return true
+	}
+	stem, extension := lower, ""
+	if dot := strings.LastIndex(lower, "."); dot > 0 {
+		stem, extension = lower[:dot], lower[dot:]
+	}
+	return slices.Contains(inertKitNames, stem) && slices.Contains([]string{"", ".md", ".txt"}, extension)
 }
 
-func kitFrontendNamedBy(path string) (string, bool) {
-	file, err := os.Open(path)
+func kitRoot(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return "", false
+		return nil, errorf("cannot list the kit: %v", err)
 	}
-	defer file.Close()
-	prefix, _ := io.ReadAll(io.LimitReader(file, directivePrefixLimit))
-	for _, line := range lineBreak.Split(decodedText(prefix), -1) {
-		line = strings.TrimSpace(line)
-		if line == "" {
+	var descriptors, names []string
+	for _, entry := range entries {
+		name := entry.Name()
+		shown := Printable(name)
+		path := filepath.Join(dir, name)
+		switch {
+		case entry.Type()&os.ModeSymlink != 0:
+			return nil, errorf("%s is a link, which is not allowed at the kit's root; %s", shown, allowedAtRoot)
+		case entry.IsDir() && name == kitFilesDir:
 			continue
+		case entry.IsDir():
+			return nil, errorf("%s is a directory, which is not allowed at the kit's root; %s", shown, allowedAtRoot)
+		case !entry.Type().IsRegular():
+			return nil, errorf("%s is not a regular file, which is not allowed at the kit's root; %s", shown, allowedAtRoot)
+		case contains(kitFileExtensions, strings.ToLower(filepath.Ext(name))):
+			descriptors, names = append(descriptors, path), append(names, shown)
+		case !inertKitFile(name):
+			return nil, errorf("%s is not allowed at the kit's root; %s", shown, allowedAtRoot)
 		}
-		directive := parserDirective.FindStringSubmatch(line)
-		if directive == nil {
-			return "", false
+		file, err := os.Open(path)
+		if err != nil {
+			return nil, errorf("%s cannot be read: %v", shown, err)
 		}
-		if strings.EqualFold(directive[1], "syntax") && strings.Contains(strings.ToLower(directive[2]), "sandbox-kit") {
-			return directive[2], true
-		}
+		file.Close()
 	}
-	return "", false
-}
-
-func decodedText(data []byte) string {
-	littleEndian := bytes.HasPrefix(data, []byte{0xff, 0xfe})
-	if !littleEndian && !bytes.HasPrefix(data, []byte{0xfe, 0xff}) {
-		return string(bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf}))
+	switch len(descriptors) {
+	case 0:
+		return nil, errorf("has no descriptor; a kit has exactly one (.yaml, .yml or .json) at its root")
+	case 1:
+		return descriptors, nil
 	}
-	units := make([]uint16, 0, len(data)/2)
-	for i := 2; i+1 < len(data); i += 2 {
-		if littleEndian {
-			units = append(units, uint16(data[i])|uint16(data[i+1])<<8)
-		} else {
-			units = append(units, uint16(data[i])<<8|uint16(data[i+1]))
-		}
-	}
-	return string(utf16.Decode(units))
+	return nil, errorf("has %d descriptors (%s); a kit has exactly one", len(descriptors), strings.Join(names, ", "))
 }

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -34,45 +33,23 @@ type kitDocument struct {
 
 var kitFileExtensions = []string{".yaml", ".yml", ".json"}
 
-func kitFiles(dir string) ([]string, error) {
-	var files []string
-	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() && path == filepath.Join(dir, "files") {
-			return filepath.SkipDir
-		}
-		if entry.Type()&fs.ModeSymlink != 0 {
-			if info, err := os.Stat(path); err == nil && info.IsDir() {
-				return errorf("%s is a link to a directory", path)
-			}
-		}
-		if !entry.IsDir() && contains(kitFileExtensions, strings.ToLower(filepath.Ext(path))) {
-			files = append(files, path)
-		}
-		return nil
-	})
-	sort.Strings(files)
-	return files, err
-}
-
 func loadKit(dir string) ([]kitDocument, error) {
 	info, err := os.Stat(dir)
 	if err != nil || !info.IsDir() {
 		return nil, errorf("kit %s is not a directory", dir)
 	}
-	files, err := kitFiles(dir)
+	files, err := kitRoot(dir)
 	if err != nil {
 		return nil, errorf("kit %s: %v", dir, err)
-	}
-	if err := refuseUnreadDescriptors(dir); err != nil {
-		return nil, err
 	}
 	var documents []kitDocument
 	for _, file := range files {
 		relative, _ := filepath.Rel(dir, file)
 		content, err := os.ReadFile(file)
+		if err == nil && kitCommentLine.Match(content) {
+			return nil, errorf("kit %s: %s has a `# kit:` comment line, which is how a Dockerfile carries a kit descriptor; "+
+				"stage reads the YAML and cannot tell which one sbx would read, so remove the comment block", dir, relative)
+		}
 		if err != nil {
 			return nil, errorf("kit %s: cannot read %s: %v", dir, relative, err)
 		}
