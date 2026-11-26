@@ -785,10 +785,13 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 	}
 
 	core := []Kit{{Source: filepath.Join(settings.CoreKits(), "stage")}}
-	if len(profiles) > 0 {
+	if len(profiles) > 0 || len(listed) > 0 {
 		brokerArgs := map[string]any{"profiles": strings.Join(profiles, " "), "region": region}
 		if defaultProfile != "" {
 			brokerArgs["default_profile"] = defaultProfile
+		}
+		if len(listed) > 0 {
+			brokerArgs["secrets_manager"] = "on"
 		}
 		core = append(core, Kit{Source: filepath.Join(settings.CoreKits(), "aws-broker"), Args: brokerArgs})
 		bindings[BrokerService] = brokerBinding()

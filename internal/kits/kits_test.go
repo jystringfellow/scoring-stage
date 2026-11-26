@@ -1,12 +1,15 @@
 package kits
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	scoringstage "github.com/jystringfellow/scoring-stage"
+	"gopkg.in/yaml.v3"
 )
 
 func TestCoreKitsShipWithTheBinary(t *testing.T) {
@@ -78,5 +81,99 @@ func TestTheStageKitsGuidanceHoldsHoweverTheAgentWasLaunched(t *testing.T) {
 		if !strings.Contains(guidance, rule) {
 			t.Errorf("the guidance lost a rule: %q", rule)
 		}
+	}
+}
+
+type brokerKit struct {
+	Args         map[string]struct{ Default string }
+	Capabilities []struct {
+		Type   string
+		Config map[string]any
+	}
+}
+
+func loadBrokerKit(t *testing.T) brokerKit {
+	t.Helper()
+	content, err := scoringstage.Kits.ReadFile("kits/aws-broker/aws-broker.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kit brokerKit
+	if err := yaml.Unmarshal(content, &kit); err != nil {
+		t.Fatal(err)
+	}
+	return kit
+}
+
+func writtenAWSConfig(t *testing.T, profiles, defaultProfile, secretsManager string) string {
+	t.Helper()
+	var install string
+	for _, capability := range loadBrokerKit(t).Capabilities {
+		if capability.Type == "com.docker.sandbox/lifecycle@1" {
+			hooks := capability.Config["install"].([]any)
+			install = hooks[0].(map[string]any)["command"].(string)
+		}
+	}
+	home := t.TempDir()
+	command := exec.Command("sh", "-c", install)
+	command.Env = []string{"HOME=" + home, "PATH=" + os.Getenv("PATH"), "STAGE_AWS_PROFILES=" + profiles, "STAGE_AWS_REGION=eu-west-1",
+		"STAGE_AWS_DEFAULT_PROFILE=" + defaultProfile, "STAGE_AWS_SECRETS_MANAGER=" + secretsManager}
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("install: %v\n%s", err, output)
+	}
+	written, err := os.ReadFile(filepath.Join(home, ".aws", "config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(written)
+}
+
+const helper = "credential_process = /home/agent/.local/bin/stage-aws-credentials"
+
+func TestTheBrokerKitWritesTheSameAWSConfigAsBeforeWhenNoSecretsAreListed(t *testing.T) {
+	want := "[profile dev]\nregion = eu-west-1\n" + helper + " dev\n\n" +
+		"[profile staging]\nregion = eu-west-1\n" + helper + " staging\n\n" +
+		"[default]\nregion = eu-west-1\n" + helper + " dev\n"
+	if got := writtenAWSConfig(t, "dev staging", "dev", ""); got != want {
+		t.Errorf("config:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestTheBrokerKitSendsSecretsManagerCallsToTheBrokerUnderTheKeyTheSDKsRead(t *testing.T) {
+	endpoint := "[services stage-broker]\nsecrets_manager =\n  endpoint_url = http://host.docker.internal:9912\n"
+	want := "[profile build]\nregion = eu-west-1\n" + helper + " build\nservices = stage-broker\n\n" +
+		"[default]\nregion = eu-west-1\n" + helper + " build\nservices = stage-broker\n\n" + endpoint
+	if got := writtenAWSConfig(t, "build", "build", "on"); got != want {
+		t.Errorf("config:\n%s\nwant:\n%s", got, want)
+	}
+	placeholder := "[default]\nregion = eu-west-1\naws_access_key_id = stage-broker\naws_secret_access_key = stage-broker\nservices = stage-broker\n\n" + endpoint
+	if got := writtenAWSConfig(t, "", "", "on"); got != placeholder {
+		t.Errorf("with no granted profile:\n%s\nwant:\n%s", got, placeholder)
+	}
+	if got := writtenAWSConfig(t, "build staging", "", "on"); !strings.HasSuffix(got, placeholder) || strings.Count(got, "services = stage-broker") != 3 {
+		t.Errorf("with granted profiles and no default:\n%s", got)
+	}
+}
+
+func TestTheBrokerKitAllowsAndInjectsTheSandboxsTokenOnTheSecretsManagerPort(t *testing.T) {
+	var allowed, injected []string
+	for _, capability := range loadBrokerKit(t).Capabilities {
+		switch capability.Type {
+		case "com.docker.sandbox/network-policy@2":
+			for _, host := range capability.Config["runtime"].(map[string]any)["allow"].([]any) {
+				allowed = append(allowed, host.(string))
+			}
+		case "com.docker.sandbox/credential@1":
+			for _, rule := range capability.Config["apiKey"].(map[string]any)["inject"].([]any) {
+				entry := rule.(map[string]any)
+				injected = append(injected, fmt.Sprintf("%s %s %s", entry["domain"], entry["header"], entry["format"]))
+			}
+		}
+	}
+	if strings.Join(allowed, " ") != "localhost:9911 localhost:9912" {
+		t.Errorf("allowed %v", allowed)
+	}
+	if strings.Join(injected, "; ") != "localhost:9911 Authorization Bearer %s; localhost:9912 X-Stage-Broker-Token %s" {
+		t.Errorf("injected %v", injected)
 	}
 }

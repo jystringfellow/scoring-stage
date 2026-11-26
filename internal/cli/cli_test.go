@@ -24,6 +24,8 @@ type harness struct {
 	remote         testutil.Remote
 	stdout, stderr bytes.Buffer
 	brokerStarts   []string
+	brokerPID      int
+	brokerServesSM bool
 	managed        string
 	credentials    string
 	hostProfiles   []string
@@ -80,16 +82,17 @@ func (h *harness) stage(args ...string) int {
 		stdin = h.stdinReader
 	}
 	app := &App{
-		Stdin:           stdin,
-		Stdout:          &h.stdout,
-		Stderr:          &h.stderr,
-		FindGh:          func() string { return h.gh },
-		BrokerPID:       func(string) int { return 0 },
-		BrokerStart:     func(home string) error { h.brokerStarts = append(h.brokerStarts, home); return nil },
-		IsTerminal:      func() bool { return h.terminal },
-		StdinIsTerminal: func() bool { return h.stdinTerminal },
-		ReadSecret:      func() ([]byte, error) { return []byte(h.typed), nil },
-		GitHubAPI:       h.github.api(),
+		Stdin:                 stdin,
+		Stdout:                &h.stdout,
+		Stderr:                &h.stderr,
+		FindGh:                func() string { return h.gh },
+		BrokerPID:             func(string) int { return h.brokerPID },
+		SecretsManagerAnswers: func() bool { return h.brokerServesSM },
+		BrokerStart:           func(home string) error { h.brokerStarts = append(h.brokerStarts, home); return nil },
+		IsTerminal:            func() bool { return h.terminal },
+		StdinIsTerminal:       func() bool { return h.stdinTerminal },
+		ReadSecret:            func() ([]byte, error) { return []byte(h.typed), nil },
+		GitHubAPI:             h.github.api(),
 		HostAWSProfiles: func() ([]string, error) {
 			return h.hostProfiles, nil
 		},

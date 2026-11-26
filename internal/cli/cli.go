@@ -46,19 +46,20 @@ type exitCode int
 func (e exitCode) Error() string { return "exit status " + strconv.Itoa(int(e)) }
 
 type App struct {
-	Stdin            io.Reader
-	Stdout, Stderr   io.Writer
-	FindGh           func() string
-	BrokerPID        func(home string) int
-	BrokerStart      func(home string) error
-	IsTerminal       func() bool
-	HostAWSProfiles  func() ([]string, error)
-	GitHub           *github.Client
-	StdinIsTerminal  func() bool
-	ReadSecret       func() ([]byte, error)
-	GitHubAPI        config.GitHubAPI
-	approvalReadOnly bool
-	hallStop         <-chan struct{}
+	Stdin                 io.Reader
+	Stdout, Stderr        io.Writer
+	FindGh                func() string
+	BrokerPID             func(home string) int
+	BrokerStart           func(home string) error
+	SecretsManagerAnswers func() bool
+	IsTerminal            func() bool
+	HostAWSProfiles       func() ([]string, error)
+	GitHub                *github.Client
+	StdinIsTerminal       func() bool
+	ReadSecret            func() ([]byte, error)
+	GitHubAPI             config.GitHubAPI
+	approvalReadOnly      bool
+	hallStop              <-chan struct{}
 }
 
 func New() *App {
@@ -235,13 +236,22 @@ func loadTask(home, slug string) (*Task, error) {
 	return &task, nil
 }
 
-func brokerAnswers() bool {
-	connection, err := net.DialTimeout("tcp", broker.Address, time.Second)
+func brokerAnswers() bool { return answers(broker.Address) }
+
+func answers(address string) bool {
+	connection, err := net.DialTimeout("tcp", address, time.Second)
 	if err != nil {
 		return false
 	}
 	connection.Close()
 	return true
+}
+
+func (a *App) secretsManagerAnswers() bool {
+	if a.SecretsManagerAnswers != nil {
+		return a.SecretsManagerAnswers()
+	}
+	return answers(broker.SecretsManagerAddress)
 }
 
 func brokerPID(home string) int {
@@ -664,9 +674,20 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	}
 	defer carry.Close()
 
-	if len(composition.AWSProfiles) > 0 {
-		tokenFile, err := broker.Grants{Path: grantsDir(home)}.Issue(slug, composition.AWSProfiles)
+	needsBroker := len(composition.AWSProfiles) > 0 || len(composition.AWSSecretsManager) > 0
+	if !*plan && len(composition.AWSSecretsManager) > 0 {
+		if pid := a.BrokerPID(home); pid != 0 && !a.secretsManagerAnswers() {
+			return 0, errorf("the broker running (pid %d) does not serve Secrets Manager on %s; run `stage broker stop` and `stage broker start`, "+
+				"then `stage up` again", pid, broker.SecretsManagerAddress)
+		}
+	}
+	if needsBroker {
+		grants := broker.Grants{Path: grantsDir(home)}
+		tokenFile, err := grants.Issue(slug, composition.AWSProfiles)
 		if err != nil {
+			return 0, err
+		}
+		if err := grants.IssueSecretsManager(slug, composition.AWSRegion, composition.AWSSecretsManager); err != nil {
 			return 0, err
 		}
 		composition.Secrets[config.BrokerService] = map[string]any{"command": "/bin/cat " + config.ShellQuote(tokenFile)}
@@ -699,7 +720,7 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 		a.say("plan only; env file %s", envPath)
 		return 0, nil
 	}
-	if len(composition.AWSProfiles) > 0 && a.BrokerPID(home) == 0 {
+	if needsBroker && a.BrokerPID(home) == 0 {
 		if err := a.startBroker(home); err != nil {
 			return 0, err
 		}
