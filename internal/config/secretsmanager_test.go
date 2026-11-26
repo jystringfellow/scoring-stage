@@ -84,6 +84,9 @@ func TestSecretsManagerEntriesAreExactSecretNamesUnderProfileNames(t *testing.T)
 		`secrets_manager = { dev = ["arn:aws:secretsmanager:us-east-1:111122223333:secret:app-AbCdEf"] }`: "is not an exact Secrets Manager name",
 		`secrets_manager = { dev = ["` + strings.Repeat("a", 513) + `"] }`:                                "is not an exact Secrets Manager name",
 		`secrets_manager = { "dev team" = ["app/db"] }`:                                                   `profile "dev team" is not an AWS profile name`,
+		`secrets_manager = { "-dev" = ["app/db"] }`:                                                       `profile "-dev" is not an AWS profile name`,
+		`secrets_manager = { dev = ["-app"] }`:                                                            `secret name "-app" is not an exact Secrets Manager name`,
+		`secrets_manager = {}`:                                                                            "secrets_manager lists no profiles",
 	}
 	for body, fragment := range cases {
 		dir := t.TempDir()
@@ -140,25 +143,127 @@ func TestNoKitMayAllowASecretsManagerHostWhenSecretsAreListed(t *testing.T) {
 		"**",
 		"secretsmanager.*.amazonaws.com",
 		"*.secretsmanager.us-east-1.vpce.amazonaws.com",
-		"secretsmanager.us-east-?.amazonaws.com",
 		"{hosts: [secretsmanager.us-west-2.amazonaws.com], methods: [POST]}",
+		"*manager.us-east-1.amazonaws.com",
+		"*r.us-east-1.amazonaws.com",
+		"*-east-1.amazonaws.com",
+		"*-fips.us-gov-west-1.amazonaws.com",
+		"secretsmanager.us-*-1.amazonaws.com",
+		"secretsmanager.us-east-1.amazonaws.c*m",
+		"*1.vpce.amazonaws.com",
+		"secretsmanager.eusc-de-east-1.amazonaws.eu",
+		"eusc-de-east-1.amazonaws.eu",
+		"*.eusc-de-east-1.amazonaws.eu",
+		"us-isob-east-1.sc2s.sgov.gov",
 	}
-	for _, entry := range reaching {
-		for _, phase := range []string{"runtime", "install"} {
-			dir := t.TempDir()
-			path := book(t, dir, "org", "kits = [\"./kits/open\"]\n[aws.secrets_manager]\ndev = [\"app/db\"]\n")
-			testutil.WriteFile(t, filepath.Join(path, "kits", "open", "kit.yaml"), networkKit(phase, entry))
-			_, err := Compose(load(t, filepath.Join(dir, "home")), Selection{Books: []string{path}})
-			expectError(t, err, "reaches AWS Secrets Manager")
-			expectError(t, err, filepath.Join(path, "kits", "open"))
-		}
+	unreadable := []string{
+		"secretsmanager.us-east-?.amazonaws.com",
+		"https://secretsmanager.us-east-1.amazonaws.com",
+		"secretsmanager.us-east-1.amazonaws.com/",
+		"secretsmanager.us-east-1.amazonaws.com:https",
+		"",
+		"{hosts: []}",
 	}
-	for _, entry := range []string{"s3.us-east-1.amazonaws.com", "*.s3.amazonaws.com", "sts.amazonaws.com", "api.github.com", "*.example.com", "ssm.us-east-1.amazonaws.com"} {
+	compose := func(phase, entry string) error {
 		dir := t.TempDir()
 		path := book(t, dir, "org", "kits = [\"./kits/open\"]\n[aws.secrets_manager]\ndev = [\"app/db\"]\n")
-		testutil.WriteFile(t, filepath.Join(path, "kits", "open", "kit.yaml"), networkKit("runtime", entry))
-		if _, err := Compose(load(t, filepath.Join(dir, "home")), Selection{Books: []string{path}}); err != nil {
-			t.Errorf("%s: %v", entry, err)
+		testutil.WriteFile(t, filepath.Join(path, "kits", "open", "kit.yaml"), networkKit(phase, entry))
+		_, err := Compose(load(t, filepath.Join(dir, "home")), Selection{Books: []string{path}})
+		if err != nil && !strings.Contains(err.Error(), filepath.Join(path, "kits", "open")) {
+			t.Errorf("%s: the error does not name the kit: %v", entry, err)
+		}
+		return err
+	}
+	for _, phase := range []string{"runtime", "install"} {
+		for _, entry := range reaching {
+			if err := compose(phase, entry); err == nil || !strings.Contains(err.Error(), "which reaches AWS Secrets Manager") {
+				t.Errorf("%s %q: %v", phase, entry, err)
+			}
+		}
+		for _, entry := range unreadable {
+			if err := compose(phase, entry); err == nil || !strings.Contains(err.Error(), "which stage cannot read as a host") {
+				t.Errorf("%s %q: %v", phase, entry, err)
+			}
+		}
+		for _, entry := range []string{"s3.us-east-1.amazonaws.com", "*.s3.amazonaws.com", "sts.amazonaws.com", "api.github.com", "*.example.com", "ssm.us-east-1.amazonaws.com", "registry.npmjs.org:443", "10.0.0.1"} {
+			if err := compose(phase, entry); err != nil {
+				t.Errorf("%s %q: %v", phase, entry, err)
+			}
+		}
+	}
+}
+
+func TestAKitsNetworkPolicyMustBeAShapeStageCanReadWhenSecretsAreListed(t *testing.T) {
+	for fragment, config := range map[string]string{
+		"network-policy config key Runtime":           "Runtime:\n        allow: [api.github.com]",
+		"network-policy config key egress":            "egress:\n        allow: [api.github.com]",
+		"network-policy runtime must be a mapping":    "runtime: [api.github.com]",
+		"network-policy runtime key Allow":            "runtime:\n        Allow: [secretsmanager.us-east-1.amazonaws.com]",
+		"network-policy runtime allow must be a list": "runtime:\n        allow: secretsmanager.us-east-1.amazonaws.com",
+		"network-policy install allow must be a list": "install:\n        allow: {hosts: [x]}",
+	} {
+		dir := t.TempDir()
+		path := book(t, dir, "org", "kits = [\"./kits/open\"]\n[aws.secrets_manager]\ndev = [\"app/db\"]\n")
+		testutil.WriteFile(t, filepath.Join(path, "kits", "open", "kit.yaml"), "capabilities:\n  - type: com.docker.sandbox/network-policy@2\n    config:\n      "+config+"\n")
+		_, err := Compose(load(t, filepath.Join(dir, "home")), Selection{Books: []string{path}})
+		expectError(t, err, fragment)
+	}
+}
+
+func TestAUserKitStageCannotReadIsRefusedWhenSecretsAreListed(t *testing.T) {
+	for name, kit := range map[string]string{
+		"extends another kit": "extends: docker.io/acme/base:1\ncapabilities: []\n",
+		"is unreadable":       "capabilities: [\n",
+		"is not a directory":  "",
+	} {
+		dir := t.TempDir()
+		home := filepath.Join(dir, "home")
+		if kit != "" {
+			testutil.WriteFile(t, filepath.Join(home, "kits", "mine", "kit.yaml"), kit)
+		}
+		testutil.WriteFile(t, filepath.Join(home, "config.toml"), "kits = [\"./kits/mine\"]\n[aws.secrets_manager]\ndev = [\"app/db\"]\n")
+		_, err := Compose(load(t, home), Selection{})
+		expectError(t, err, name)
+		expectError(t, err, "stage reads every local kit to check that")
+	}
+}
+
+func TestEverySourceOfASecretMustListItUnderTheSameProfile(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	path := book(t, dir, "org", "[aws.secrets_manager]\ndev = [\"app/db\"]\n")
+	testutil.WriteFile(t, filepath.Join(home, "config.toml"), "[aws.secrets_manager]\nprod = [\"app/db\"]\n")
+	_, err := Compose(load(t, home), Selection{Books: []string{path}})
+	expectError(t, err, "config lists Secrets Manager secret app/db under profile prod, but book org listed it under dev")
+
+	own := book(t, dir, "own", `
+		[aws.secrets_manager]
+		dev = ["app/db"]
+		[[repos]]
+		match = "api"
+		aws = { secrets_manager = { prod = ["app/db"] } }
+	`)
+	_, err = Compose(load(t, filepath.Join(dir, "other-home")), Selection{Books: []string{own}, RepoNames: []string{"api"}})
+	expectError(t, err, "book own repo api lists Secrets Manager secret app/db under profile prod, but book own listed it under dev")
+}
+
+func TestManagedDeniedProfilesApplyToSecretsManagerProfiles(t *testing.T) {
+	managedFiles(t, "[aws]\ndenied_profiles = [\"*admin*\"]\n")
+	dir := t.TempDir()
+	path := book(t, dir, "org", "[aws.secrets_manager]\nvault-admin = [\"app/db\"]\n")
+	_, err := Compose(load(t, filepath.Join(dir, "home")), Selection{Books: []string{path}})
+	expectError(t, err, "AWS profile vault-admin is denied by")
+}
+
+func TestAProfileGrantedToTheSandboxAndListedForSecretsManagerIsWarnedAbout(t *testing.T) {
+	dir := t.TempDir()
+	path := book(t, dir, "org", "[aws]\nprofiles = [\"build\"]\n[aws.secrets_manager]\nbuild = [\"app/db\"]\nvault = [\"shared/key\"]\n")
+	composition := composeWith(t, load(t, filepath.Join(dir, "home")), Selection{Books: []string{path}, AWSProfile: "vault"})
+	for _, profile := range []string{"build", "vault"} {
+		want := "AWS profile " + profile + " is granted to the sandbox and also reads Secrets Manager secrets on your machine; " +
+			"its keys in the sandbox can read unlisted secrets through any open host that reads secrets for them"
+		if !contains(composition.Warnings, want) {
+			t.Errorf("warnings %q, want %q", composition.Warnings, want)
 		}
 	}
 }

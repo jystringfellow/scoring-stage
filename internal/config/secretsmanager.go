@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -10,9 +11,11 @@ import (
 )
 
 var (
-	awsProfileName         = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
-	secretsManagerName     = regexp.MustCompile(`^[A-Za-z0-9/_+=.@-]{1,512}$`)
-	awsRegionLabel         = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9]+$`)
+	awsProfileName         = regexp.MustCompile(`^[A-Za-z0-9_.][A-Za-z0-9_.-]*$`)
+	secretsManagerName     = regexp.MustCompile(`^[A-Za-z0-9/_+=.@][A-Za-z0-9/_+=.@-]{0,511}$`)
+	awsRegionLabel         = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*-[0-9]+$`)
+	hostPortSuffix         = regexp.MustCompile(`:[0-9]+$`)
+	hostPattern            = regexp.MustCompile(`^[a-z0-9.*-]+$`)
 	secretsManagerLabels   = []string{"secretsmanager", "secretsmanager-fips"}
 	awsPartitionSuffixes   = []string{"amazonaws.com", "amazonaws.com.cn", "api.aws", "api.amazonwebservices.com.cn", "amazonaws.eu", "c2s.ic.gov", "sc2s.sgov.gov", "cloud.adc-e.uk", "csp.hci.ic.gov"}
 	secretsManagerPatterns = secretsManagerHostPatterns()
@@ -40,6 +43,9 @@ func decodeSecretsManager(value any, where string) (map[string][]string, error) 
 	if !ok {
 		return nil, errorf("%s: secrets_manager must be a table of profile names to lists of secret names, such as build = [\"app/config\"]", where)
 	}
+	if len(table) == 0 {
+		return nil, errorf("%s: secrets_manager lists no profiles; name a profile and its secrets, or remove the table", where)
+	}
 	listed := map[string][]string{}
 	for _, profile := range sortedKeys(table) {
 		if !awsProfileName.MatchString(profile) {
@@ -55,7 +61,7 @@ func decodeSecretsManager(value any, where string) (map[string][]string, error) 
 		for _, name := range names {
 			if !secretsManagerName.MatchString(name) {
 				return nil, errorf("%s: secrets_manager.%s: secret name %q is not an exact Secrets Manager name "+
-					"(1 to 512 of A-Z a-z 0-9 / _ + = . @ -); stage takes exact names, not prefixes, wildcards or ARNs", where, profile, name)
+					"(1 to 512 of A-Z a-z 0-9 / _ + = . @ -, not starting with -); stage takes exact names, not prefixes, wildcards or ARNs", where, profile, name)
 			}
 		}
 		slices.Sort(names)
@@ -140,7 +146,10 @@ func (l secretsManagerListing) refuseKitsOpeningSecretsManager(kits []Kit, coreK
 			return errorf("%v; %s, and stage reads every local kit to check that", err, reason)
 		}
 		for _, host := range hosts {
-			if reachesSecretsManager(host) {
+			switch secretsManagerReach(host) {
+			case hostUnreadable:
+				return errorf("kit %s allows %q, which stage cannot read as a host. %s", kit.Source, Printable(host), reason)
+			case hostReachesSecretsManager:
 				return errorf("kit %s allows %s, which reaches AWS Secrets Manager. %s", kit.Source, Printable(host), reason)
 			}
 		}
@@ -155,16 +164,34 @@ func allowedHosts(dir string) ([]string, error) {
 	}
 	var hosts []string
 	for _, document := range documents {
+		where := fmt.Sprintf("kit %s (%s)", dir, document.file)
 		if document.spec.Extends != nil {
-			return nil, errorf("kit %s (%s) extends another kit, which stage cannot read", dir, document.file)
+			return nil, errorf("%s extends another kit, which stage cannot read", where)
 		}
 		for _, capability := range document.spec.Capabilities {
 			if capabilityName(capability.Type) != "network-policy" {
 				continue
 			}
-			for _, phase := range capability.Config {
-				rules, _ := phase.(map[string]any)
-				entries, _ := rules["allow"].([]any)
+			for _, phase := range slices.Sorted(maps.Keys(capability.Config)) {
+				if phase != "install" && phase != "runtime" {
+					return nil, errorf("%s: network-policy config key %s is not install or runtime", where, Printable(phase))
+				}
+				rules, ok := capability.Config[phase].(map[string]any)
+				if !ok {
+					return nil, errorf("%s: network-policy %s must be a mapping of allow and deny lists", where, phase)
+				}
+				for _, key := range slices.Sorted(maps.Keys(rules)) {
+					if key != "allow" && key != "deny" {
+						return nil, errorf("%s: network-policy %s key %s is not allow or deny", where, phase, Printable(key))
+					}
+				}
+				if rules["allow"] == nil {
+					continue
+				}
+				entries, ok := rules["allow"].([]any)
+				if !ok {
+					return nil, errorf("%s: network-policy %s allow must be a list", where, phase)
+				}
 				for _, entry := range entries {
 					hosts = append(hosts, entryHosts(entry)...)
 				}
@@ -192,29 +219,35 @@ func entryHosts(entry any) []string {
 	return []string{"?"}
 }
 
-func reachesSecretsManager(entry string) bool {
-	host := normalizeHost(entry)
-	if host == "" || hasDomainGlob(host) {
-		return true
+type hostReach int
+
+const (
+	hostClear hostReach = iota
+	hostReachesSecretsManager
+	hostUnreadable
+)
+
+func secretsManagerReach(entry string) hostReach {
+	host := strings.TrimSuffix(hostPortSuffix.ReplaceAllString(strings.ToLower(strings.TrimSpace(entry)), ""), ".")
+	if !hostPattern.MatchString(host) {
+		return hostUnreadable
 	}
+	partial := false
 	if star := strings.LastIndex(host, "*"); star >= 0 {
-		host = strings.TrimPrefix(host[star+1:], ".")
-		if host == "" {
-			return true
-		}
+		host, partial = host[star+1:], true
 	}
 	labels := strings.Split(host, ".")
 	for _, label := range labels {
-		if slices.Contains(secretsManagerLabels, label) {
-			return true
+		if strings.Contains(label, "secretsmanager") {
+			return hostReachesSecretsManager
 		}
 	}
 	for _, pattern := range secretsManagerPatterns {
-		if endsLike(labels, pattern) {
-			return true
+		if endsLike(labels, pattern, partial) {
+			return hostReachesSecretsManager
 		}
 	}
-	return false
+	return hostClear
 }
 
 func secretsManagerDetails(byProfile map[string][]string, where string) []string {
@@ -230,13 +263,20 @@ func secretsManagerDetails(byProfile map[string][]string, where string) []string
 	return details
 }
 
-func endsLike(labels, pattern []string) bool {
+func endsLike(labels, pattern []string, firstIsPartial bool) bool {
 	if len(labels) > len(pattern) {
 		return false
 	}
 	offset := len(pattern) - len(labels)
 	for i, label := range labels {
-		switch want := pattern[offset+i]; want {
+		want := pattern[offset+i]
+		if i == 0 && firstIsPartial {
+			if want != anyRegion && want != anyLabel && !strings.HasSuffix(want, label) {
+				return false
+			}
+			continue
+		}
+		switch want {
 		case anyRegion:
 			if !awsRegionLabel.MatchString(label) {
 				return false

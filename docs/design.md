@@ -13,7 +13,7 @@ the host, compute a secret, or choose which sandbox gets which grant. Those are 
 | Secret values (`gh auth token`, a token file, a feed password) | `stage`, as per-sandbox `secrets` with a host `command` |
 | Credential authorisation per service (kits decide the hosts) | `stage`, as `bindings` |
 | AWS credentials | `stage`'s host broker, plus the `aws-broker` kit |
-| Which AWS Secrets Manager secrets a sandbox may read (`[aws.secrets_manager]`, by exact name) | `stage`: the config, the refusal of kits and global rules that open Secrets Manager, and the broker that reads the listed secrets on the host; sbx's proxy sees only TLS to AWS, so it cannot tell one secret from another |
+| Which AWS Secrets Manager secrets a sandbox may read (`[aws.secrets_manager]`, by exact name) | `stage`: the config, and the refusal of kits and global rules that open Secrets Manager; sbx's proxy sees only TLS to AWS, so it cannot tell one secret from another |
 | Scratch clone, `ship`, cleanup | `stage` |
 | sbx version floor and the global deny-all check | `stage` |
 | GitHub access for the sandbox (`[github] mode`: a fine-grained token per owner, a GitHub App token refreshed on the host, the gh login, or none) | `stage`, as the `github` secret from a host command; sbx cannot pick a token per owner or refresh one |
@@ -113,9 +113,9 @@ broker serves only temporary credentials (an `ASIA` key with a `SessionToken`) t
 so an IAM user's long-lived keys never reach a sandbox through the broker. Those temporary keys do enter the
 sandbox, and stay usable until they expire; signing requests at the proxy instead would keep them out.
 
-A secret listed in `[aws.secrets_manager]` is meant to be read only through the broker, on the host, with the
-profile it is listed under. So when anything lists one, Compose refuses every local kit whose allow rules reach a
-Secrets Manager host, and `stage up` refuses global allow rules.
+When anything lists a secret in `[aws.secrets_manager]`, nothing in the sandbox may reach Secrets Manager itself.
+Compose refuses every local kit whose allow rules could match a Secrets Manager host, or that it cannot read, and
+`stage up` refuses global allow rules. The broker does not serve the listed secrets yet.
 
 ## Verified on sbx
 
