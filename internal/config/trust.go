@@ -306,6 +306,7 @@ func summarizeBook(agents Agents, book Book) []string {
 	if len(book.aws.profiles) > 0 {
 		details = append(details, "AWS profiles: "+strings.Join(book.aws.profiles, " "))
 	}
+	details = append(details, secretsManagerDetails(book.aws.secretsManager, "")...)
 	for _, service := range sortedKeys(book.secrets) {
 		if table, ok := book.secrets[service].(map[string]any); ok {
 			if command, ok := table["command"].(string); ok {
@@ -347,6 +348,7 @@ func summarizeBook(agents Agents, book Book) []string {
 		for _, entry := range r.agents {
 			agentLine(entry, "repos matching "+strings.Join(r.patterns, ", ")+": ")
 		}
+		details = append(details, secretsManagerDetails(r.aws.secretsManager, "repos matching "+strings.Join(r.patterns, ", ")+": ")...)
 	}
 	for i, detail := range details {
 		details[i] = Printable(detail)
