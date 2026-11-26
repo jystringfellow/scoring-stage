@@ -2,7 +2,9 @@ package config
 
 import (
 	"fmt"
+	"io/fs"
 	"maps"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -11,13 +13,22 @@ import (
 )
 
 var (
-	awsProfileName         = regexp.MustCompile(`^[A-Za-z0-9_.][A-Za-z0-9_.-]*$`)
-	secretsManagerName     = regexp.MustCompile(`^[A-Za-z0-9/_+=.@][A-Za-z0-9/_+=.@-]{0,511}$`)
-	awsRegionLabel         = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*-[0-9]+$`)
-	hostPortSuffix         = regexp.MustCompile(`:[0-9]+$`)
-	hostPattern            = regexp.MustCompile(`^[a-z0-9.*-]+$`)
-	secretsManagerLabels   = []string{"secretsmanager", "secretsmanager-fips"}
-	awsPartitionSuffixes   = []string{"amazonaws.com", "amazonaws.com.cn", "api.aws", "api.amazonwebservices.com.cn", "amazonaws.eu", "c2s.ic.gov", "sc2s.sgov.gov", "cloud.adc-e.uk", "csp.hci.ic.gov"}
+	awsProfileName       = regexp.MustCompile(`^[A-Za-z0-9_.][A-Za-z0-9_.-]*$`)
+	secretsManagerName   = regexp.MustCompile(`^[A-Za-z0-9/_+=.@][A-Za-z0-9/_+=.@-]{0,511}$`)
+	awsRegionLabel       = regexp.MustCompile(`^[a-z]{2,4}(-[a-z]+)*-[a-z]+-[0-9]+$`)
+	numericLabel         = regexp.MustCompile(`^[0-9]+$`)
+	hostPortSuffix       = regexp.MustCompile(`:[0-9]+$`)
+	hostPattern          = regexp.MustCompile(`^[a-z0-9.*-]+$`)
+	secretsManagerLabels = []string{"secretsmanager", "secretsmanager-fips"}
+	awsPartitionSuffixes = []string{
+		"amazonaws.com", "api.aws",
+		"amazonaws.com.cn", "api.amazonwebservices.com.cn",
+		"amazonaws.eu", "api.amazonwebservices.eu",
+		"c2s.ic.gov", "api.aws.ic.gov",
+		"sc2s.sgov.gov", "api.aws.scloud",
+		"cloud.adc-e.uk", "api.cloud-aws.adc-e.uk",
+		"csp.hci.ic.gov", "api.aws.hci.ic.gov",
+	}
 	secretsManagerPatterns = secretsManagerHostPatterns()
 )
 
@@ -135,7 +146,7 @@ func (l secretsManagerListing) refuseKitsOpeningSecretsManager(kits []Kit, coreK
 	if len(l) == 0 {
 		return nil
 	}
-	reason := fmt.Sprintf("%s list Secrets Manager secrets, which the sandbox reads only through the stage broker, so no kit may open Secrets Manager itself",
+	reason := fmt.Sprintf("%s list Secrets Manager secrets, so no kit may open Secrets Manager itself",
 		strings.Join(l.owners(), ", "))
 	for _, kit := range kits {
 		if !kit.IsLocal() || filepath.Dir(kit.Source) == coreKits {
@@ -148,7 +159,7 @@ func (l secretsManagerListing) refuseKitsOpeningSecretsManager(kits []Kit, coreK
 		for _, host := range hosts {
 			switch secretsManagerReach(host) {
 			case hostUnreadable:
-				return errorf("kit %s allows %q, which stage cannot read as a host. %s", kit.Source, Printable(host), reason)
+				return errorf("kit %s allows \"%s\", which stage cannot read as a host. %s", kit.Source, Printable(host), reason)
 			case hostReachesSecretsManager:
 				return errorf("kit %s allows %s, which reaches AWS Secrets Manager. %s", kit.Source, Printable(host), reason)
 			}
@@ -162,6 +173,9 @@ func allowedHosts(dir string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := refuseOtherDescriptors(dir); err != nil {
+		return nil, err
+	}
 	var hosts []string
 	for _, document := range documents {
 		where := fmt.Sprintf("kit %s (%s)", dir, document.file)
@@ -169,7 +183,11 @@ func allowedHosts(dir string) ([]string, error) {
 			return nil, errorf("%s extends another kit, which stage cannot read", where)
 		}
 		for _, capability := range document.spec.Capabilities {
-			if capabilityName(capability.Type) != "network-policy" {
+			switch capabilityName(capability.Type) {
+			case "":
+				return nil, errorf("%s: unrecognised capability type %q", where, Printable(capability.Type))
+			case "network-policy":
+			default:
 				continue
 			}
 			for _, phase := range slices.Sorted(maps.Keys(capability.Config)) {
@@ -193,7 +211,11 @@ func allowedHosts(dir string) ([]string, error) {
 					return nil, errorf("%s: network-policy %s allow must be a list", where, phase)
 				}
 				for _, entry := range entries {
-					hosts = append(hosts, entryHosts(entry)...)
+					named, err := entryHosts(entry)
+					if err != nil {
+						return nil, errorf("%s: network-policy %s allow %v", where, phase, err)
+					}
+					hosts = append(hosts, named...)
 				}
 			}
 		}
@@ -201,22 +223,62 @@ func allowedHosts(dir string) ([]string, error) {
 	return hosts, nil
 }
 
-func entryHosts(entry any) []string {
+var allowEntryKeys = []string{"hosts", "methods", "paths"}
+
+func entryHosts(entry any) ([]string, error) {
 	switch typed := entry.(type) {
 	case string:
-		return []string{typed}
+		return []string{typed}, nil
 	case map[string]any:
-		names, _ := typed["hosts"].([]any)
+		for _, key := range slices.Sorted(maps.Keys(typed)) {
+			if !slices.Contains(allowEntryKeys, key) {
+				return nil, errorf("entry key %s is not hosts, methods or paths", Printable(key))
+			}
+		}
+		names, ok := typed["hosts"].([]any)
+		if !ok && typed["hosts"] != nil {
+			return nil, errorf("entry hosts must be a list of strings")
+		}
 		if len(names) == 0 {
-			return []string{"?"}
+			return []string{"?"}, nil
 		}
 		hosts := make([]string, len(names))
 		for i, name := range names {
-			hosts[i] = fmt.Sprint(name)
+			host, ok := name.(string)
+			if !ok {
+				return nil, errorf("entry hosts must be a list of strings")
+			}
+			hosts[i] = host
 		}
-		return hosts
+		return hosts, nil
 	}
-	return []string{"?"}
+	return nil, errorf("entries must be hosts or mappings")
+}
+
+func refuseOtherDescriptors(dir string) error {
+	return filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() && path == filepath.Join(dir, "files") {
+			return filepath.SkipDir
+		}
+		if !entry.Type().IsRegular() || contains(kitFileExtensions, strings.ToLower(filepath.Ext(path))) {
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, line := range strings.Split(string(content), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "# kit:" || strings.HasPrefix(line, "# syntax=docker/sandbox-kit") {
+				relative, _ := filepath.Rel(dir, path)
+				return errorf("kit %s: %s carries a kit descriptor, which stage does not read", dir, relative)
+			}
+		}
+		return nil
+	})
 }
 
 type hostReach int
@@ -229,7 +291,10 @@ const (
 
 func secretsManagerReach(entry string) hostReach {
 	host := strings.TrimSuffix(hostPortSuffix.ReplaceAllString(strings.ToLower(strings.TrimSpace(entry)), ""), ".")
-	if !hostPattern.MatchString(host) {
+	if !hostPattern.MatchString(host) || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") || strings.Contains(host, "..") {
+		return hostUnreadable
+	}
+	if !strings.Contains(host, "*") && !slices.ContainsFunc(strings.Split(host, "."), func(label string) bool { return !numericLabel.MatchString(label) }) {
 		return hostUnreadable
 	}
 	partial := false
@@ -258,7 +323,7 @@ func secretsManagerDetails(byProfile map[string][]string, where string) []string
 	sort.Strings(profiles)
 	details := make([]string, 0, len(profiles))
 	for _, profile := range profiles {
-		details = append(details, fmt.Sprintf("%sAWS Secrets Manager secrets read on your machine with profile %s: %s", where, profile, strings.Join(byProfile[profile], ", ")))
+		details = append(details, fmt.Sprintf("%sAWS Secrets Manager secrets listed for profile %s: %s", where, profile, strings.Join(byProfile[profile], ", ")))
 	}
 	return details
 }

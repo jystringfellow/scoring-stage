@@ -156,6 +156,12 @@ func TestNoKitMayAllowASecretsManagerHostWhenSecretsAreListed(t *testing.T) {
 		"eusc-de-east-1.amazonaws.eu",
 		"*.eusc-de-east-1.amazonaws.eu",
 		"us-isob-east-1.sc2s.sgov.gov",
+		"*.api.amazonwebservices.eu",
+		"*.api.aws.ic.gov",
+		"*.api.aws.scloud",
+		"*.api.cloud-aws.adc-e.uk",
+		"*.api.aws.hci.ic.gov",
+		"secretsmanager.us-isof-south-1.api.aws.hci.ic.gov",
 	}
 	unreadable := []string{
 		"secretsmanager.us-east-?.amazonaws.com",
@@ -164,6 +170,12 @@ func TestNoKitMayAllowASecretsManagerHostWhenSecretsAreListed(t *testing.T) {
 		"secretsmanager.us-east-1.amazonaws.com:https",
 		"",
 		"{hosts: []}",
+		".amazonaws.com",
+		".us-east-1.amazonaws.com",
+		"*.amazonaws.com..",
+		"secretsmanager..us-east-1.amazonaws.com",
+		"10.0.0.1",
+		"52.94.0.1:443",
 	}
 	compose := func(phase, entry string) error {
 		dir := t.TempDir()
@@ -186,7 +198,7 @@ func TestNoKitMayAllowASecretsManagerHostWhenSecretsAreListed(t *testing.T) {
 				t.Errorf("%s %q: %v", phase, entry, err)
 			}
 		}
-		for _, entry := range []string{"s3.us-east-1.amazonaws.com", "*.s3.amazonaws.com", "sts.amazonaws.com", "api.github.com", "*.example.com", "ssm.us-east-1.amazonaws.com", "registry.npmjs.org:443", "10.0.0.1"} {
+		for _, entry := range []string{"s3.us-east-1.amazonaws.com", "*.s3.amazonaws.com", "sts.amazonaws.com", "api.github.com", "*.example.com", "ssm.us-east-1.amazonaws.com", "registry.npmjs.org:443", "s3-us-west-2.amazonaws.com", "s3-external-1.amazonaws.com", "*.s3-us-west-2.amazonaws.com", "*.compute-1.amazonaws.com", "ec2.us-east-1.api.aws"} {
 			if err := compose(phase, entry); err != nil {
 				t.Errorf("%s %q: %v", phase, entry, err)
 			}
@@ -196,12 +208,16 @@ func TestNoKitMayAllowASecretsManagerHostWhenSecretsAreListed(t *testing.T) {
 
 func TestAKitsNetworkPolicyMustBeAShapeStageCanReadWhenSecretsAreListed(t *testing.T) {
 	for fragment, config := range map[string]string{
-		"network-policy config key Runtime":           "Runtime:\n        allow: [api.github.com]",
-		"network-policy config key egress":            "egress:\n        allow: [api.github.com]",
-		"network-policy runtime must be a mapping":    "runtime: [api.github.com]",
-		"network-policy runtime key Allow":            "runtime:\n        Allow: [secretsmanager.us-east-1.amazonaws.com]",
-		"network-policy runtime allow must be a list": "runtime:\n        allow: secretsmanager.us-east-1.amazonaws.com",
-		"network-policy install allow must be a list": "install:\n        allow: {hosts: [x]}",
+		"network-policy config key Runtime":                                           "Runtime:\n        allow: [api.github.com]",
+		"network-policy config key egress":                                            "egress:\n        allow: [api.github.com]",
+		"network-policy runtime must be a mapping":                                    "runtime: [api.github.com]",
+		"network-policy runtime key Allow":                                            "runtime:\n        Allow: [secretsmanager.us-east-1.amazonaws.com]",
+		"network-policy runtime allow must be a list":                                 "runtime:\n        allow: secretsmanager.us-east-1.amazonaws.com",
+		"network-policy install allow must be a list":                                 "install:\n        allow: {hosts: [x]}",
+		"network-policy runtime allow entry key Hosts is not hosts, methods or paths": "runtime:\n        allow:\n          - {hosts: [github.com], Hosts: [secretsmanager.us-east-1.amazonaws.com]}",
+		"network-policy runtime allow entry key host is not hosts, methods or paths":  "runtime:\n        allow:\n          - {hosts: [github.com], host: secretsmanager.us-east-1.amazonaws.com}",
+		"network-policy runtime allow entry hosts must be a list of strings":          "runtime:\n        allow:\n          - {hosts: secretsmanager.us-east-1.amazonaws.com}",
+		"network-policy runtime allow entries must be hosts or mappings":              "runtime:\n        allow:\n          - [secretsmanager.us-east-1.amazonaws.com]",
 	} {
 		dir := t.TempDir()
 		path := book(t, dir, "org", "kits = [\"./kits/open\"]\n[aws.secrets_manager]\ndev = [\"app/db\"]\n")
@@ -216,11 +232,18 @@ func TestAUserKitStageCannotReadIsRefusedWhenSecretsAreListed(t *testing.T) {
 		"extends another kit": "extends: docker.io/acme/base:1\ncapabilities: []\n",
 		"is unreadable":       "capabilities: [\n",
 		"is not a directory":  "",
+		"unrecognised capability type \"com.docker.sandbox/egress@9\"":       "capabilities:\n  - type: com.docker.sandbox/egress@9\n    config: {allow: [secretsmanager.us-east-1.amazonaws.com]}\n",
+		"unrecognised capability type \"\"":                                  "capabilities:\n  - config: {runtime: {allow: [secretsmanager.us-east-1.amazonaws.com]}}\n",
+		"kit.dockerfile carries a kit descriptor, which stage does not read": "capabilities: []\n",
 	} {
 		dir := t.TempDir()
 		home := filepath.Join(dir, "home")
 		if kit != "" {
 			testutil.WriteFile(t, filepath.Join(home, "kits", "mine", "kit.yaml"), kit)
+		}
+		if strings.HasPrefix(name, "kit.dockerfile") {
+			testutil.WriteFile(t, filepath.Join(home, "kits", "mine", "kit.dockerfile"),
+				"# syntax=docker/sandbox-kit:3\n# kit:\n#   schemaVersion: \"3\"\n#   kind: mixin\nFROM scratch\n")
 		}
 		testutil.WriteFile(t, filepath.Join(home, "config.toml"), "kits = [\"./kits/mine\"]\n[aws.secrets_manager]\ndev = [\"app/db\"]\n")
 		_, err := Compose(load(t, home), Selection{})
@@ -261,7 +284,7 @@ func TestAProfileGrantedToTheSandboxAndListedForSecretsManagerIsWarnedAbout(t *t
 	path := book(t, dir, "org", "[aws]\nprofiles = [\"build\"]\n[aws.secrets_manager]\nbuild = [\"app/db\"]\nvault = [\"shared/key\"]\n")
 	composition := composeWith(t, load(t, filepath.Join(dir, "home")), Selection{Books: []string{path}, AWSProfile: "vault"})
 	for _, profile := range []string{"build", "vault"} {
-		want := "AWS profile " + profile + " is granted to the sandbox and also reads Secrets Manager secrets on your machine; " +
+		want := "AWS profile " + profile + " is granted to the sandbox and also listed for Secrets Manager secrets; " +
 			"its keys in the sandbox can read unlisted secrets through any open host that reads secrets for them"
 		if !contains(composition.Warnings, want) {
 			t.Errorf("warnings %q, want %q", composition.Warnings, want)
@@ -310,8 +333,8 @@ func TestABooksApprovalNamesTheSecretsManagerSecretsItListsAndTheProfileThatRead
 	}
 	details := summarizeBook(BuiltinAgents(), *loaded)
 	for _, want := range []string{
-		"AWS Secrets Manager secrets read on your machine with profile build: app/config, app/db",
-		"repos matching api: AWS Secrets Manager secrets read on your machine with profile vault: api/key",
+		"AWS Secrets Manager secrets listed for profile build: app/config, app/db",
+		"repos matching api: AWS Secrets Manager secrets listed for profile vault: api/key",
 	} {
 		if !contains(details, want) {
 			t.Errorf("details %q, want %q", details, want)

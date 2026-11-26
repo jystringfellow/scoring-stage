@@ -1314,8 +1314,8 @@ is granted and nothing names one, so the `aws` CLI and SDKs work without `AWS_PR
 the granted profiles; set `default_profile` in your `[aws]` table to choose another. `stage up --aws-profile NAME`
 grants a profile from your host AWS config to that one sandbox and makes it the default, over books and your config.
 
-`[aws.secrets_manager]` lists the AWS Secrets Manager secrets a sandbox may read, by exact name, under the host
-profile that reads them: `build = ["app/config", "app/db"]`.
+`[aws.secrets_manager]` lists the AWS Secrets Manager secrets a sandbox may read, by exact name, each under a host
+profile: `build = ["app/config", "app/db"]`.
 - **Exact names only.** Prefixes, wildcards and ARNs are refused, so the approval of a book names every secret it
   lists, and a secret created later is not included. A name may hold 1 to 512 of `A-Z a-z 0-9 / _ + = . @ -`, and
   neither a name nor a profile may start with `-`. An empty table is an error.
@@ -1325,11 +1325,14 @@ profile that reads them: `build = ["app/config", "app/db"]`.
 - **Who may list secrets.** Your config, a book and a book's `[[repos]]` entry; a repository's own config cannot.
   A book's approval prompt lists each secret with its profile.
 - **Secrets Manager stays closed.** When any of them lists a secret, `stage up` refuses a local kit that allows a
-  Secrets Manager host or a pattern that could match one. That covers `*.amazonaws.com`, `*.api.aws`, `*`, and a
-  `*` inside a label, such as `*-east-1.amazonaws.com`. It also refuses:
-  - an entry it cannot read as a host, such as a URL;
-  - a network policy whose shape it cannot read exactly;
-  - a local kit that `extends` another;
+  Secrets Manager host or a pattern that could match one, for every AWS partition's DNS and dual-stack suffix (as
+  the AWS SDK for Go lists them). That covers `*.amazonaws.com`, `*.api.aws`, `*`, and a `*` inside a label, such as
+  `*-east-1.amazonaws.com`. It also refuses:
+  - an entry it cannot read as a host: a URL, an IP address, an empty label or a leading dot;
+  - a network policy whose shape it cannot read exactly, down to the keys of each allow entry;
+  - a capability type it does not know;
+  - a local kit that `extends` another, or that carries a kit descriptor in a file other than YAML or JSON, such as
+    a Dockerfile with a `# kit:` block;
   - a global sbx allow rule, even with `--allow-global-policy`.
   Published kits, such as the agents' mixins, cannot be read, so they are not checked.
 - **Not served yet.** In this version the broker serves AWS credentials only, so a listed secret cannot be read from
