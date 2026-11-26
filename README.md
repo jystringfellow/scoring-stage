@@ -1011,6 +1011,9 @@ profiles = ["dev", "staging"]
 region = "us-west-2"
 default_profile = "dev"                                   # also written as [default]; must be granted
 
+[aws.secrets_manager]
+dev = ["app/config"]                                      # exact Secrets Manager names, read on your machine with that profile
+
 [secrets.artifacts]
 command = "python3 -I {book}/host/feed-token.py"          # {book} is the book directory
 
@@ -1302,13 +1305,28 @@ another book's name, and two books with the same name are an error wherever they
   Managed settings' `repo_kits = "deny"` refuses references a repository names.
 
 Books and both configs are decoded strictly: an unknown key is an error. Two books that set the same
-region, AWS default profile, secret or binding differently are an error rather than a silent winner. Your config
-overrides books.
+region, AWS default profile, secret or binding differently, or list one Secrets Manager secret under two profiles,
+are an error rather than a silent winner. Your config overrides books.
 
 The sandbox's `~/.aws/config` has a `[default]` profile when a default profile is set, or when exactly one profile
 is granted and nothing names one, so the `aws` CLI and SDKs work without `AWS_PROFILE`. The default must be one of
 the granted profiles; set `default_profile` in your `[aws]` table to choose another. `stage up --aws-profile NAME`
 grants a profile from your host AWS config to that one sandbox and makes it the default, over books and your config.
+
+`[aws.secrets_manager]` lists the AWS Secrets Manager secrets a sandbox may read, by exact name, under the host
+profile that reads them: `build = ["app/config", "app/db"]`.
+- **Exact names only.** Prefixes, wildcards and ARNs are refused, so the approval of a book names every secret it
+  lists, and a secret created later is not included. A name may hold 1 to 512 of `A-Z a-z 0-9 / _ + = . @ -`.
+- **Profiles.** A profile named only here is not granted to the sandbox, and its credentials stay on your machine.
+  Managed `allowed_profiles` and `denied_profiles` apply to it as to a granted profile.
+- **Who may list secrets.** Your config, a book and a book's `[[repos]]` entry; a repository's own config cannot.
+  A book's approval prompt lists each secret with its profile.
+- **Secrets Manager stays closed.** When any of them lists a secret, `stage up` refuses a local kit that allows a
+  Secrets Manager host or a pattern that covers one, such as `*.amazonaws.com`, `*.api.aws` or `*`. It also refuses
+  a global sbx allow rule, even with `--allow-global-policy`. Published kits, such as the agents' mixins, cannot be
+  read, so they are not checked.
+- **Not served yet.** In this version the broker serves AWS credentials only, so a listed secret cannot be read from
+  inside the sandbox.
 
 A kit that a book adds for its own service declares a `credential@1` entry for that service and names the hosts it is
 injected on; the book's `secrets` entry supplies the value for each sandbox, and its `bindings` entry authorises the
@@ -1590,6 +1608,12 @@ and what has not been run live yet.
   refreshed while the sandbox lives. The copy has run only against fakes.
 - AWS keys from the broker enter the sandbox and stay usable until they expire, up to about 12 hours, even after
   `stage down`.
+- `[aws.secrets_manager]` limits what the sandbox reads through Secrets Manager, not what a profile can read. A
+  profile also listed in `profiles` puts its keys in the sandbox, and any open host that reads secrets for those
+  keys reaches unlisted ones; Systems Manager's `GetParameter` on `/aws/reference/secretsmanager/<name>` is one.
+  The list is a boundary only when no open host can read secrets for the sandbox's keys. A profile named only in
+  `[aws.secrets_manager]` gives the sandbox no keys. stage checks local kits only, so a published kit that opens
+  Secrets Manager is not refused.
 - Bindings are shared by every sandbox. One written for a sandbox stays after `stage down` and approves that service
   for all sandboxes; a sandbox gets a value only from its own secret or a global sbx secret. `stage up` refuses a
   global `github` secret, and stops on any other global secret unless `--allow-global-secrets` is passed.

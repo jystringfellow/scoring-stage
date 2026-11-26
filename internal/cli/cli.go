@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
@@ -576,11 +577,13 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	if *allowGlobal && !settings.Managed.AllowsGlobalPolicy() {
 		return 0, errorf("--allow-global-policy is refused by the managed settings (%s)", strings.Join(settings.Managed.Paths, ", "))
 	}
+	var globalAllows []string
 	if !*plan {
 		allows, err := sbx.GlobalAllows()
 		if err != nil {
 			return 0, err
 		}
+		globalAllows = allows
 		if len(allows) > 0 && !*allowGlobal {
 			return 0, errorf("the global sbx policy is not deny-all; run stage setup (or pass --allow-global-policy)")
 		}
@@ -638,6 +641,13 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 		return 0, err
 	}
 	config.AddStageBindings(auditExpected, composition.Bindings, "this sandbox")
+	if len(composition.AWSSecretsManager) > 0 && len(globalAllows) > 0 {
+		return 0, errorf("[aws.secrets_manager] lists secrets the sandbox reads only through the stage broker, so the global sbx policy must be deny-all: " +
+			"a global allow rule could open Secrets Manager. Run stage setup, or remove the list")
+	}
+	for _, profile := range slices.Sorted(maps.Keys(composition.AWSSecretsManager)) {
+		a.say("aws secrets manager (read on your machine with profile %s): %s", profile, strings.Join(composition.AWSSecretsManager[profile], ", "))
+	}
 	if err := a.checkApprovals(settings.Home, composition, github, *approveRepoConfig, *plan); err != nil {
 		return 0, err
 	}

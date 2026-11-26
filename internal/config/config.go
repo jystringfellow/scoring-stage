@@ -42,7 +42,7 @@ var (
 	userKeys      = []string{"books", "base", "agents", "agent", "copy_logins", "github", "kits", "aws", "secrets", "bindings", "ship", "takes", "gear", "hall"}
 	bookKeys      = []string{"name", "description", "base", "agents", "kits", "aws", "secrets", "bindings", "repos", "takes", "includes"}
 	repoMatchKeys = []string{"match", "agents", "kits", "aws"}
-	awsKeys       = []string{"profiles", "region", "default_profile"}
+	awsKeys       = []string{"profiles", "region", "default_profile", "secrets_manager"}
 	shipKeys      = []string{"branch_prefix", "warn_missing_trailer", "pr_body", "pr_footer", "protected_paths"}
 )
 
@@ -78,6 +78,7 @@ type Composition struct {
 	AWSProfiles       []string
 	AWSRegion         string
 	AWSDefaultProfile string
+	AWSSecretsManager map[string][]string
 	Secrets           map[string]any
 	Bindings          map[string]any
 	Books             []string
@@ -100,6 +101,7 @@ type aws struct {
 	region         string
 	hasRegion      bool
 	defaultProfile string
+	secretsManager map[string][]string
 }
 
 type repo struct {
@@ -602,6 +604,7 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 	bindings := map[string]any{}
 	secretOwner := map[string]string{}
 	bindingOwner := map[string]string{}
+	listed := secretsManagerListing{}
 
 	addProfiles := func(names []string) {
 		for _, name := range names {
@@ -612,6 +615,9 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 	}
 	addAWS := func(a aws, owner string) error {
 		addProfiles(a.profiles)
+		if err := listed.add(a.secretsManager, owner); err != nil {
+			return err
+		}
 		if a.hasRegion {
 			if regionOwner != "" && a.region != region {
 				return errorf("%s sets AWS region %s, but %s set %s", owner, a.region, regionOwner, region)
@@ -750,6 +756,9 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 		base = &candidate
 	}
 	addProfiles(settings.aws.profiles)
+	if err := listed.add(settings.aws.secretsManager, "config"); err != nil {
+		return nil, err
+	}
 	if settings.aws.hasRegion {
 		region = settings.aws.region
 	}
@@ -766,7 +775,7 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 	if defaultProfile == "" && len(profiles) == 1 {
 		defaultProfile = profiles[0]
 	}
-	for _, profile := range profiles {
+	for _, profile := range append(append([]string{}, profiles...), listed.profiles()...) {
 		if err := settings.Managed.CheckAWSProfile(profile); err != nil {
 			return nil, err
 		}
@@ -852,6 +861,7 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 		AWSProfiles:       profiles,
 		AWSRegion:         region,
 		AWSDefaultProfile: defaultProfile,
+		AWSSecretsManager: listed.byProfile(),
 		Secrets:           secrets,
 		Bindings:          bindings,
 		RepoKits:          repoKits,
@@ -899,6 +909,9 @@ func Compose(settings *Settings, selection Selection) (*Composition, error) {
 		if book.Ref != "" {
 			composition.FetchedBooks = append(composition.FetchedBooks, book)
 		}
+	}
+	if err := listed.refuseKitsOpeningSecretsManager(composition.AllKits(), settings.CoreKits()); err != nil {
+		return nil, err
 	}
 	for _, kit := range composition.AllKits() {
 		if kit.IsLocal() {
@@ -1168,6 +1181,13 @@ func decodeAWS(value any, where string) (aws, error) {
 			return result, errorf("%s: default_profile must be a string", where)
 		}
 		result.defaultProfile = profile
+	}
+	if value, present := table["secrets_manager"]; present {
+		listed, err := decodeSecretsManager(value, where)
+		if err != nil {
+			return result, err
+		}
+		result.secretsManager = listed
 	}
 	return result, nil
 }
