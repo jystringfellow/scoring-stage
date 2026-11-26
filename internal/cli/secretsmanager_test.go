@@ -68,3 +68,17 @@ func TestUpRefusesARunningBrokerThatDoesNotServeSecretsManager(t *testing.T) {
 		t.Errorf("a running broker was started again: %v", h.brokerStarts)
 	}
 }
+
+func TestUpRemovesAStaleBrokerGrantWhenTheSandboxNeedsNone(t *testing.T) {
+	h := setup(t)
+	grants := filepath.Join(h.home, "broker", "grants")
+	for _, name := range []string{"fix.token", "fix.profiles", "fix.secrets"} {
+		testutil.WriteFile(t, filepath.Join(grants, name), "stale\n")
+	}
+	h.expect(0, "up", h.remote.Checkout, "fix")
+	for _, name := range []string{"fix.token", "fix.profiles", "fix.secrets"} {
+		if _, err := os.Stat(filepath.Join(grants, name)); !os.IsNotExist(err) {
+			t.Errorf("%s survived: %v", name, err)
+		}
+	}
+}

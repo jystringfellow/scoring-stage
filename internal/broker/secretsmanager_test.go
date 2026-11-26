@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,8 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -359,6 +362,12 @@ func TestAWSErrorsComeBackAsTheirTypeWithAWSsMessageOnlyInTheHostLog(t *testing.
 	if code != 500 || decoded["__type"] != "InternalServiceError" {
 		t.Errorf("an unreadable type: %d %v", code, decoded)
 	}
+	b.aws.answer = func(string, map[string]any) (int, any) {
+		return 400, map[string]any{"__type": strings.Repeat("A", 200)}
+	}
+	if _, decoded, _ = b.send("GetSecretValue", map[string]any{"SecretId": "app/db"}); decoded["__type"] != "InternalServiceError" {
+		t.Errorf("an overlong type: %v", decoded["__type"])
+	}
 }
 
 func TestBatchErrorsFromAWSNameTheClientsIdAndKeepAWSsMessageOnTheHost(t *testing.T) {
@@ -461,10 +470,10 @@ func TestASlowHostLoginForOneProfileDoesNotHoldUpAnother(t *testing.T) {
 	slow := slowCredentials{make(chan struct{})}
 	defer close(slow.release)
 	api := NewSecretsManager(slow)
-	go api.key("build")
+	go api.key(context.Background(), "build")
 	time.Sleep(50 * time.Millisecond)
 	done := make(chan struct{})
-	go func() { api.key("vault"); close(done) }()
+	go func() { api.key(context.Background(), "vault"); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
@@ -755,4 +764,76 @@ func readFile(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(content)
+}
+
+type failingLogin struct{ exports *atomic.Int32 }
+
+func (f failingLogin) CredentialProcess(profile string, granted map[string]bool) (json.RawMessage, error) {
+	f.exports.Add(1)
+	time.Sleep(100 * time.Millisecond)
+	return nil, &Error{http.StatusServiceUnavailable, profile + ": Token has expired; refresh the profile's login on the host"}
+}
+
+func TestCallsWaitingOnAFailedLoginShareItsFailure(t *testing.T) {
+	var exports atomic.Int32
+	api := NewSecretsManager(failingLogin{&exports})
+	var wait sync.WaitGroup
+	for range 6 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			if _, err := api.key(context.Background(), "build"); err == nil {
+				t.Error("a failed login gave a key")
+			}
+		}()
+	}
+	wait.Wait()
+	if got := exports.Load(); got != 1 {
+		t.Errorf("%d exports for one failing login", got)
+	}
+}
+
+func TestACallStopsWaitingForAHostLoginWhenItsRequestEnds(t *testing.T) {
+	slow := slowCredentials{make(chan struct{})}
+	defer close(slow.release)
+	api := NewSecretsManager(slow)
+	go api.key(context.Background(), "build")
+	time.Sleep(50 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if _, err := api.key(ctx, "build"); err == nil || time.Since(started) > time.Second {
+		t.Errorf("waited %v: %v", time.Since(started), err)
+	}
+}
+
+func TestAnOverlongARNIsRefusedWithoutAskingAWSAndIsNotLoggedInFull(t *testing.T) {
+	b := newSecretsBroker(t)
+	long := "arn:" + strings.Repeat("a", 60000) + ":secretsmanager:us-east-1:111122223333:secret:app/db-AbC123"
+	code, decoded, _ := b.send("GetSecretValue", map[string]any{"SecretId": long})
+	b.expectRefused(code, decoded, "is not listed for this sandbox")
+	b.expectNoAWSCalls()
+	if message, _ := decoded["Message"].(string); len(message) > 300 {
+		t.Errorf("the refusal repeats %d bytes of the id", len(message))
+	}
+	wrong := "arn:aws-us-gov:secretsmanager:us-east-1:999999999999:secret:app/db-AbC123"
+	b.send("GetSecretValue", map[string]any{"SecretId": wrong})
+	for _, line := range b.lines {
+		if len(line) > 300 || strings.Contains(line, wrong) {
+			t.Errorf("a client id reached the log beyond a short prefix: %q", line)
+		}
+	}
+}
+
+func TestTheOldBrokerCheckDoesNotFollowARedirectToTheBroker(t *testing.T) {
+	b := newSecretsBroker(t)
+	serving := httptest.NewServer(b.handler)
+	defer serving.Close()
+	redirecting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, serving.URL+"/", http.StatusTemporaryRedirect)
+	}))
+	defer redirecting.Close()
+	if ServesSecretsManager(redirecting.URL + "/") {
+		t.Error("a redirect to the broker passed as the broker")
+	}
 }

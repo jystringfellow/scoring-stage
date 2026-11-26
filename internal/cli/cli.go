@@ -681,6 +681,11 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 				"then `stage up` again", pid, broker.SecretsManagerAddress)
 		}
 	}
+	if !needsBroker {
+		if err := (broker.Grants{Path: grantsDir(home)}).Revoke(slug); err != nil {
+			return 0, err
+		}
+	}
 	if needsBroker {
 		grants := broker.Grants{Path: grantsDir(home)}
 		tokenFile, err := grants.Issue(slug, composition.AWSProfiles)

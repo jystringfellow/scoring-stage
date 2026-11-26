@@ -30,6 +30,8 @@ const (
 	maxBatchSecretIDs  = 20
 	maxFilters         = 10
 	maxPages           = 100
+	maxSecretID        = 2048
+	shownIDLength      = 64
 	BrokerHeader       = "X-Stage-Broker"
 	brokerHeaderValue  = "secrets-manager/1"
 )
@@ -37,10 +39,10 @@ const (
 var (
 	SecretsManagerAddress = "127.0.0.1:" + strconv.Itoa(SecretsManagerPort)
 	regionName            = regexp.MustCompile(`^[a-z0-9-]+$`)
-	secretARN             = regexp.MustCompile(`^arn:[a-z-]+:secretsmanager:([a-z0-9-]+):[0-9]{12}:secret:(.+)-[A-Za-z0-9]{6}$`)
+	secretARN             = regexp.MustCompile(`^arn:aws(?:-[a-z]{1,16}){0,3}:secretsmanager:([a-z0-9-]{1,32}):[0-9]{12}:secret:([A-Za-z0-9/_+=.@-]{1,512})-[A-Za-z0-9]{6}$`)
 	filterValue           = regexp.MustCompile(`^!?[a-zA-Z0-9 :_@/+=.\-!]{0,512}$`)
 	listSortKeys          = []string{"created-date", "last-accessed-date", "last-changed-date", "name"}
-	awsErrorType          = regexp.MustCompile(`^[A-Za-z]+$`)
+	awsErrorType          = regexp.MustCompile(`^[A-Za-z]{1,64}$`)
 	appliedFilterKeys     = []string{"name", "description", "tag-key", "tag-value"}
 )
 
@@ -96,8 +98,11 @@ func (g Grants) LookupSecretsManager(supplied string) (string, SecretsManagerGra
 	return owner, grant, true
 }
 
+const failedLoginHold = 10 * time.Second
+
 type cachedKey struct {
 	key   accessKey
+	err   error
 	until time.Time
 }
 
@@ -107,7 +112,7 @@ type SecretsManager struct {
 	Endpoint    func(region string) string
 	mu          sync.Mutex
 	keys        map[string]cachedKey
-	logins      map[string]*sync.Mutex
+	logins      map[string]chan struct{}
 }
 
 func NewSecretsManager(credentials Credentials) *SecretsManager {
@@ -121,33 +126,52 @@ func NewSecretsManager(credentials Credentials) *SecretsManager {
 		},
 		Endpoint: func(region string) string { return "https://secretsmanager." + region + ".amazonaws.com/" },
 		keys:     map[string]cachedKey{},
-		logins:   map[string]*sync.Mutex{},
+		logins:   map[string]chan struct{}{},
 	}
 }
 
-func (s *SecretsManager) login(profile string) *sync.Mutex {
+func (s *SecretsManager) login(profile string) chan struct{} {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.logins[profile] == nil {
-		s.logins[profile] = &sync.Mutex{}
+		s.logins[profile] = make(chan struct{}, 1)
 	}
 	return s.logins[profile]
 }
 
-func (s *SecretsManager) cached(profile string) (accessKey, bool) {
+func (s *SecretsManager) cached(profile string) (cachedKey, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cached, found := s.keys[profile]
-	return cached.key, found && now().Before(cached.until)
+	return cached, found && now().Before(cached.until)
 }
 
-func (s *SecretsManager) key(profile string) (accessKey, error) {
+func (s *SecretsManager) remember(profile string, entry cachedKey) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.keys[profile] = entry
+}
+
+func (s *SecretsManager) key(ctx context.Context, profile string) (accessKey, error) {
 	login := s.login(profile)
-	login.Lock()
-	defer login.Unlock()
-	if key, fresh := s.cached(profile); fresh {
-		return key, nil
+	select {
+	case login <- struct{}{}:
+	case <-ctx.Done():
+		return accessKey{}, &Error{http.StatusServiceUnavailable, profile + ": the request ended while it waited for the host login"}
 	}
+	defer func() { <-login }()
+	if cached, fresh := s.cached(profile); fresh {
+		return cached.key, cached.err
+	}
+	key, err := s.export(profile)
+	if err != nil {
+		s.remember(profile, cachedKey{err: err, until: now().Add(failedLoginHold)})
+		return accessKey{}, err
+	}
+	return key, nil
+}
+
+func (s *SecretsManager) export(profile string) (accessKey, error) {
 	raw, err := s.Credentials.CredentialProcess(profile, map[string]bool{profile: true})
 	if err != nil {
 		return accessKey{}, err
@@ -161,9 +185,7 @@ func (s *SecretsManager) key(profile string) (accessKey, error) {
 		return accessKey{}, &Error{http.StatusBadGateway, profile + ": aws cli returned an unreadable Expiration"}
 	}
 	key := accessKey{exported.AccessKeyId, exported.SecretAccessKey, exported.SessionToken}
-	s.mu.Lock()
-	s.keys[profile] = cachedKey{key, expires.Add(-5 * time.Minute)}
-	s.mu.Unlock()
+	s.remember(profile, cachedKey{key: key, until: expires.Add(-5 * time.Minute)})
 	return key, nil
 }
 
@@ -178,7 +200,7 @@ func (s *SecretsManager) call(ctx context.Context, profile, region, operation, a
 	if err != nil {
 		return awsAnswer{}, err
 	}
-	key, err := s.key(profile)
+	key, err := s.key(ctx, profile)
 	if err != nil {
 		status, kind := http.StatusServiceUnavailable, "ServiceUnavailableException"
 		var brokerErr *Error
@@ -269,6 +291,9 @@ type resolved struct{ id, name, profile, arn string }
 func (q *secretsRequest) resolve(id string) (resolved, bool) {
 	if profile, listed := q.grant.Profiles[id]; listed {
 		return resolved{id, id, profile, ""}, true
+	}
+	if len(id) > maxSecretID {
+		return resolved{}, false
 	}
 	if match := secretARN.FindStringSubmatch(id); match != nil && match[1] == q.grant.Region {
 		if profile, listed := q.grant.Profiles[match[2]]; listed {
@@ -393,7 +418,7 @@ func (q *secretsRequest) getSecretValue(body []byte) (awsAnswer, error) {
 	}
 	secret, listed := q.resolve(request.SecretId)
 	if !listed {
-		return awsAnswer{}, refuse("secret %s is not listed for this sandbox", escaped(request.SecretId))
+		return awsAnswer{}, refuse("secret %s is not listed for this sandbox", shown(request.SecretId))
 	}
 	request.SecretId = secret.name
 	answer, err := q.api.call(q.ctx, secret.profile, q.grant.Region, "GetSecretValue", secret.name, request)
@@ -402,8 +427,8 @@ func (q *secretsRequest) getSecretValue(body []byte) (awsAnswer, error) {
 	}
 	var value struct{ Name, ARN string }
 	if json.Unmarshal(answer.body, &value) != nil || !secret.answeredBy(value.Name, value.ARN) {
-		q.details = append(q.details, fmt.Sprintf("dropped an answer for %s (ARN %s) asked as %s", value.Name, value.ARN, secret.id))
-		return awsAnswer{}, refuse("secret %s is not listed for this sandbox", escaped(secret.id))
+		q.details = append(q.details, fmt.Sprintf("dropped an answer for %s (ARN %s) asked as %s", shown(value.Name), shown(value.ARN), shown(secret.id)))
+		return awsAnswer{}, refuse("secret %s is not listed for this sandbox", shown(secret.id))
 	}
 	q.noteRead(secret.name)
 	return answer, nil
@@ -447,7 +472,7 @@ func (q *secretsRequest) batchGetSecretValue(body []byte) (awsAnswer, error) {
 	for _, id := range request.SecretIdList {
 		secret, listed := q.resolve(id)
 		if !listed {
-			addFailure(id, "AccessDeniedException", fmt.Sprintf("secret %s is not listed for this sandbox", escaped(id)))
+			addFailure(id, "AccessDeniedException", fmt.Sprintf("secret %s is not listed for this sandbox", shown(id)))
 			continue
 		}
 		wanted = append(wanted, secret)
@@ -518,7 +543,7 @@ func (q *secretsRequest) batchGetSecretValue(body []byte) (awsAnswer, error) {
 				q.noteRead(secret.name)
 			}
 		case found:
-			addFailure(secret.id, "AccessDeniedException", fmt.Sprintf("secret %s is not listed for this sandbox", escaped(secret.id)))
+			addFailure(secret.id, "AccessDeniedException", fmt.Sprintf("secret %s is not listed for this sandbox", shown(secret.id)))
 		case awsFailed[secret.name] != "":
 			kind := awsFailed[secret.name]
 			addFailure(secret.id, kind, fmt.Sprintf("Secrets Manager answered %s for %s; the broker's log on the host has its message", kind, secret.name))
@@ -709,13 +734,24 @@ func fieldStartsWith(entry listedEntry, key, prefix string) bool {
 }
 
 func ServesSecretsManager(url string) bool {
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := &http.Client{
+		Timeout:       2 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 	response, err := client.Post(url, jsonContentType, strings.NewReader("{}"))
 	if err != nil {
 		return false
 	}
 	response.Body.Close()
-	return response.Header.Get(BrokerHeader) == brokerHeaderValue
+	return response.StatusCode == http.StatusUnauthorized && response.Header.Get(BrokerHeader) == brokerHeaderValue
+}
+
+func shown(text string) string {
+	text = escaped(text)
+	if len(text) > shownIDLength {
+		return text[:shownIDLength] + "..."
+	}
+	return text
 }
 
 func escaped(text string) string {
