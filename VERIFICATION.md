@@ -65,19 +65,15 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
 - `stage secrets refresh` itself against a live sandbox. The `sbx secret set --sandbox … --command … --force` call
   it makes was checked on 2026-11-24 by hand, with a dummy command; the command as stage runs it, `--refresh`
   passed to `sbx secret set`, and services other than `copilot` were not.
-- The broker's Secrets Manager endpoint in a live sandbox, and against AWS itself. On 2026-11-26 the proxy did not
-  inject the broker token as `X-Stage-Broker-Token` on a `POST` to `localhost:9912` (see that entry). The inject
-  probe the same day found why: sbx sends a credential to every `inject` entry's domain with the first entry's
-  header and format, so port 9912 got `Authorization: Bearer`. #107 makes 9912 read the token from that header, as
-  9911 does; the endpoint has not been run end to end since. Still unchecked:
-  - that the proxy injects the token on a `POST` with a body to `localhost:9912`; the probe sent only `GET`s, and
-    without the token the endpoint answers 401;
-  - the endpoint end to end in a live sandbox with #107's kit and broker;
+- Part of the broker's Secrets Manager endpoint. The 2026-11-27 entry checked it end to end over curl, from a build
+  of `main` with only the two broker ports changed. Still unchecked:
   - whether an SDK in a sandbox reads the `[services stage-broker]` section that the `aws-broker` kit writes (the
-    key is `secrets_manager`), and signs with the placeholder keys when no profile is the default;
-  - the broker's own signed calls to Secrets Manager with a real temporary session, and AWS's answers to them.
+    key is `secrets_manager`), and signs with the placeholder keys when no profile is the default; the `shell`
+    base has no SDK to try it with;
+  - the kit with its own ports, 9911 and 9912, rather than that run's 9921 and 9922;
+  - `BatchGetSecretValue`, and `ListSecrets` with filters, sorting or more than one page, against AWS.
 
-  Run only against fakes: the operations, filters and refusals.
+  Run only against fakes: the other operations, filters and refusals.
 - Whether sbx matches allow entries that are IP addresses, CIDR ranges or hosts with underscores. stage refuses
   them when Secrets Manager secrets are listed, because the kit specification's host grammar does not name them.
 - sbx's kit loader: which files it reads from a kit directory, and whether it matches keys case-insensitively.
@@ -770,3 +766,42 @@ Observed:
   request's own value did not reach the listener.
 - Not checked: entries listed with port 18912 first. In every variant the first entry was also the 18911 one, so
   whether list order or the domain picks the winning entry is open. Three or more entries were not tried.
+
+## 2026-11-27: the broker's Secrets Manager endpoint end to end, beside a running broker
+
+- **sbx:** 0.51.0 (7d55286de0c7), macOS.
+- **stage:** `main` at db3dda8, cloned from github.com and built to a temporary binary with one local change: the
+  broker's two ports, 9911 and 9912, became 9921 and 9922 in `internal/broker` and in the `aws-broker` kit's
+  allow, inject, `credential_process` and `endpoint_url` entries. The `stage-broker` binding was left at
+  `localhost:9911`; binding domains do not limit injection (2026-11-09). The change was not committed.
+- **Credentials:** real. The run had its own `STAGE_HOME` under a temp directory, `[github] mode = "none"`,
+  `[aws] region` set to the profile's region, and `[aws.secrets_manager]` listing one real secret for one of the
+  maintainer's real assumed-role profiles, with fresh host credentials. A second real secret that profile can read
+  was left unlisted. Only names, error types and status codes were printed; no secret value was printed or kept.
+- **Shared state:** the maintainer's broker kept running on 9911 and 9912 and serving their sandboxes; the run's
+  broker listened only on 9921 and 9922. sbx's global `anthropic` and `openai` secrets were accepted with
+  `--allow-global-secrets`, and the repository's Go kit was approved with `--approve-repo-config` in the run's own
+  trust store.
+- **Restoration:** one run, one sandbox, ended with `stage down`, which removed the sandbox's scoped secrets, and
+  `stage broker stop` for the run's broker, which used its own `STAGE_HOME`'s pid file. Afterwards `sbx ls -q`
+  listed the same sandboxes as before, `sbx secret ls` none for the probe, sbx's `credentials.yaml` had the same
+  sha256 (hashed, not copied), nothing listened on 9921 or 9922, and the maintainer's broker still answered on
+  9911. No global secret or binding was changed.
+
+Checked, each request sent from inside with curl and no token:
+
+- **The proxy injects the token on a `POST` with a body to the Secrets Manager port.** `ListSecrets` with a JSON
+  body got 200, and the broker logged it under the sandbox's slug.
+- **The same token reaches the credentials port.** A `GET` of `/credential-process/not-granted` got 403 for the
+  ungranted profile, logged under the slug.
+- **`ListSecrets` against AWS** returned the listed secret's name only.
+- **`GetSecretValue` against AWS** for the listed secret got 200 with its `Name`; the broker logged the name and
+  200.
+- **An unlisted secret the profile can read** got 400 `AccessDeniedException` from the broker, which logged no
+  name for it.
+- **Secrets Manager itself** stayed closed: a request from inside to the region's `secretsmanager` host got 403
+  from the proxy.
+- **The `aws-broker` kit's `~/.aws/config`** had `[default]` with the region and placeholder keys,
+  `services = stage-broker`, and `[services stage-broker]` with `secrets_manager` pointing at the run's port.
+- Not checked: an SDK reading `[services stage-broker]`, since the `shell` base has no `aws` CLI, Python or Node;
+  the kit on its own ports; `BatchGetSecretValue`.
