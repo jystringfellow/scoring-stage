@@ -67,9 +67,10 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
   passed to `sbx secret set`, and services other than `copilot` were not.
 - The broker's Secrets Manager endpoint in a live sandbox, and against AWS itself. On 2026-11-26 the proxy did not
   inject the broker token as `X-Stage-Broker-Token` on a `POST` to `localhost:9912` (see that entry), so the endpoint
-  does not work in a live sandbox yet and nothing past the token check has been reached:
-  - why the token is missing: whether sbx uses only one `inject` entry of a credential, or the `stage-broker`
-    binding's domains (`localhost`, `localhost:9911`) limit where it is injected;
+  does not work in a live sandbox yet and nothing past the token check has been reached. The inject probe the same
+  day found why: sbx sends a credential to every `inject` entry's domain with the first entry's header and format,
+  so port 9912 gets `Authorization: Bearer`. Still unchecked:
+  - whether the broker works live once both ports take the token the same way;
   - whether an SDK in a sandbox reads the `[services stage-broker]` section that the `aws-broker` kit writes (the
     key is `secrets_manager`), and signs with the placeholder keys when no profile is the default;
   - the broker's own signed calls to Secrets Manager with a real temporary session, and AWS's answers to them.
@@ -733,3 +734,37 @@ Checked:
   `https://secretsmanager.us-east-1.amazonaws.com/` got 403 from the proxy.
 - Not checked: an SDK reading `[services stage-broker]`, since the `shell` base has no `aws` CLI or Python; the
   allow list against AWS; and refusal of the unlisted secret beyond the token check.
+
+## 2026-11-26: a credential's inject entries with different headers
+
+- **sbx:** 0.51.0 (7d55286de0c7), macOS.
+- **stage:** not used. sbx was driven directly with hand-written env files (`sbx env create --force --no-input`) and
+  one local kit per variant; `main` was at 7d02c14.
+- **Credentials:** none real. Each env file set the `copilot` secret at the sandbox's scope to a command printing a
+  fixed dummy value, and the global `copilot` binding authorised it, so no binding was declared or added. On the
+  host, a listener on `127.0.0.1:18911` and `127.0.0.1:18912` logged each request's header names and whether the
+  `Authorization` and `X-Stage-Probe` values were the dummy, the dummy after `Bearer `, or something else.
+- **Shared state:** the maintainer's broker and ports 9911 and 9912 were not touched.
+- **Restoration:** three sandboxes, each removed with `sbx env rm --force --no-input`, without `--prune-bindings`,
+  which removed its scoped secret. Afterwards `sbx ls -q` listed the same sandboxes as before, `sbx secret ls` none
+  for the probe, and sbx's `credentials.yaml` had the same sha256 (hashed, not copied). The listener was stopped.
+
+Each kit had a `network-policy@2` runtime allow for both ports and one `credential@1` for `copilot` with two
+`apiKey.inject` entries. A `GET` was sent to each port from inside, at `http://host.docker.internal:<port>/`.
+
+Observed:
+
+- **A credential's first inject entry sets the header and format for all its domains.**
+  - With `Authorization: Bearer %s` on 18911 first and `X-Stage-Probe: %s` on 18912 second, both ports got
+    `Authorization: Bearer <dummy>` and neither got `X-Stage-Probe`.
+  - With the entries' headers swapped, both ports got `X-Stage-Probe: <dummy>` and neither got `Authorization`.
+  - With `Authorization: Bearer %s` on both ports, both got it.
+
+  So the secret reaches every entry's domain, but a later entry's own `header` and `format` are not used. This is
+  why port 9912 never got `X-Stage-Broker-Token` in the run above: it got `Authorization: Bearer`, which the
+  Secrets Manager endpoint does not read.
+- **The proxy replaces an `Authorization` header the request already has.** A request from inside carrying its own
+  `Authorization: AWS4-HMAC-SHA256 …` arrived with one `Authorization` value, `Bearer <dummy>`, on both ports. The
+  request's own value did not reach the listener.
+- Not checked: entries listed with port 18912 first. In every variant the first entry was also the 18911 one, so
+  whether list order or the domain picks the winning entry is open. Three or more entries were not tried.
