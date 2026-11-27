@@ -65,8 +65,11 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
 - `stage secrets refresh` itself against a live sandbox. The `sbx secret set --sandbox … --command … --force` call
   it makes was checked on 2026-11-24 by hand, with a dummy command; the command as stage runs it, `--refresh`
   passed to `sbx secret set`, and services other than `copilot` were not.
-- The broker's Secrets Manager endpoint in a live sandbox, and against AWS itself:
-  - whether the proxy injects the broker token as `X-Stage-Broker-Token` on a `POST` to `localhost:9912`;
+- The broker's Secrets Manager endpoint in a live sandbox, and against AWS itself. On 2026-11-26 the proxy did not
+  inject the broker token as `X-Stage-Broker-Token` on a `POST` to `localhost:9912` (see that entry), so the endpoint
+  does not work in a live sandbox yet and nothing past the token check has been reached:
+  - why the token is missing: whether sbx uses only one `inject` entry of a credential, or the `stage-broker`
+    binding's domains (`localhost`, `localhost:9911`) limit where it is injected;
   - whether an SDK in a sandbox reads the `[services stage-broker]` section that the `aws-broker` kit writes (the
     key is `secrets_manager`), and signs with the placeholder keys when no profile is the default;
   - the broker's own signed calls to Secrets Manager with a real temporary session, and AWS's answers to them.
@@ -693,3 +696,40 @@ Checked:
   sandbox without `refresh` printed "Applied secret to sandbox", ran the new command once to check it, and the
   sandbox's next request ran the new command; the old one never ran again. This is the call `stage secrets
   refresh` makes. The command itself was not run against a live sandbox.
+
+## 2026-11-26: the broker's Secrets Manager endpoint in a live sandbox
+
+- **sbx:** 0.51.0 (7d55286de0c7), macOS.
+- **stage:** `main` at ea6dd79, cloned from github.com and built to a temporary binary.
+- **Credentials:** real but unused. The run had its own `STAGE_HOME` under a temp directory, `[github] mode = "none"`,
+  and `[aws.secrets_manager]` listing one real secret for one of the maintainer's real assumed-role profiles, with
+  fresh host credentials. A second real secret that profile can read was left unlisted. Every request stopped at the
+  broker's token check, so the broker made no call to AWS and no secret value was read or printed.
+- **Shared state:** the broker's ports are fixed, so the maintainer stopped their own broker, which serves their
+  sandboxes from their own `STAGE_HOME`, for the run and started it again afterwards. sbx's global `anthropic` and
+  `openai` secrets were accepted with `--allow-global-secrets`, and the repository's Go kit was approved with
+  `--approve-repo-config` in the run's own trust store.
+- **Restoration:** four runs. The first two stopped at `stage up`'s refusals, before a sandbox was made, until the
+  two flags above were added; the last two made a sandbox, and the fourth added the request to port 9911 below.
+  Each ended with `stage down`, which removed the sandbox's scoped secrets, and `stage broker stop` for the run's
+  broker. Afterwards `sbx ls -q` listed the same sandboxes as before,
+  `sbx secret ls` listed none for the probe, and sbx's `credentials.yaml` had the same sha256 (hashed, not copied).
+  No global secret or binding was changed.
+
+Checked:
+
+- **`stage up`** printed the listed secret under its profile, started the broker on both ports, wrote the grant file
+  with the one name and granted no AWS profile to the sandbox.
+- **The `aws-broker` kit's `~/.aws/config`** had `[default]` with placeholder keys and `services = stage-broker`, and
+  `[services stage-broker]` with `secrets_manager` pointing at `http://host.docker.internal:9912`.
+- **The token was not injected on port 9912.** `ListSecrets` and `GetSecretValue`, posted from inside to
+  `http://host.docker.internal:9912/` without a token, were answered 401 by the broker, which logged no sandbox for
+  them. A `GET` to `http://host.docker.internal:9911/credential-process/not-granted` from the same sandbox arrived
+  with the token: the broker logged it under the sandbox's slug and answered 403 for the ungranted profile. So the
+  proxy applied the kit's `localhost:9911` entry (`Authorization: Bearer`) and not its `localhost:9912` entry
+  (`X-Stage-Broker-Token`) of the same `stage-broker` credential. Which of the two causes in Not yet run live is
+  behind it was not tested.
+- **Secrets Manager itself** stayed closed: a request from inside to
+  `https://secretsmanager.us-east-1.amazonaws.com/` got 403 from the proxy.
+- Not checked: an SDK reading `[services stage-broker]`, since the `shell` base has no `aws` CLI or Python; the
+  allow list against AWS; and refusal of the unlisted secret beyond the token check.
