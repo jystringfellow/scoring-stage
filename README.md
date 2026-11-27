@@ -1347,8 +1347,9 @@ profile: `build = ["app/config", "app/db"]`.
     and `tag-value` filters, `!` negation included, are applied on your machine to the listed secrets; other
     filter keys and `NextToken` are refused.
   An AWS error comes back as its type, with AWS's message kept in the broker's log on your machine, since it can
-  name the profile's role and session. The profile must give temporary keys, as for a granted profile. A broker started by an earlier `stage` does not
-  answer on 9912; `stage up` says to restart it.
+  name the profile's role and session. The profile must give temporary keys, as for a granted profile. The sandbox's broker token reaches 9912 as
+  `Authorization: Bearer`, as on 9911, in place of the SDK's own signature. A broker started by an earlier `stage`
+  either does not answer on 9912 or reads the token from another header; `stage up` says to restart it.
 
 A kit that a book adds for its own service declares a `credential@1` entry for that service and names the hosts it is
 injected on; the book's `secrets` entry supplies the value for each sandbox, and its `bindings` entry authorises the

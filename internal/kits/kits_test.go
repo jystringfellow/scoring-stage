@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -155,8 +156,9 @@ func TestTheBrokerKitSendsSecretsManagerCallsToTheBrokerUnderTheKeyTheSDKsRead(t
 	}
 }
 
-func TestTheBrokerKitAllowsAndInjectsTheSandboxsTokenOnTheSecretsManagerPort(t *testing.T) {
-	var allowed, injected []string
+func TestTheBrokerKitInjectsTheSandboxsTokenTheSameWayOnBothBrokerPorts(t *testing.T) {
+	var allowed, domains []string
+	styles := map[string]bool{}
 	for _, capability := range loadBrokerKit(t).Capabilities {
 		switch capability.Type {
 		case "com.docker.sandbox/network-policy@2":
@@ -166,14 +168,19 @@ func TestTheBrokerKitAllowsAndInjectsTheSandboxsTokenOnTheSecretsManagerPort(t *
 		case "com.docker.sandbox/credential@1":
 			for _, rule := range capability.Config["apiKey"].(map[string]any)["inject"].([]any) {
 				entry := rule.(map[string]any)
-				injected = append(injected, fmt.Sprintf("%s %s %s", entry["domain"], entry["header"], entry["format"]))
+				domains = append(domains, fmt.Sprint(entry["domain"]))
+				styles[fmt.Sprintf("%s %s", entry["header"], entry["format"])] = true
 			}
 		}
 	}
 	if strings.Join(allowed, " ") != "localhost:9911 localhost:9912" {
 		t.Errorf("allowed %v", allowed)
 	}
-	if strings.Join(injected, "; ") != "localhost:9911 Authorization Bearer %s; localhost:9912 X-Stage-Broker-Token %s" {
-		t.Errorf("injected %v", injected)
+	sort.Strings(domains)
+	if strings.Join(domains, " ") != "localhost:9911 localhost:9912" {
+		t.Errorf("injected on %v", domains)
+	}
+	if len(styles) != 1 || !styles["Authorization Bearer %s"] {
+		t.Errorf("injected as %v; sbx gives every domain the first entry's header and format, so all must be Authorization Bearer %%s", styles)
 	}
 }

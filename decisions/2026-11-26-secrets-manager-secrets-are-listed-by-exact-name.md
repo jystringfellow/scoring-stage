@@ -12,10 +12,11 @@ Rejected:
   be added as an explicit form with its own test.
 - **Filtering at the proxy.** sbx cannot see inside the TLS. A network-policy@2 path rule cannot help either:
   every Secrets Manager call is a `POST /`, and the operation and secret are in a header and the body.
-- **Sharing the broker's port and its `Authorization` header.** The SDK signs every request with its own
-  `Authorization`, and credential@1 says only that an inject rule's header is "set", not what becomes of one the
-  request already has. Secrets Manager calls go to a port of their own, and the token in a header the SDK never
-  sends.
+- **The token in a header of its own** (`X-Stage-Broker-Token`). sbx gives every inject entry of a credential the
+  first entry's header and format, so a second header never arrives (VERIFICATION.md, 2026-11-26). The token
+  reaches both of the broker's ports as `Authorization: Bearer`, and the proxy replaces the `Authorization` the SDK
+  signed with. The broker reads only that one header, takes the region from the grant, and keeps Secrets Manager
+  on a port of its own.
 - **Shelling out to `aws secretsmanager`.** The CLI prints dates as text where the JSON 1.1 wire shape has numbers,
   and its errors would have to be read from stderr. The broker signs its own requests and passes AWS's answers on.
 - **Enumerating the shapes of Secrets Manager hosts in allow rules.** A `*` inside a label, such as
@@ -25,5 +26,6 @@ Rejected:
 Evidence: `TestABookListsSecretsManagerSecretsByExactNameUnderAHostProfile`,
 `TestSecretsManagerEntriesAreExactSecretNamesUnderProfileNames`,
 `TestNoKitMayAllowASecretsManagerHostWhenSecretsAreListed`,
-`TestSecretsManagerCallsNeedTheSandboxsTokenInTheBrokersOwnHeader`,
+`TestSecretsManagerCallsNeedTheSandboxsTokenAsABearer`,
+`TestTheBrokerKitInjectsTheSandboxsTokenTheSameWayOnBothBrokerPorts`,
 `TestRequestsToAWSAreSignedAsInAWSsSignatureVersion4TestSuite`.

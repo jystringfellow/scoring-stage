@@ -677,7 +677,8 @@ func (a *App) cmdUp(args []string, home string) (int, error) {
 	needsBroker := len(composition.AWSProfiles) > 0 || len(composition.AWSSecretsManager) > 0
 	if !*plan && len(composition.AWSSecretsManager) > 0 {
 		if pid := a.BrokerPID(home); pid != 0 && !a.secretsManagerAnswers() {
-			return 0, errorf("the broker running (pid %d) does not serve Secrets Manager on %s; run `stage broker stop` and `stage broker start`, "+
+			return 0, errorf("the broker running (pid %d) does not serve this version of stage's Secrets Manager endpoint on %s; it was started by another version of stage. "+
+				"Run `stage broker stop` and `stage broker start`, "+
 				"then `stage up` again", pid, broker.SecretsManagerAddress)
 		}
 	}

@@ -121,9 +121,10 @@ The broker reads the listed secrets instead. It listens on `127.0.0.1:9912` too,
 `BatchGetSecretValue` and `ListSecrets` in AWS's JSON 1.1 shape for the listed secrets alone
 (`~/.scoring-stage/broker/grants/<slug>.secrets` names each with its profile, and the sandbox's region). It signs
 its own requests to Secrets Manager with the profile's temporary keys and passes AWS's answers back after checking
-which secret each names. The SDK signs every request with its own `Authorization`, so the `aws-broker` kit injects
-the sandbox's broker token on `localhost:9912` as `X-Stage-Broker-Token`, a header nothing else sends, and the
-broker ignores the SDK's signature. The kit points every profile's Secrets Manager calls at the broker with a
+which secret each names. The `aws-broker` kit injects the sandbox's broker token on both ports the same way, as
+`Authorization: Bearer`, because sbx gives every inject entry of a credential the first entry's header and format.
+The proxy replaces the `Authorization` the SDK signed with, so the broker never sees the SDK's signature; the region
+comes from the grant. The kit points every profile's Secrets Manager calls at the broker with a
 `[services]` section in `~/.aws/config`. The endpoint is shaped like Secrets Manager itself, so it can go if sbx
 gains a way to sign or filter AWS requests at the proxy.
 
