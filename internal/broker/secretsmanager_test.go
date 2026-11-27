@@ -194,8 +194,7 @@ func (b *secretsBroker) send(target string, body any, headers ...string) (int, m
 	request := httptest.NewRequest("POST", "/", strings.NewReader(string(encoded)))
 	request.Header.Set("Content-Type", "application/x-amz-json-1.1")
 	request.Header.Set("X-Amz-Target", "secretsmanager."+target)
-	request.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=stage-broker/20261106/us-east-1/secretsmanager/aws4_request, SignedHeaders=host, Signature=00")
-	request.Header.Set(TokenHeader, b.token)
+	request.Header.Set("Authorization", "Bearer "+b.token)
 	for i := 0; i+1 < len(headers); i += 2 {
 		if headers[i+1] == "" {
 			request.Header.Del(headers[i])
@@ -242,13 +241,17 @@ func names(entries any) []string {
 	return found
 }
 
-func TestSecretsManagerCallsNeedTheSandboxsTokenInTheBrokersOwnHeader(t *testing.T) {
+func TestSecretsManagerCallsNeedTheSandboxsTokenAsABearer(t *testing.T) {
 	b := newSecretsBroker(t)
+	signature := "AWS4-HMAC-SHA256 Credential=stage-broker/20261106/us-east-1/secretsmanager/aws4_request, SignedHeaders=host, Signature=00"
 	for name, headers := range map[string][]string{
-		"no token":            {TokenHeader, ""},
-		"wrong token":         {TokenHeader, "wrong"},
-		"token as a bearer":   {TokenHeader, "", "Authorization", "Bearer " + b.token},
-		"bearer-shaped token": {TokenHeader, "Bearer " + b.token},
+		"no token":                           {"Authorization", ""},
+		"wrong token":                        {"Authorization", "Bearer wrong"},
+		"the SDK's own signature":            {"Authorization", signature},
+		"token without Bearer":               {"Authorization", b.token},
+		"token as Basic":                     {"Authorization", "Basic " + b.token},
+		"token in X-Stage-Broker-Token":      {"Authorization", "", "X-Stage-Broker-Token", b.token},
+		"signature and X-Stage-Broker-Token": {"Authorization", signature, "X-Stage-Broker-Token", b.token},
 	} {
 		code, decoded, _ := b.send("GetSecretValue", map[string]any{"SecretId": "app/config"}, headers...)
 		if code != 401 || decoded["__type"] != "UnrecognizedClientException" {
@@ -258,19 +261,22 @@ func TestSecretsManagerCallsNeedTheSandboxsTokenInTheBrokersOwnHeader(t *testing
 	request := httptest.NewRequest("POST", "/", strings.NewReader(`{"SecretId":"app/config"}`))
 	request.Header.Set("Content-Type", "application/x-amz-json-1.1")
 	request.Header.Set("X-Amz-Target", "secretsmanager.GetSecretValue")
-	request.Header.Add(TokenHeader, b.token)
-	request.Header.Add(TokenHeader, b.token)
+	request.Header.Add("Authorization", "Bearer "+b.token)
+	request.Header.Add("Authorization", "Bearer "+b.token)
 	recorder := httptest.NewRecorder()
 	b.handler.ServeHTTP(recorder, request)
 	if recorder.Code != 401 {
-		t.Errorf("two token headers: %d", recorder.Code)
+		t.Errorf("two Authorization headers: %d", recorder.Code)
 	}
 	b.expectNoAWSCalls()
+	if code, _, _ := b.send("GetSecretValue", map[string]any{"SecretId": "app/config"}); code != 200 {
+		t.Errorf("the sandbox's token as a bearer: %d", code)
+	}
 }
 
 func TestASandboxWithoutASecretsManagerGrantReadsNothing(t *testing.T) {
 	b := newSecretsBroker(t)
-	code, decoded, _ := b.send("GetSecretValue", map[string]any{"SecretId": "app/config"}, TokenHeader, b.otherToken)
+	code, decoded, _ := b.send("GetSecretValue", map[string]any{"SecretId": "app/config"}, "Authorization", "Bearer "+b.otherToken)
 	b.expectRefused(code, decoded, "app/config is not listed for this sandbox")
 	b.expectNoAWSCalls()
 }
@@ -493,6 +499,14 @@ func TestTheBrokerSaysItServesSecretsManagerAndOtherListenersDoNot(t *testing.T)
 	if ServesSecretsManager(other.URL+"/") || ServesSecretsManager("http://127.0.0.1:1/") {
 		t.Error("another listener passed as the broker")
 	}
+	readsItsOwnHeader := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(BrokerHeader, "secrets-manager/1")
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer readsItsOwnHeader.Close()
+	if ServesSecretsManager(readsItsOwnHeader.URL + "/") {
+		t.Error("a broker that reads the token from X-Stage-Broker-Token passed as one that reads a bearer")
+	}
 }
 
 func TestBatchGetSecretValueReportsUnlistedSecretsInErrorsWithoutAskingAWSForThem(t *testing.T) {
@@ -665,7 +679,7 @@ func TestOnlyTheThreeReadOperationsAreServed(t *testing.T) {
 		request := httptest.NewRequest("POST", target, strings.NewReader(`{"SecretId":"app/config"}`))
 		request.Header.Set("Content-Type", "application/x-amz-json-1.1")
 		request.Header.Set("X-Amz-Target", "secretsmanager.GetSecretValue")
-		request.Header.Set(TokenHeader, b.token)
+		request.Header.Set("Authorization", "Bearer "+b.token)
 		recorder := httptest.NewRecorder()
 		b.handler.ServeHTTP(recorder, request)
 		var refused map[string]any
@@ -673,7 +687,7 @@ func TestOnlyTheThreeReadOperationsAreServed(t *testing.T) {
 		b.expectRefused(recorder.Code, refused, "only POST / is served")
 	}
 	request := httptest.NewRequest("GET", "/", nil)
-	request.Header.Set(TokenHeader, b.token)
+	request.Header.Set("Authorization", "Bearer "+b.token)
 	recorder := httptest.NewRecorder()
 	b.handler.ServeHTTP(recorder, request)
 	if recorder.Code != 405 {

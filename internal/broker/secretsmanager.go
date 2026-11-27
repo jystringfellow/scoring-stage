@@ -23,7 +23,6 @@ import (
 
 const (
 	SecretsManagerPort = 9912
-	TokenHeader        = "X-Stage-Broker-Token"
 	jsonContentType    = "application/x-amz-json-1.1"
 	maxRequestBody     = 64 << 10
 	maxResponseBody    = 16 << 20
@@ -33,7 +32,7 @@ const (
 	maxSecretID        = 2048
 	shownIDLength      = 64
 	BrokerHeader       = "X-Stage-Broker"
-	brokerHeaderValue  = "secrets-manager/1"
+	brokerHeaderValue  = "secrets-manager/2"
 )
 
 var (
@@ -360,11 +359,10 @@ func SecretsManagerHandler(api *SecretsManager, grants Grants, log func(string))
 			fail(&refusal{http.StatusMethodNotAllowed, "AccessDeniedException", "stage broker: only POST / is served", ""})
 			return
 		}
-		tokens := r.Header.Values(TokenHeader)
 		var grant SecretsManagerGrant
 		found := false
-		if len(tokens) == 1 {
-			owner, grant, found = grants.LookupSecretsManager(tokens[0])
+		if token, ok := soleBearer(r); ok {
+			owner, grant, found = grants.LookupSecretsManager(token)
 		}
 		if !found {
 			owner = "-"
@@ -744,6 +742,14 @@ func ServesSecretsManager(url string) bool {
 	}
 	response.Body.Close()
 	return response.StatusCode == http.StatusUnauthorized && response.Header.Get(BrokerHeader) == brokerHeaderValue
+}
+
+func soleBearer(r *http.Request) (string, bool) {
+	values := r.Header.Values("Authorization")
+	if len(values) != 1 {
+		return "", false
+	}
+	return strings.CutPrefix(values[0], "Bearer ")
 }
 
 func shown(text string) string {

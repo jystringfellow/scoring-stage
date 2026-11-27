@@ -53,12 +53,12 @@ func TestUpGrantsTheListedSecretsToTheSandboxsBrokerTokenAndStartsTheBroker(t *t
 	}
 }
 
-func TestUpRefusesARunningBrokerThatDoesNotServeSecretsManager(t *testing.T) {
+func TestUpRefusesARunningBrokerThatDoesNotServeThisVersionsSecretsManagerEndpoint(t *testing.T) {
 	h := setup(t)
 	writeGitHubSetup(t, h.home, "[aws.secrets_manager]\nvault = [\"app/db\"]\n")
 	h.brokerPID = 4242
 	h.expect(1, "up", h.remote.Checkout, "fix")
-	h.expectStderr("the broker running (pid 4242) does not serve Secrets Manager on 127.0.0.1:9912; run `stage broker stop` and `stage broker start`")
+	h.expectStderr("the broker running (pid 4242) does not serve this version of stage's Secrets Manager endpoint on 127.0.0.1:9912; it was started by another version of stage. Run `stage broker stop` and `stage broker start`")
 	if h.anyCall("env create") {
 		t.Fatal("created with a broker that cannot serve the listed secrets")
 	}
