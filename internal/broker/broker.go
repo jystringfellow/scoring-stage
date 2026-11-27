@@ -247,8 +247,7 @@ func Handler(source Credentials, grants Grants, log func(string)) http.Handler {
 			send(http.StatusNotImplemented, map[string]string{"error": "unsupported method"}, "-")
 			return
 		}
-		supplied := r.Header.Get("Authorization")
-		bearer, isBearer := strings.CutPrefix(supplied, "Bearer ")
+		bearer, isBearer := soleBearer(r)
 		if !isBearer {
 			bearer = ""
 		}
