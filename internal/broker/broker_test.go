@@ -272,6 +272,23 @@ func TestHTTPRequiresASandboxBearerToken(t *testing.T) {
 			t.Errorf("%q: %d %v", authorization, code, body)
 		}
 	}
+	for name, values := range map[string][]string{
+		"the token twice":             {"Bearer " + token, "Bearer " + token},
+		"the token, then a wrong one": {"Bearer " + token, "Bearer wrong"},
+	} {
+		request := httptest.NewRequest("GET", "/credential-process/dev", nil)
+		for _, value := range values {
+			request.Header.Add("Authorization", value)
+		}
+		recorder := httptest.NewRecorder()
+		s.handler.ServeHTTP(recorder, request)
+		if recorder.Code != 401 {
+			t.Errorf("%s: %d", name, recorder.Code)
+		}
+	}
+	if code, body := s.fetch("GET", "/credential-process/dev", "Bearer "+token); code != 200 || body["AccessKeyId"] == nil {
+		t.Errorf("the sandbox's token as a bearer: %d %v", code, body)
+	}
 }
 
 func TestHTTPServesGrantedCredentialsAndLogsTheSandboxWithoutSecrets(t *testing.T) {

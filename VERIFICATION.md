@@ -66,11 +66,13 @@ Entries are added at the end and not rewritten. When a later run contradicts an 
   it makes was checked on 2026-11-24 by hand, with a dummy command; the command as stage runs it, `--refresh`
   passed to `sbx secret set`, and services other than `copilot` were not.
 - The broker's Secrets Manager endpoint in a live sandbox, and against AWS itself. On 2026-11-26 the proxy did not
-  inject the broker token as `X-Stage-Broker-Token` on a `POST` to `localhost:9912` (see that entry), so the endpoint
-  does not work in a live sandbox yet and nothing past the token check has been reached. The inject probe the same
-  day found why: sbx sends a credential to every `inject` entry's domain with the first entry's header and format,
-  so port 9912 gets `Authorization: Bearer`. Still unchecked:
-  - whether the broker works live once both ports take the token the same way;
+  inject the broker token as `X-Stage-Broker-Token` on a `POST` to `localhost:9912` (see that entry). The inject
+  probe the same day found why: sbx sends a credential to every `inject` entry's domain with the first entry's
+  header and format, so port 9912 got `Authorization: Bearer`. #107 makes 9912 read the token from that header, as
+  9911 does; the endpoint has not been run end to end since. Still unchecked:
+  - that the proxy injects the token on a `POST` with a body to `localhost:9912`; the probe sent only `GET`s, and
+    without the token the endpoint answers 401;
+  - the endpoint end to end in a live sandbox with #107's kit and broker;
   - whether an SDK in a sandbox reads the `[services stage-broker]` section that the `aws-broker` kit writes (the
     key is `secrets_manager`), and signs with the placeholder keys when no profile is the default;
   - the broker's own signed calls to Secrets Manager with a real temporary session, and AWS's answers to them.

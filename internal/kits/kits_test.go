@@ -159,6 +159,7 @@ func TestTheBrokerKitSendsSecretsManagerCallsToTheBrokerUnderTheKeyTheSDKsRead(t
 func TestTheBrokerKitInjectsTheSandboxsTokenTheSameWayOnBothBrokerPorts(t *testing.T) {
 	var allowed, domains []string
 	styles := map[string]bool{}
+	credentials := 0
 	for _, capability := range loadBrokerKit(t).Capabilities {
 		switch capability.Type {
 		case "com.docker.sandbox/network-policy@2":
@@ -166,8 +167,19 @@ func TestTheBrokerKitInjectsTheSandboxsTokenTheSameWayOnBothBrokerPorts(t *testi
 				allowed = append(allowed, host.(string))
 			}
 		case "com.docker.sandbox/credential@1":
-			for _, rule := range capability.Config["apiKey"].(map[string]any)["inject"].([]any) {
+			credentials++
+			if capability.Config["service"] != "stage-broker" || capability.Config["phase"] != "runtime" || len(capability.Config) != 3 {
+				t.Errorf("credential config %v", capability.Config)
+			}
+			apiKey := capability.Config["apiKey"].(map[string]any)
+			if len(apiKey) != 1 {
+				t.Errorf("apiKey %v", apiKey)
+			}
+			for _, rule := range apiKey["inject"].([]any) {
 				entry := rule.(map[string]any)
+				if len(entry) != 3 {
+					t.Errorf("inject entry %v has keys beyond domain, header and format", entry)
+				}
 				domains = append(domains, fmt.Sprint(entry["domain"]))
 				styles[fmt.Sprintf("%s %s", entry["header"], entry["format"])] = true
 			}
@@ -175,6 +187,9 @@ func TestTheBrokerKitInjectsTheSandboxsTokenTheSameWayOnBothBrokerPorts(t *testi
 	}
 	if strings.Join(allowed, " ") != "localhost:9911 localhost:9912" {
 		t.Errorf("allowed %v", allowed)
+	}
+	if credentials != 1 {
+		t.Errorf("%d credential capabilities, want 1", credentials)
 	}
 	sort.Strings(domains)
 	if strings.Join(domains, " ") != "localhost:9911 localhost:9912" {
